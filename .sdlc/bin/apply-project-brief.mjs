@@ -45,6 +45,17 @@ let n = existing.length ? Math.max(...existing) + 1 : 1;
 // opens. An engineer joining in month three reads `docs/`, and a PRD that lives only in a JSON
 // field is a PRD that was never written. Generated, so the brief stays the source of truth and
 // the files cannot drift from it.
+// The brief itself, committed.
+//
+// Every document below says "generated from project-brief.json — edit the brief, not this
+// file", which was a lie: the brief existed only on the runner and went away with it. So the
+// generated files could never be regenerated, and when a bug meant they were written and not
+// staged, the eight minutes of planning behind them could not be recovered either — the whole
+// stage had to run again.
+//
+// An artifact that cannot be read after the run that made it is an artifact nobody can correct.
+writeFileSync('.sdlc/memory/project-brief.json', `${JSON.stringify(brief, null, 2)}\n`);
+
 mkdirSync('docs', { recursive: true });
 const docs = [];
 for (const [file, body] of [
@@ -107,7 +118,10 @@ const verbs = [];
 await run('git', ['config', 'user.name', 'github-actions[bot]']);
 await run('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com']);
 await run('git', ['checkout', '-B', branch]);
-await run('git', ['add', '.sdlc/memory', 'package.json']);
+// `docs` too. The renderers write the PRD, TRD, UI and research documents and nothing staged
+// them, so the first brief that produced all four opened a pull request with none of them —
+// the files existed on the runner and were thrown away with it.
+await run('git', ['add', '.sdlc/memory', 'package.json', 'docs']);
 
 const changed = await run('git', ['status', '--porcelain', '--', '.sdlc/memory', 'package.json']);
 if (!changed) die('the brief produced no change to commit — nothing to approve');
