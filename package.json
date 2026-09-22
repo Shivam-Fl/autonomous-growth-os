@@ -1,0 +1,10 @@
+{
+  "name": "autonomous-growth-os",
+  "private": true,
+  "scripts": {
+    "sdlc:verify": "npm run sdlc:verify — TypeScript compilation (tsc --noEmit), linting (eslint), unit tests (vitest), policy regression suite (pytest for Python ML services), type checking for both TypeScript and Python (mypy). Runs in CI on every PR before any agent sees the diff.",
+    "sdlc:serve": "npm run sdlc:serve — Starts full stack via docker-compose: API (3000), admin UI (3001), Temporal dev server, workers, event ingestion, PostgreSQL + pgvector, simulator. QA boots app in compose mode.",
+    "sdlc:seed": "npm run sdlc:seed — Generates synthetic data for simulator: synthetic business, fake Google/Meta Ads accounts with campaigns, historical conversions with realistic lag, research observations. So QA never touches real records.",
+    "sdlc:ready": "npm run sdlc:ready — Health check endpoint (GET /health) that verifies: API is responding, Temporal dev server is reachable, PostgreSQL is up and migrations are applied, the simulator is initialized. Polled until it answers before the browser opens."
+  }
+}
