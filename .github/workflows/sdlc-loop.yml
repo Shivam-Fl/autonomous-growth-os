@@ -60,6 +60,34 @@ jobs:
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
 
+      # A command nobody can run should say so. The refusal itself is silent by design — on a
+      # public repository, telling a stranger which names are privileged is an invitation to
+      # probe — but an unfinished allowlist is a misconfiguration, not an intrusion, and the
+      # person who needs to hear about it is the one who typed the command.
+      - name: Say when no allowlist has been configured
+        if: steps.cmd.outputs.unconfigured == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$ISSUE" --body-file - <<'MSG'
+          ## That command was read and could not be run
+
+          `allowlist` in `.sdlc/config.yml` is still `REPLACE_ME`, so no account is authorised to
+          issue `/sdlc` commands here — including the owner. `sdlc install` cannot know who owns a
+          repository, so it writes the placeholder and says so in its output.
+
+          Replace it with the accounts that may drive this pipeline:
+
+          ```yaml
+          allowlist:
+            - "your-github-username"
+          ```
+
+          Everyone else's comments stay data rather than instructions, which is the point of the
+          list — it just has to name somebody first.
+          MSG
+
       - name: Act on it
         if: steps.cmd.outputs.command != ''
         env:

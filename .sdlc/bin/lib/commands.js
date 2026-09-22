@@ -78,6 +78,23 @@ export function parseCommand(comment, config = {}) {
   if (!author) {
     return { command, args, authorized: false, reason: 'comment has no author' };
   }
+  // An unfinished allowlist and an outsider are the same refusal and completely different
+  // problems, and telling them apart is the difference between a repo owner fixing one line and
+  // wondering why nothing happens.
+  //
+  // `sdlc install` cannot know who owns a repository, so it writes REPLACE_ME and says so in the
+  // output. Miss that line and every command is read, logged, and silently dropped: the run goes
+  // green, the "Act on it" step skips, and the issue sits where it was. It cost two round trips
+  // to notice on a fresh repo.
+  //
+  // `unconfigured` is surfaced to the issue. A genuine outsider is not — on a public repository
+  // that is an invitation to probe which names are privileged.
+  if (!allowlist.length || allowlist.every((u) => u === 'replace_me')) {
+    return {
+      command, args, authorized: false, unconfigured: true,
+      reason: 'the `allowlist` in .sdlc/config.yml is still the placeholder, so nobody can issue commands',
+    };
+  }
   if (!allowlist.includes(author)) {
     return { command, args, authorized: false, reason: `@${comment.author} is not on the allowlist` };
   }

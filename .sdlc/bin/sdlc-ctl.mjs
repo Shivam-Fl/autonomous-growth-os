@@ -174,6 +174,7 @@ const commands = {
     setOutput('args', parsed.args.join(' '));
     setOutput('authorized', String(parsed.authorized));
     setOutput('reason', parsed.reason ?? '');
+    setOutput('unconfigured', String(Boolean(parsed.unconfigured)));
     if (!parsed.authorized) process.stdout.write(`refused: ${parsed.reason}\n`);
   },
 
