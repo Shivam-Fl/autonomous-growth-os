@@ -77,7 +77,33 @@ const describe = (sch, path) => {
 
     for (const [k, v] of Object.entries(sch.properties)) describe(v, path ? `${path}.${k}` : k);
   }
-  if (sch.type === 'array') describe(sch.items, `${path}[]`);
+  if (sch.type === 'array') {
+    // A skeleton of one entry, for arrays of objects.
+    //
+    // "required: path, action, change" is a list of key names, and a model copies a shape. Two
+    // arrays of objects in one schema is all it takes to confuse them: a planner put `cases`
+    // — a tests[] key — into a files[] entry and left out the required `change`, twice in a
+    // row, against a prompt that named both key sets correctly. A shape it can copy is a
+    // stronger instruction than a list it has to assemble.
+    const it = sch.items;
+    if (it?.type === 'object' && it.properties && path) {
+      const req = it.required ?? Object.keys(it.properties).slice(0, 4);
+      const stub = (k) => {
+        const t = it.properties[k]?.type;
+        if (Array.isArray(it.properties[k]?.enum)) return JSON.stringify(it.properties[k].enum[0]);
+        if (t === 'integer' || t === 'number') return '0';
+        if (t === 'boolean') return 'false';
+        if (t === 'array') return '[…]';
+        if (t === 'object') return '{…}';
+        return '"…"';
+      };
+      if (req.length) {
+        lines.push(`- \`${path}[]\` — each entry looks like: ` +
+          `\`{${req.map((k) => `"${k}": ${stub(k)}`).join(', ')}}\``);
+      }
+    }
+    describe(it, `${path}[]`);
+  }
 };
 
 describe(schema, '');
