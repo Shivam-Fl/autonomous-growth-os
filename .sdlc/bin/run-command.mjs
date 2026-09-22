@@ -132,7 +132,18 @@ switch (cmd) {
     const to = process.env.ARGS?.trim() || 'implementing';
     const { ledger: before } = await routeOf(repoOf(), issue).catch(() => ({ ledger: null }));
     await ctl('reset', '--issue', issue, '--to', to);
-    const workflow = to === 'planning' ? 'sdlc-plan.yml' : 'sdlc-implement.yml';
+    // Which workflow "planning" means comes from the ROUTE, not from a filename here.
+    //
+    // `planning` is the state three different stages sit in: the once-per-repo project
+    // architecture decision, the planner, and root-cause. This mapped it to sdlc-plan.yml
+    // unconditionally, so `/sdlc retry planning` on a repo whose route is ["project","plan"]
+    // re-ran the planner against an architecture that had not been decided yet — on the one
+    // issue whose entire job is to decide it.
+    const resumeStage = before?.resume_at;
+    const routed = to === 'planning' && resumeStage
+      ? dispatchFor(resumeStage, { issue, pr: before?.pr ?? null })
+      : null;
+    const workflow = routed?.workflow ?? (to === 'planning' ? 'sdlc-plan.yml' : 'sdlc-implement.yml');
     await advance(issue, to, { agent: 'human' });
 
     // A retry into `implementing` on an issue that already has a branch is a REWORK, and
