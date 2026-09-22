@@ -1,0 +1,105 @@
+# The gate between "a PR exists" and "an agent may look at it".
+#
+# Waits for whatever checks already gate this PR — the repo's own CI, ours, or both — then
+# hands off to review. This replaces chaining on `workflow_run: [ci-verify]`, which hardcoded
+# the assumption that our CI is the only CI. Repos that already have CI should keep using it:
+# duplicating it burns minutes and drifts from the checks the team actually trusts.
+name: sdlc-gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr: { required: true, type: string }
+
+concurrency:
+  group: gate-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+  checks: read              # statusCheckRollup reads check runs...
+  statuses: read            # ...and legacy commit statuses. Without both, gh returns
+                            # "Resource not accessible by integration", which reads as an
+                            # auth problem rather than a missing permission.
+
+jobs:
+  gate:
+    # The project brief is a document, not an implementation. It carries no work order, its
+    # branch holds .sdlc/memory and package.json and nothing to compile, and `sdlc:verify`
+    # is red on it by construction — the brief itself says so, because that PR is what
+    # ADDS the verify script and no tsconfig or dependency exists yet. Gating it would put a
+    # red check on the one pull request a human is required to read and merge, and there is
+    # no faster way to teach someone to merge red than to show them a red they must ignore.
+    if: ${{ !startsWith(github.event.pull_request.head.ref || '', 'sdlc/project-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+          # Only cache when there is a lockfile. Without this, setup-node fails outright on a
+          # zero-dependency project or any non-Node repo, before a single step has run.
+          cache: ${{ hashFiles('**/package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+
+      - name: Bootstrap
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f package.json ]; then npm install --no-audit --no-fund
+          fi
+          node .sdlc/bin/ensure-deps.mjs
+
+      # Again here, against the PR's own diff as GitHub reports it. The implementer checked its
+      # branch before opening the PR; this catches anything pushed after that, from any source,
+      # and it is the diff a merge would actually apply.
+      - name: Refuse a PR that touches reserved paths
+        run: node .sdlc/bin/check-diff-forbidden.mjs
+
+      # Before waiting: if our own CI is configured but nothing is reporting on this PR, start
+      # it. A bot-pushed commit does not get a `pull_request` run that actually executes — it
+      # gets one held at `action_required` — so waiting alone waits forever, or reads the empty
+      # rollup as green.
+      - name: Start our CI if nothing is gating this PR
+        run: node .sdlc/bin/ensure-ci.mjs
+
+      - name: Wait for the checks that gate this PR
+        id: checks
+        run: node .sdlc/bin/wait-for-checks.mjs
+
+      # Records the result AND starts whatever this issue's route asks for next — review on
+      # most tickets, QA directly on the ones that do not need one. The successor used to be a
+      # filename in the step below, which meant the route was a property of this file rather
+      # than of the ticket.
+      - name: Record the outcome and start the next stage
+        if: steps.checks.outputs.conclusion != 'none'
+        env:
+          CONCLUSION: ${{ steps.checks.outputs.conclusion }}
+          FAILED_CHECKS: ${{ steps.checks.outputs.failed_checks }}
+        run: node .sdlc/bin/gate-outcome.mjs
+
+      # A red gate used to end here: gate-outcome recorded `ci-red` and nothing was
+      # dispatched. The ARCHITECTURE diagram's "attempt++ -> IMPLEMENTER" arrow did not exist
+      # in code, so a failing build was a dead end that looked like a pipeline still working.
+      #
+      # It goes through the same self-heal path as every other mechanical failure: the RAW
+      # compiler output and the issue's own work order back to the implementer, and the second
+      # identical failure answered differently from the first.
+      - name: A red gate is answered, not recorded and dropped
+        if: steps.checks.outputs.conclusion == 'failure'
+        env:
+          STAGE: ci
+          FAILED_CHECKS: ${{ steps.checks.outputs.failed_checks }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .sdlc/bin/dispatch-fix.mjs
+

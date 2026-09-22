@@ -1,0 +1,292 @@
+{
+  "$id": "work-order",
+  "title": "Work Order",
+  "description": "The contract between the agent that decides and the agent that writes code.",
+  "type": "object",
+  "required": [
+    "issue",
+    "version",
+    "understanding",
+    "approach",
+    "files",
+    "acceptance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "understanding": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2000
+    },
+    "root_cause": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "approach": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2000
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "action",
+          "change"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "edit",
+              "delete"
+            ]
+          },
+          "change": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 2000
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "action",
+          "cases"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "edit",
+              "delete"
+            ]
+          },
+          "cases": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 40,
+            "items": {
+              "type": "string",
+              "minLength": 3
+            }
+          }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "check"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "check": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 1000
+          },
+          "how_to_verify": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "qa_script": {
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "type": "string",
+        "minLength": 2
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string"
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string"
+      }
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "bug",
+        "feature",
+        "chore"
+      ]
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "How sure the plan is. Drives whether a human is pulled in regardless of the approval gate."
+    },
+    "confidence_rationale": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "reproduced": {
+      "type": "boolean",
+      "description": "Bugs only. True ONLY if the agent made the failure happen itself — never because the reporter said so."
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "string",
+        "maxLength": 1000
+      },
+      "description": "What was actually observed: failing request, console error, state at the moment it broke."
+    },
+    "alternatives_considered": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "approach",
+          "rejected_because"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "approach": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "rejected_because": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "debate_summary": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Council only. What the critique changed and what the arbiter rejected, with reasons."
+    },
+    "residual_risks": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "description": "Deliberately not covered. QA reads this first."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "committed",
+        "proposal"
+      ],
+      "description": "proposal = this work order was asked for as an ANSWER, not as work. The route stops after it and nothing implements it. Set by a script from the route, never by the agent."
+    },
+    "route_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "stage",
+        "reason"
+      ],
+      "description": "Optional. This agent asking the Router for a detour: a stage the route did not include, because the route was decided before anyone had read the code. Asking is all it does — only the Router grants one, deterministically, against the graph and the same attempt budget as everything else.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "insert_stage",
+            "needs_earlier_stage",
+            "scope_changed"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "project",
+            "maintainer",
+            "plan",
+            "debug",
+            "implement",
+            "review",
+            "qa"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

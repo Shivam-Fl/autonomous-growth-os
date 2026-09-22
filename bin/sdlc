@@ -1,0 +1,461 @@
+#!/usr/bin/env node
+// sdlc — install and verify the framework in a repo.
+//
+//   sdlc install   put the framework into another repository, config written from a scan
+//   sdlc doctor    check every token, label, secret and workflow end to end
+//   sdlc init      create labels, the state branch, and the kill switch variable
+//   sdlc status    show every issue in flight
+//
+// `doctor` exists because the failure mode of a system like this is silent: a missing secret
+// or an uninstalled App produces a workflow that looks fine and quietly never runs. Better to
+// fail loudly at install than to wonder why nothing happened to your issue.
+
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+// Bootstrapped, not imported. A repo that has just been cloned has no node_modules, and
+// `sdlc init` is the first thing anyone runs — failing there with ERR_MODULE_NOT_FOUND is a
+// setup tool that requires setup.
+const parseYaml = await (async () => {
+  try {
+    return (await import('js-yaml')).load;
+  } catch {
+    process.stdout.write('installing js-yaml (once, --no-save)…\n');
+    const { execFile: ef } = await import('node:child_process');
+    await promisify(ef)('npm', ['install', '--no-save', '--no-audit', '--no-fund', 'js-yaml'], {
+      cwd: join(dirname(fileURLToPath(import.meta.url)), '..'),
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return (await import('js-yaml')).load;
+  }
+})();
+
+const exec = promisify(execFile);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const sh = async (cmd, args) => (await exec(cmd, args, { maxBuffer: 10 * 1024 * 1024 })).stdout.trim();
+const gh = (args) => sh('gh', args);
+
+const OK = '\x1b[32m✓\x1b[0m';
+const BAD = '\x1b[31m✗\x1b[0m';
+const WARN = '\x1b[33m!\x1b[0m';
+
+let failures = 0;
+let warnings = 0;
+
+function pass(label, detail = '') { process.stdout.write(`  ${OK} ${label}${detail ? '  ' + detail : ''}\n`); }
+function fail(label, fix) { failures++; process.stdout.write(`  ${BAD} ${label}\n      fix: ${fix}\n`); }
+function warn(label, note) { warnings++; process.stdout.write(`  ${WARN} ${label}\n      ${note}\n`); }
+function section(name) { process.stdout.write(`\n\x1b[1m${name}\x1b[0m\n`); }
+
+async function currentRepo() {
+  try {
+    return JSON.parse(await gh(['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+async function doctor() {
+  process.stdout.write('\nsdlc doctor\n');
+
+  section('Local tooling');
+  try {
+    const v = (await sh('node', ['--version'])).replace('v', '');
+    Number(v.split('.')[0]) >= 20
+      ? pass('node', v)
+      : fail(`node ${v} is too old`, 'install Node 20 or newer');
+  } catch { fail('node not found', 'install Node 20+'); }
+
+  try { pass('gh', (await sh('gh', ['--version'])).split('\n')[0].replace('gh version ', '')); }
+  catch { return fail('gh CLI not found', 'brew install gh'); }
+
+  section('GitHub auth');
+  let repo = null;
+  try {
+    const status = await exec('gh', ['auth', 'status']).then((r) => r.stdout + r.stderr).catch((e) => e.stdout + e.stderr);
+    const active = status.match(/Logged in to \S+ account (\S+).*?\n\s+- Active account: true/s);
+    active ? pass('authenticated', 'as ' + active[1]) : warn('could not determine the active account', status.split('\n')[1] ?? '');
+
+    const scopes = status.match(/Token scopes: (.+)/)?.[1] ?? '';
+    for (const need of ['repo', 'workflow']) {
+      scopes.includes(`'${need}'`)
+        ? pass(`scope ${need}`)
+        : fail(`missing the "${need}" scope`, `gh auth refresh -h github.com -s ${need}`);
+    }
+
+    repo = await currentRepo();
+    repo ? pass('repository', repo) : fail('not inside a GitHub repo', 'run this from a cloned repo with a remote');
+  } catch (e) { fail('gh auth check failed', e.message); }
+
+  section('Framework files');
+  const cfgPath = join(ROOT, '.sdlc/config.yml');
+  let cfg = null;
+  if (!existsSync(cfgPath)) fail('.sdlc/config.yml missing', 'sdlc init');
+  else {
+    try { cfg = parseYaml(readFileSync(cfgPath, 'utf8')); pass('config.yml parses'); }
+    catch (e) { fail('config.yml is invalid YAML', e.message); }
+  }
+
+  const workflows = existsSync(join(ROOT, '.github/workflows'))
+    ? readdirSync(join(ROOT, '.github/workflows')).filter((f) => f.endsWith('.yml'))
+    : [];
+  workflows.length >= 8
+    ? pass('workflows', `${workflows.length} installed`)
+    : fail(`only ${workflows.length} workflows found`, 'reinstall from the template');
+
+  // Every schema something validates against. A missing one fails inside an agent run, where
+  // it reads as the model being confused rather than as a file that is not there.
+  for (const s of ['work-order', 'qa-report', 'plan-review', 'breakdown',
+                   'failure-packet', 'flow-plan', 'project-brief']) {
+    existsSync(join(ROOT, `.sdlc/schemas/${s}.json`)) ? pass(`schema ${s}`) : fail(`schema ${s}.json missing`, 'reinstall from the template');
+  }
+
+  // The stage graph is data the Router composes routes out of. Absent, every hand-off after
+  // the first throws, and the first thing anyone sees is a stage that did not run.
+  if (!existsSync(join(ROOT, '.sdlc/flow-graph.json'))) {
+    fail('.sdlc/flow-graph.json missing — nothing knows which stage follows which',
+         'reinstall from the template');
+  } else {
+    try {
+      const g = JSON.parse(readFileSync(join(ROOT, '.sdlc/flow-graph.json'), 'utf8'));
+      const dangling = Object.entries(g.stages ?? {})
+        .filter(([, st]) => st.workflow && !workflows.includes(st.workflow))
+        .map(([n, st]) => `${n} -> ${st.workflow}`);
+      dangling.length
+        ? fail(`the stage graph routes to workflows that are not installed: ${dangling.join(', ')}`,
+               'reinstall from the template')
+        : pass('flow-graph', `${Object.keys(g.stages ?? {}).length} stages`);
+    } catch (e) { fail('.sdlc/flow-graph.json is not valid JSON', e.message); }
+  }
+
+  const agents = existsSync(join(ROOT, '.sdlc/agents'))
+    ? readdirSync(join(ROOT, '.sdlc/agents')).filter((f) => f.endsWith('.md'))
+    : [];
+  agents.length >= 6 ? pass('agent packs', `${agents.length} defined`) : fail('agent packs missing', 'reinstall from the template');
+
+  if (!repo) { summary(); return; }
+
+  section('Repository setup');
+  try {
+    const labels = JSON.parse(await gh(['label', 'list', '--limit', '100', '--json', 'name'])).map((l) => l.name);
+    const wanted = parseYaml(readFileSync(join(ROOT, '.sdlc/templates/labels.yml'), 'utf8')).map((l) => l.name);
+    const missing = wanted.filter((w) => !labels.includes(w));
+    missing.length === 0
+      ? pass('labels', `${wanted.length} present`)
+      : fail(`${missing.length} labels missing (${missing.slice(0, 3).join(', ')}…)`, 'sdlc init');
+  } catch (e) { fail('could not list labels', e.message); }
+
+  try {
+    await gh(['api', `repos/${repo}/branches/sdlc-state`]);
+    pass('sdlc-state branch');
+  } catch { fail('sdlc-state branch missing — the ledger has nowhere to live', 'sdlc init'); }
+
+  section('Secrets and variables');
+  try {
+    const secrets = JSON.parse(await gh(['api', `repos/${repo}/actions/secrets`])).secrets.map((s) => s.name);
+    // Either credential is enough, and which one depends on where the models come from.
+    // A repo pointed at a gateway authenticates with an API key and has no OAuth token at
+    // all — demanding one there is a check that fails a correctly configured repo.
+    const viaProvider = Boolean(cfg?.runtime?.provider?.base_url);
+    const oauth = secrets.includes('CLAUDE_CODE_OAUTH_TOKEN');
+    const apiKey = secrets.includes('ANTHROPIC_API_KEY');
+    if (oauth || apiKey) {
+      pass(oauth && apiKey ? 'CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY'
+        : oauth ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY',
+        viaProvider ? `models come from ${cfg.runtime.provider.base_url}` : 'Anthropic direct');
+      if (viaProvider && !apiKey) {
+        warn('a provider is configured but ANTHROPIC_API_KEY is not set',
+             'a gateway that wants `x-api-key` will refuse an OAuth bearer token');
+      }
+    } else {
+      fail('no model credential — every agent workflow will fail',
+           'run `claude setup-token` then `gh secret set CLAUDE_CODE_OAUTH_TOKEN`, or set ' +
+           'ANTHROPIC_API_KEY for the provider in runtime.provider.base_url');
+    }
+  } catch { warn('could not read repository secrets', 'needs admin access to this repo'); }
+
+  try {
+    const vars = JSON.parse(await gh(['api', `repos/${repo}/actions/variables`])).variables;
+    const killSwitch = vars.find((v) => v.name === 'SDLC_ENABLED');
+    if (!killSwitch) warn('SDLC_ENABLED is not set', 'defaults to enabled; set it to false to halt everything');
+    else killSwitch.value === 'false'
+      ? warn('SDLC_ENABLED is false — the whole system is halted', 'gh variable set SDLC_ENABLED --body true')
+      : pass('SDLC_ENABLED', killSwitch.value);
+  } catch { warn('could not read repository variables', 'needs admin access'); }
+
+  section('Agent integration');
+  try {
+    const apps = await gh(['api', `repos/${repo}/installation`]).catch(() => null);
+    // The action exchanges an OIDC token for a GitHub App token unless `github_token` is
+    // passed explicitly. These workflows do pass it, so the App is optional — but if that
+    // input is ever dropped, every agent run 401s with "Claude Code is not installed on
+    // this repository", which reads as a token problem rather than a missing App.
+    const passesToken = readFileSync(join(ROOT, '.github/workflows/sdlc-plan.yml'), 'utf8')
+      .includes('github_token:');
+    if (apps) pass('Claude GitHub App installed');
+    else if (passesToken) pass('no GitHub App', 'fine — workflows pass github_token explicitly');
+    else fail('no GitHub App, and workflows do not pass github_token — every agent run will 401',
+              'install https://github.com/apps/claude, or add github_token to the action inputs');
+  } catch { /* the endpoint 404s for non-App tokens; not worth failing on */ }
+
+  // Off by default, and it fails at the very last step of the very first ticket — after the
+  // plan, the review and the implementation have all succeeded and the branch is pushed.
+  // The code is there; the pipeline just cannot hand it to you.
+  try {
+    const wf = JSON.parse(await gh(['api', `repos/${repo}/actions/permissions/workflow`]));
+    if (wf.can_approve_pull_request_reviews) pass('Actions may open pull requests');
+    else {
+      fail('Actions cannot create pull requests — the implementer will push a branch and stop there',
+           `gh api -X PUT repos/${repo}/actions/permissions/workflow -F can_approve_pull_request_reviews=true -F default_workflow_permissions=write`);
+    }
+    if (wf.default_workflow_permissions !== 'write') {
+      warn(`default workflow permissions are "${wf.default_workflow_permissions}"`,
+           'the per-workflow permissions blocks still apply, but read-only defaults surprise people');
+    }
+  } catch { warn('could not read the Actions workflow permissions', 'needs admin access to this repo'); }
+
+  // Branch protection that requires an approving review is a wall this pipeline cannot climb.
+  //
+  // The implementer opens the PR as github-actions[bot] and the reviewer runs as the same
+  // identity, and GitHub refuses a review on your own pull request: `gh pr review
+  // --request-changes` fails outright, and an APPROVING review is impossible. The reviewer
+  // already falls back to a comment carrying an authoritative verdict, which is enough for the
+  // pipeline's own state machine — and not enough for a required-review rule, which counts
+  // approvals rather than reading them.
+  //
+  // Everything up to that point still works: plan, implement, CI, review and QA all pass and
+  // the branch is pushed. Only the merge is impossible, and it is impossible in a way that
+  // looks like a pipeline waiting rather than a pipeline stopped.
+  try {
+    const base = cfg?.base_branch
+      || JSON.parse(await gh(['api', `repos/${repo}`])).default_branch;
+    const prot = await gh(['api', `repos/${repo}/branches/${base}/protection`])
+      .then(JSON.parse).catch(() => null);
+    const need = prot?.required_pull_request_reviews?.required_approving_review_count ?? 0;
+    if (!prot) pass(`no branch protection on ${base}`, 'the pipeline can merge its own PRs');
+    else if (need > 0) {
+      fail(`${base} requires ${need} approving review(s) — this pipeline cannot merge`,
+           'the implementer and the reviewer are both github-actions[bot], and GitHub will not ' +
+           'accept a review on your own PR. Everything up to the merge still works and the branch ' +
+           'is pushed. Either merge by hand, drop the approval requirement, or run the agents ' +
+           'under a GitHub App with its own identity.');
+    } else pass(`branch protection on ${base}`, 'no approving review required');
+  } catch { /* no admin, or no such branch — not worth a line of its own */ }
+
+  if (cfg?.env?.url_allowlist?.length) pass('QA url_allowlist', cfg.env.url_allowlist.join(', '));
+  else fail('env.url_allowlist is empty — QA will refuse to run at all', 'add preview host patterns to .sdlc/config.yml');
+
+  try {
+    const me = JSON.parse(await gh(['api', 'user']));
+    const local = await sh('git', ['config', '--get', 'user.email']).catch(() => '');
+    const noreply = `${me.id}+${me.login}@users.noreply.github.com`;
+    if (!local) warn('no per-repo commit identity', `inheriting the global one — run \`sdlc init\` to pin ${noreply}`);
+    else if (local === noreply) pass('commit identity', local);
+    else warn(`commits as ${local}`, `the authenticated account is ${me.login}. Deliberate? Otherwise: git config user.email ${noreply}`);
+  } catch { /* offline or no git — not worth failing doctor over */ }
+
+  if (cfg?.gates?.plan_approval === false) {
+    warn('plan_approval is off', 'agents will write code with no human seeing the plan first. Fine once trusted.');
+  }
+
+  // Config keys added after a repo was installed. Absent, the code behind them falls back to
+  // a default nobody chose — which is the bug family this framework keeps producing, so
+  // doctor names them rather than letting them be discovered by behaviour.
+  section('Config keys this version expects');
+  const expected = [
+    ['limits.repeat_failure_escalate', 2, 'how many identical failures before the PLAN goes on trial instead of the code'],
+    ['gates.min_route_confidence', 70, 'a route below this reaches a human; absent counts as below'],
+    ['route.enabled', true, 'false gives every issue the full chain, as before the Router existed'],
+    ['maintainer.club_if_under_files', 6, 'the size budget the split reasons against'],
+    ['runtime.model.router', 'a cheap model', 'the Router runs on every issue the rules miss'],
+  ];
+  const at = (path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg);
+  for (const [key, fallback, why] of expected) {
+    at(key) === undefined
+      ? warn(`${key} is not set`, `${why} — defaults to ${fallback}. Add it so the default is one you chose.`)
+      : pass(key, String(at(key)));
+  }
+
+  if (cfg?.route?.enabled === false) {
+    warn('route.enabled is false', 'every issue gets the full chain — audits and questions included.');
+  }
+
+  // --- limits that have to agree with the workflows ------------------------
+  //
+  // These are the same number written in different files, and nothing made them agree. Each
+  // of the three below shipped broken at least once, and every symptom pointed somewhere
+  // else: an issue nothing would touch, a ticket terminated while its first stage was going
+  // fine, a gate that gave up before CI could finish.
+  section('Limits that have to agree with the workflows');
+
+  const jobCaps = [];
+  try {
+    for (const f of readdirSync(join(ROOT, '.github/workflows')).filter((f) => f.endsWith('.yml'))) {
+      const raw = readFileSync(join(ROOT, '.github/workflows', f), 'utf8');
+      for (const m of raw.matchAll(/^    timeout-minutes:\s*(\d+)/gm)) jobCaps.push({ f, n: Number(m[1]) });
+    }
+  } catch { /* no workflows — an earlier check already said so */ }
+
+  if (!jobCaps.length) {
+    warn('no job timeouts found', 'cannot check the limits below against them.');
+  } else {
+    const longest = jobCaps.reduce((a, b) => (b.n > a.n ? b : a));
+
+    const ttl = cfg?.limits?.lock_ttl_minutes;
+    ttl === undefined
+      ? warn('limits.lock_ttl_minutes is not set', 'defaults to 45, which is shorter than most jobs.')
+      : ttl > longest.n
+        ? pass('lock_ttl_minutes outlives the longest job', `${ttl}m > ${longest.n}m (${longest.f})`)
+        : fail(`lock_ttl_minutes ${ttl}m <= longest job ${longest.n}m (${longest.f})`,
+               'the watchdog will reclaim a lock from a stage that is still running, and two agents ' +
+               'will write the same branch — the one thing the lock exists to prevent.');
+
+    const budget = cfg?.limits?.minutes;
+    budget === undefined
+      ? warn('limits.minutes is not set', 'defaults to 120, which may be shorter than a single stage.')
+      : budget > longest.n
+        ? pass('the per-issue budget outlives one stage', `${budget}m > ${longest.n}m`)
+        : fail(`limits.minutes ${budget} <= longest job ${longest.n}m (${longest.f})`,
+               'a ticket is terminated as budget-exceeded while its first stage is going fine.');
+
+    const gate = jobCaps.find((j) => j.f === 'sdlc-gate.yml')?.n;
+    const ci = jobCaps.find((j) => j.f === 'ci-verify.yml')?.n;
+    const wait = cfg?.verify?.wait_minutes;
+    if (gate && wait !== undefined) {
+      gate > wait
+        ? pass('the gate outlives its own wait', `${gate}m > ${wait}m`)
+        : fail(`sdlc-gate ${gate}m <= verify.wait_minutes ${wait}`,
+               'the gate job is cancelled mid-poll, which skips the step that records the outcome ' +
+               'AND the one that would answer it — a slow build ends the ticket silently.');
+    }
+    if (ci && wait !== undefined) {
+      wait > ci
+        ? pass('the wait outlives CI', `${wait}m > ${ci}m`)
+        : fail(`verify.wait_minutes ${wait} <= ci-verify ${ci}m`,
+               'the gate gives up before CI can finish, and reports a PR red that was never tested.');
+    }
+  }
+
+  summary();
+}
+
+function summary() {
+  process.stdout.write('\n');
+  if (failures) process.stdout.write(`\x1b[31m${failures} problem(s) must be fixed before this will work.\x1b[0m\n`);
+  else if (warnings) process.stdout.write(`\x1b[33mReady, with ${warnings} thing(s) worth reading above.\x1b[0m\n`);
+  else process.stdout.write('\x1b[32mEverything checks out.\x1b[0m\n');
+  process.exit(failures ? 1 : 0);
+}
+
+// ---------------------------------------------------------------------------
+async function init() {
+  const repo = await currentRepo();
+  if (!repo) { process.stderr.write('not inside a GitHub repo\n'); process.exit(1); }
+  process.stdout.write(`\nInstalling into ${repo}\n`);
+
+  section('Labels');
+  const labels = parseYaml(readFileSync(join(ROOT, '.sdlc/templates/labels.yml'), 'utf8'));
+  for (const l of labels) {
+    try {
+      await gh(['label', 'create', l.name, '--color', l.color, '--description', l.description, '--force']);
+      pass(l.name);
+    } catch (e) { fail(`label ${l.name}`, e.message.split('\n')[0]); }
+  }
+
+  section('State branch');
+  try {
+    await gh(['api', `repos/${repo}/branches/sdlc-state`]);
+    pass('sdlc-state already exists');
+  } catch {
+    const { ensureStateBranch } = await import(join(ROOT, '.sdlc/bin/lib/state-io.js'));
+    await ensureStateBranch(repo);
+    pass('sdlc-state created (orphan, no CI, no history)');
+  }
+
+  section('Actions permissions');
+  try {
+    await gh(['api', '-X', 'PUT', `repos/${repo}/actions/permissions/workflow`,
+              '-F', 'default_workflow_permissions=write', '-F', 'can_approve_pull_request_reviews=true']);
+    pass('Actions may open pull requests', '(off by default; the implementer needs it)');
+  } catch (e) {
+    warn('could not enable PR creation for Actions', 'needs admin. Without it the implementer pushes a branch and stops: ' + e.message.split('\n')[0]);
+  }
+
+  section('Kill switch');
+  try {
+    await gh(['variable', 'set', 'SDLC_ENABLED', '--body', 'true']);
+    pass('SDLC_ENABLED=true', '(set to false to halt everything within one job)');
+  } catch (e) { warn('could not set SDLC_ENABLED', e.message.split('\n')[0]); }
+
+  // Git identity. A fresh clone inherits the machine's global config, so committing from a
+  // second checkout silently attributes the work to whatever account that happens to be —
+  // which on a shared machine means a work email in a personal repo's history, found only
+  // when someone reads the log.
+  section('Commit identity');
+  try {
+    const me = JSON.parse(await gh(['api', 'user']));
+    const local = await sh('git', ['config', '--get', 'user.email']).catch(() => '');
+    const global_ = await sh('git', ['config', '--global', '--get', 'user.email']).catch(() => '');
+    const noreply = `${me.id}+${me.login}@users.noreply.github.com`;
+
+    if (!local || local === global_) {
+      await sh('git', ['config', 'user.name', me.name || me.login]);
+      await sh('git', ['config', 'user.email', noreply]);
+      pass('pinned to this repo', `${me.login} <${noreply}>`);
+      if (global_ && global_ !== noreply) {
+        note(`was inheriting ${global_} from your global config`);
+      }
+    } else if (local === noreply) {
+      pass('commit identity', local);
+    } else {
+      warn(`this repo commits as ${local}`, `not the authenticated account (${me.login}). Left alone — change it with: git config user.email ${noreply}`);
+    }
+  } catch (e) {
+    warn('could not check the commit identity', e.message.split('\n')[0]);
+  }
+
+  process.stdout.write('\nNext:\n');
+  process.stdout.write('  1. claude setup-token   then   gh secret set CLAUDE_CODE_OAUTH_TOKEN\n');
+  process.stdout.write('  2. /install-github-app  (in Claude Code) to install the GitHub App\n');
+  process.stdout.write('  3. edit .sdlc/config.yml — especially env.url_allowlist and allowlist\n');
+  process.stdout.write('  4. sdlc doctor\n\n');
+}
+
+// ---------------------------------------------------------------------------
+const [command] = process.argv.slice(2);
+const run = {
+  doctor,
+  init,
+  setup: async () => {
+    await exec('node', [join(ROOT, '.sdlc/bin/setup.mjs')], { stdio: 'inherit' })
+      .then((r) => process.stdout.write(r.stdout ?? ''));
+  },
+  install: async () => {
+    const i = process.argv.indexOf('--target');
+    if (i === -1) { process.stdout.write('usage: sdlc install --target <path-to-repo> [--force]\n'); process.exit(1); }
+    await exec('node', [join(ROOT, '.sdlc/bin/install.mjs'), ...process.argv.slice(3)], { stdio: 'inherit' })
+      .then((r) => process.stdout.write(r.stdout));
+  },
+  status: async () => {
+    const repo = await currentRepo();
+    await exec('node', [join(ROOT, '.sdlc/bin/sdlc-ctl.mjs'), 'status'], {
+      env: { ...process.env, GITHUB_REPOSITORY: repo },
+      stdio: 'inherit',
+    }).then((r) => process.stdout.write(r.stdout));
+  },
+}[command];
+
+if (!run) {
+  process.stdout.write('usage: sdlc <setup|install|init|doctor|status>\n\n' +
+    '  setup                     interactive: scan this repo and write its config\n' +
+    '  install --target <repo>   copy the framework into another repository\n' +
+    '  init                      labels, state branch, kill switch (run inside the repo)\n' +
+    '  doctor                    verify every token, secret and integration\n' +
+    '  status                    show every issue in flight\n');
+  process.exit(1);
+}
+run().catch((e) => { process.stderr.write(`sdlc: ${e.message}\n`); process.exit(1); });

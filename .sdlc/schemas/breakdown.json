@@ -1,0 +1,107 @@
+{
+  "$id": "breakdown",
+  "title": "Epic breakdown",
+  "description": "How the maintainer splits an epic into independently shippable issues.",
+  "type": "object",
+  "required": [
+    "epic",
+    "pieces"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "epic": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "understanding": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2000
+    },
+    "pieces": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "why",
+          "acceptance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 200
+          },
+          "why": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000,
+            "description": "What a user can do once this lands that they could not before."
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 500
+            }
+          },
+          "depends_on": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "1-based indexes of other pieces that must land first."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "bug",
+              "chore"
+            ]
+          },
+          "risk": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Named when the piece touches money, auth, migrations or infra."
+          },
+          "out_of_scope": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            }
+          }
+        }
+      }
+    },
+    "deferred": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "description": "Parts of the epic deliberately not split out yet, and why."
+    },
+    "created": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "Issue numbers created from this breakdown, so the pipeline can start intake on each."
+    }
+  }
+}

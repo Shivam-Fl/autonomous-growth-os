@@ -1,0 +1,207 @@
+# Written by `sdlc install` from a scan of this repo. Every value below is a starting
+# point, not a fact — read it before you trust the pipeline with anything.
+#
+# Detected stack: unknown
+#   - could not work out how to start this app — set env.boot, or QA will have nothing to drive
+
+runtime:
+  # Where the models come from. Empty = Anthropic direct with the action's OAuth token,
+  # which is what every repo did before this block existed.
+  #
+  # A gateway lets runtime.model.<stage> name ANY model it serves, so stages can sit on
+  # different models — which matters when quotas are per model rather than pooled.
+  #
+  # Header names are load-bearing. OpenCode Go refuses Authorization: Bearer with
+  # "Missing API key" and wants x-api-key — ANTHROPIC_API_KEY sends that,
+  # ANTHROPIC_AUTH_TOKEN does not. It also answers a missing x-opencode-session with an
+  # opaque 500 on its Anthropic endpoint, which is a 400 wearing the wrong number.
+  # {run} in a header value becomes the Actions run id: one stable id per conversation.
+  provider:
+    # OpenCode Go, Anthropic-compatible. NO trailing /v1: the action appends /v1/messages
+    # itself, and a doubled /v1 returns a 404 that the client reports as `model_not_found`.
+    base_url: "https://opencode.ai/zen/go"
+    # Required. Without it the API answers an opaque 500 with no message.
+    headers:
+      x-opencode-session: "sdlc-{run}"
+  # Model per STEP. Empty = the action's default. Council members inherit their stage.
+  # Spend where a mistake is hardest to recover from: the diagnosis every later stage
+  # inherits, and the last read before code is trusted.
+  model:
+    # Four models, four separate quota pools, assigned by measured capability. Nothing on a
+    # small pool: the dashboard sums percentages, so a cheap quota is the expensive choice.
+    #
+    # deepseek-v4.1-flash — Terminal-Bench 2.1 90.6, DeepSWE v1.1 74.2%, lowest cost per token.
+    #   Strongest of the four at reading and writing code, which is also what runs most.
+    # qwen3.7-plus — SWE-bench Verified 77.7, MCP Atlas 73.2. Best all-round judgement.
+    # minimax-m3 — BrowseComp 83.5, native multimodality. The only one built to drive a browser.
+    # qwen3.6-plus — the predecessor of 3.7, used where a differently-wrong second opinion is
+    #   the point.
+    plan:               qwen3.7-plus
+    plan_proposer:      deepseek-v4.1-flash
+    plan_critic:        qwen3.6-plus
+    plan_arbiter:       qwen3.7-plus
+    plan_reviewer:      qwen3.7-plus
+    debug:              deepseek-v4.1-flash
+    implement:          deepseek-v4.1-flash
+    review:             qwen3.7-plus
+    review_correctness: deepseek-v4.1-flash
+    review_design:      qwen3.7-plus
+    qa:                 minimax-m3
+    root_cause:         qwen3.7-plus
+    triage:             qwen3.7-plus
+    librarian:          qwen3.6-plus
+    release:            qwen3.6-plus
+    maintainer:         qwen3.7-plus
+    # Reads the whole product before deciding what it is built out of, and now researches the
+    # web to do it. The one decision every later ticket inherits.
+    project:            qwen3.7-plus
+    router:             qwen3.6-plus
+
+  # Turn limits. EMPTY MEANS NO LIMIT, which is the default and usually right: the action
+  # validates the count after the run, so exceeding a cap discards completed work instead of
+  # truncating it. limits.attempts and timeout-minutes already stop runaway beforehand.
+  max_turns: {}
+
+# single = one agent. council = several in sequence, each reading the last one's output.
+# A council costs roughly 3x the turns. Start single; switch the stage that actually
+# produces bad output.
+councils:
+  plan:   single           # single | council
+  review: single           # single | council
+
+# Where agent PRs are opened against, and what QA diffs them from. Empty = the repo's
+# default branch. Set this when the team integrates somewhere else — many repos keep
+# main/master as the released state and merge to a development branch.
+base_branch: ""
+
+# Bugs go to the debugger, which reproduces in a live browser before diagnosing.
+route_bugs_to_debugger: true
+
+# Which stages a ticket actually needs. The Router composes a route out of
+# .sdlc/flow-graph.json: deterministic rules first (free, and it names the rule that fired),
+# a cheap model only for what those rules will not commit to.
+route:
+  enabled:   true    # false = every issue gets the full chain
+  fast_path: true    # false = skip the free rules and always ask the model
+
+# The environment QA drives. url_allowlist is the guard that stops an agent clicking
+# through production — QA refuses to open a browser against anything not matching it.
+env:
+  mode: compose
+  base_url: "http://localhost:3000"
+  url_allowlist:
+    - "localhost:*"
+  boot: "npm run sdlc:serve"
+  ready: "/"
+  ready_timeout_seconds: 0   # 0 = auto (180 preview, 420 compose)
+
+# The debugger gets different rules from QA, on purpose. Reproducing a reported bug often
+# REQUIRES production — the bug exists there, with that account and that data. QA is the
+# opposite: adversarial and broad, so it needs a target it is free to break.
+debug_env:
+  allow_production: false
+  url_allowlist: []
+  api_allowlist: []
+  read_only: true
+
+# How QA logs in.
+# none    = the app has no login, or QA only tests unauthenticated flows
+# fixture = plaintext credentials for an ephemeral stack. Verifies env.mode is compose and
+#           api_allowlist is local-only before it will hand them over.
+# secrets = accounts provisioned by hand (SSO, admin). Values come from GitHub Secrets;
+#           only their NAMES appear here.
+# derived = QA signs itself up, every password an HMAC of one QA_FIXTURE_SEED secret.
+#
+# Derived rather than "sign up and save the credentials" because there is nowhere safe to
+# save them: memory/ and the ledger are both git. Deriving stores nothing, yields the same
+# password for the same identity so accounts are reusable, and rotating the seed rotates all.
+qa_auth:
+  mode: none               # none | fixture | secrets | derived
+
+  # mode: secrets — secret NAMES, never values. One entry per role: most apps need two
+  # accounts to test anything about permissions, and roles rarely share a credential shape
+  # (a customer may log in by phone and OTP while an owner uses a password).
+  accounts:
+    - role: primary
+      fields: { email: QA_USER_EMAIL, password: QA_USER_PASSWORD }
+  scope: pr                # run | pr | global
+  roles: [primary]         # add a second for permission tests
+  email_domain: qa.invalid # RFC 2606 reserved — can never reach a real person
+  signup_url: "/signup"    # CHECK THIS against the app before the first QA run
+
+# own      = run the checks below (a repo with no CI of its own)
+# existing = skip them; this repo's CI already gates the PR, and the pipeline waits for those
+#            checks instead of running a weaker duplicate beside them
+# both     = run ours alongside theirs
+verify:
+  mode: own
+
+  # Which checks must pass before an agent may look at the PR. Empty = every check on the PR
+  # except the pipeline's own. Name them explicitly on a repo with optional or slow jobs.
+  required_checks: []
+  wait_minutes: 60
+
+  # Runs before every other check. Monorepos usually need codegen or a shared package built
+  # first, or typecheck fails for reasons unrelated to the PR.
+  prepare:   ""
+  typecheck: ""
+  lint:      ""
+  unit:      "npm run sdlc:verify"
+  build:     ""
+  e2e:       ""
+
+gates:
+  plan_approval:     true   # a HUMAN approves the work order before any code is written
+  plan_review_agent: true   # when plan_approval is off, an agent reviews instead of nobody
+  min_confidence:    70     # a plan below this reaches a human regardless of the gates above
+  merge_approval:    true
+  qa_files_issues:   true   # QA opens issues for bugs outside this PR's scope
+  min_route_confidence: 70   # a ROUTE below this reaches a human, absent counts as below
+  max_route_risk:       70   # and so does a route through something this expensive to get wrong
+
+limits:
+  attempts: 10
+  minutes:  600            # wall clock per issue. Generous on purpose: a single plan
+                         # council can legitimately run for hours, and a budget tighter
+                         # than one stage terminates work that was going fine.
+  runtime_retries: 4       # provider-outage cooldowns one stage may wait through before it
+                           # stops for a person. The waits back off 20/40/80/120 minutes.
+  max_in_flight: 2         # how many issues may be mid-pipeline at once. Every agent stage
+
+                           # runs on ONE token, and ten concurrent sessions exhausted it in a
+
+                           # single minute — plan, review and implement all failing together.
+
+                           # 0 = no cap, which is what a fan-out of eight will do to you.
+
+  lock_ttl_minutes: 180    # must exceed the longest job, or the watchdog reclaims a lock
+                         # from a stage that is still running and two agents write at once
+  repeat_failure_escalate: 2   # the same failure twice puts the PLAN on trial, not the code
+
+# No agent may touch these without a human. Derived from what this repo actually contains.
+forbidden_paths:
+  - "**/*.env*"
+  - ".github/**"
+  - ".sdlc/agents/**"
+  - ".sdlc/bin/**"
+  - ".sdlc/config.yml"
+  - ".sdlc/flow-graph.json"
+  - ".sdlc/schemas/**"
+  - ".sdlc/templates/**"
+  - "bin/sdlc"
+
+# Only these users may issue /sdlc commands. Everyone else's comments are data, never
+# instructions. REPLACE THIS — an install cannot know who owns the repo.
+allowlist:
+  - "REPLACE_ME"
+
+maintainer:
+  club_if_under_files: 6   # adjacent pieces this small together are a candidate to be one issue
+
+  flag_chain_of: 3         # a straight line of this many dependent issues gets a second look
+  flag_similarity: 0.5     # how alike two adjacent titles read before that look is worth it
+
+release:
+  auto_merge: false
+  auto_tag:   false
+  changelog:  "CHANGELOG.md"

@@ -1,0 +1,129 @@
+{
+  "$id": "failure-packet",
+  "title": "Failure packet",
+  "description": "Everything an agent needs to fix a mechanical failure: the raw error, the work order it was working from, and what has already been tried. Built by a script from any stage, never written by a model.",
+  "type": "object",
+  "required": [
+    "issue",
+    "stage",
+    "error_type",
+    "error_signature",
+    "raw_excerpt",
+    "digest"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pr": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "implement",
+        "ci",
+        "review",
+        "qa",
+        "root-cause",
+        "gate",
+        "maintainer",
+        "project"
+      ]
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "occurrences": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many times in a row this exact signature has just failed."
+    },
+    "error_type": {
+      "type": "string",
+      "enum": [
+        "syntax",
+        "type",
+        "test-fail",
+        "lint",
+        "build",
+        "tool-error",
+        "schema-invalid",
+        "timeout",
+        "exception",
+        "unknown"
+      ]
+    },
+    "error_signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8,64}$",
+      "description": "Hash of the error with run-to-run noise stripped, so the same mistake twice is recognisable as the same mistake."
+    },
+    "raw_excerpt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000,
+      "description": "The actual compiler/test/runner output. NOT a summary \u2014 the summary is what failed to be enough last time."
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "One to three lines a human reads first."
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "fix",
+        "root-cause",
+        "escalate",
+        "triage"
+      ]
+    },
+    "decision_reason": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "work_order_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "diff_ref": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Commit sha or branch the failure was produced from."
+        },
+        "failed_checks": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "run_url": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "prior_signatures": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "What has already failed on this issue, newest last, so a pattern is visible without reading every run."
+        }
+      }
+    }
+  }
+}

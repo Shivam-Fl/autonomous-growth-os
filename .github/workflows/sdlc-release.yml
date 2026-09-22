@@ -1,0 +1,86 @@
+# Agent 8 — Release. Mostly mechanical; a model only for changelog prose.
+name: sdlc-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr: { required: true, type: string }
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+          # Only cache when there is a lockfile. Without this, setup-node fails outright on a
+          # zero-dependency project or any non-Node repo, before a single step has run.
+          cache: ${{ hashFiles('**/package-lock.json') != '' && 'npm' || '' }}
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+
+      # Base URL, key style and any headers the provider demands. Empty config
+      # means the default Anthropic endpoint, exactly as before this existed.
+      - name: Provider
+        id: prov
+        run: node .sdlc/bin/provider-settings.mjs
+      # Works in a repo with no package.json: install the repo's own deps when there is a
+      # manifest, then make sure the framework's single dependency is available either way.
+      - name: Bootstrap
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f package.json ]; then npm install --no-audit --no-fund
+          fi
+          node .sdlc/bin/ensure-deps.mjs
+
+      - name: Runtime args from config
+        id: rt
+        run: node .sdlc/bin/claude-args.mjs release
+
+      - name: Changelog and docs
+        # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
+        # real repository legitimately takes a long time, and truncating that to protect a
+        # cleanup step trades the work for the bookkeeping.
+        #
+        # It exists because GitHub CANCELS a job that hits `timeout-minutes`, and a cancelled
+        # job skips its remaining steps — including the `if: failure()` step that turns a
+        # failure into a failure-packet. A step that fails on its own is answerable; a job
+        # that gets cancelled dispatches nobody and leaves the issue looking exactly like one
+        # still being worked on. So the job cap is generous, and this sits under it.
+        timeout-minutes: 20
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          # Passed explicitly so the action does NOT try to exchange its OIDC token for a
+          # GitHub App token — that path 401s unless the Claude GitHub App is installed on
+          # the repo, and requiring an App install would make this framework harder to clone.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Every stage dispatches the next, so all but the first agent run is initiated by
+          # github-actions[bot]. The action refuses bot-initiated runs by default — a sensible
+          # guard against bot loops, and one that blocks an automated pipeline entirely.
+          # Scoped to github-actions rather than "*": a workflow WE dispatched, not any bot.
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt.outputs.args }}
+          prompt: |
+            Follow .sdlc/agents/release.md exactly for merged PR #${{ inputs.pr }}.
+
+            Write the changelog entry for someone USING the software, not someone reading the
+            diff: "Fixed sessions being lost after signing in with Google", never
+            "patched SameSite in session.ts".
+
+            If the work order touched documented behaviour, update the docs in the same commit.
+            Never rewrite history on main. Never tag when CI on main is red.

@@ -1,0 +1,96 @@
+# The orchestrator. Parses reports and privileged commands, advances the state machine.
+# This is the only workflow that acts on a human comment.
+name: sdlc-loop
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: sdlc-loop-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  # `statusCheckRollup` is a GraphQL field over check runs AND legacy commit statuses, and it
+  # needs a grant for each. Without both, `gh pr view --json statusCheckRollup` fails with
+  # "Resource not accessible by integration" — which reads as an auth problem rather than as a
+  # missing permission, and is why this was learned once in sdlc-gate and nowhere else.
+  checks: read
+  statuses: read
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write          # required to dispatch the next stage with `gh workflow run`
+
+jobs:
+  command:
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+          # Only cache when there is a lockfile. Without this, setup-node fails outright on a
+          # zero-dependency project or any non-Node repo, before a single step has run.
+          cache: ${{ hashFiles('**/package-lock.json') != '' && 'npm' || '' }}
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+      # Works in a repo with no package.json: install the repo's own deps when there is a
+      # manifest, then make sure the framework's single dependency is available either way.
+      - name: Bootstrap
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f package.json ]; then npm install --no-audit --no-fund
+          fi
+          node .sdlc/bin/ensure-deps.mjs
+
+      # Authority comes from the comment AUTHOR and their repo association — never from the
+      # comment body. No text in a comment can grant itself permission.
+      - name: Parse the command
+        id: cmd
+        run: |
+          node .sdlc/bin/sdlc-ctl.mjs command \
+            --body "$COMMENT_BODY" \
+            --author "${{ github.event.comment.user.login }}" \
+            --association "${{ github.event.comment.author_association }}"
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+
+      - name: Act on it
+        if: steps.cmd.outputs.command != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMAND: ${{ steps.cmd.outputs.command }}
+          ARGS: ${{ steps.cmd.outputs.args }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: node .sdlc/bin/run-command.mjs
+
+  merged:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+          # Only cache when there is a lockfile. Without this, setup-node fails outright on a
+          # zero-dependency project or any non-Node repo, before a single step has run.
+          cache: ${{ hashFiles('**/package-lock.json') != '' && 'npm' || '' }}
+      # Works in a repo with no package.json: install the repo's own deps when there is a
+      # manifest, then make sure the framework's single dependency is available either way.
+      - name: Bootstrap
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f package.json ]; then npm install --no-audit --no-fund
+          fi
+          node .sdlc/bin/ensure-deps.mjs
+      - name: Advance to merged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node .sdlc/bin/on-merge.mjs

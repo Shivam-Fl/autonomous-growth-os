@@ -1,0 +1,181 @@
+# Tier 0 — deterministic CI. No model, no cost beyond runner minutes.
+# Runs BEFORE any agent is allowed near the PR: never pay a model for what tsc finds free.
+name: ci-verify
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Dispatchable for one PR by number, because the `pull_request` event cannot be relied on.
+  #
+  # The implementer pushes as github-actions[bot], and GitHub holds bot-triggered
+  # `pull_request` runs at `action_required` until a human clicks approve. A held run produces
+  # no check, so the PR has no CI and the pipeline stalls — or worse, reads the empty rollup as
+  # clean. Dispatch is not held, so the gate starts this itself.
+  #
+  # A dispatched run's own check belongs to the branch it was dispatched on, not to the PR, so
+  # this posts an explicit commit status on the PR's head sha. That is what the rollup reads.
+  workflow_dispatch:
+    inputs:
+      pr: { required: false, type: string }
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write         # a dispatched run reports itself onto the PR's head commit
+
+jobs:
+  verify:
+    # The project brief is a document, not an implementation. It carries no work order, its
+    # branch holds .sdlc/memory and package.json and nothing to compile, and `sdlc:verify`
+    # is red on it by construction — the brief itself says so, because that PR is what
+    # ADDS the verify script and no tsconfig or dependency exists yet. Gating it would put a
+    # red check on the one pull request a human is required to read and merge, and there is
+    # no faster way to teach someone to merge red than to show them a red they must ignore.
+    if: ${{ !startsWith(github.event.pull_request.head.ref || '', 'sdlc/project-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      result: ${{ job.status }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('**/package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+
+      # Which commit is under test. A `pull_request` run checks out the right thing by
+      # default; a DISPATCHED one gets the default branch, which would test the wrong code and
+      # then report the result as if it were the PR's.
+      - name: Resolve the commit under test
+        id: sha
+        if: inputs.pr != ''
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          SHA=$(gh pr view "${{ inputs.pr }}" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "under test: $SHA"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        if: steps.sha.outputs.sha != ''
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+
+      - name: Report as pending on the PR's commit
+        if: steps.sha.outputs.sha != ''
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/${{ steps.sha.outputs.sha }}" \
+            -f state=pending -f context=ci-verify -f description="running" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+
+      - name: Bootstrap
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f package.json ]; then npm install --no-audit --no-fund
+          fi
+          node .sdlc/bin/ensure-deps.mjs
+
+      # Each step tees its output so the digest can read the real failure, and `continue-on-error`
+      # lets every check run — one digest listing four problems beats four sequential red builds.
+      # Not continue-on-error: if the prep fails, every check after it fails for the wrong
+      # reason and the digest blames the PR for a broken build setup.
+      # A repo with its own CI should keep using it. verify.mode: existing skips ours
+      # entirely rather than running a weaker duplicate alongside it.
+      - name: Should we run our own checks?
+        id: mode
+        run: |
+          MODE=$(node .sdlc/bin/read-config.mjs verify.mode)
+          echo "mode=${MODE:-own}" >> $GITHUB_OUTPUT
+          [ "$MODE" = "existing" ] && echo "verify.mode is 'existing' — this repo's own CI gates the PR" || true
+
+      # Deliberately NOT read from config. Reading `verify.install` would require a YAML
+      # parser, which is what we are about to install — a bootstrap deadlock. A project
+      # needing something other than npm edits this line.
+      # Works in a repo with no package.json: install the repo's own deps when there is a
+      # manifest, then make sure the framework's single dependency is available either way.
+      - name: Prepare
+        if: steps.mode.outputs.mode != 'existing'
+        run: |
+          CMD=$(node .sdlc/bin/read-config.mjs verify.prepare)
+          if [ -z "$CMD" ]; then echo "verify.prepare not configured — skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Typecheck
+        if: steps.mode.outputs.mode != 'existing'
+        id: typecheck
+        continue-on-error: true
+        run: |
+          CMD=$(node .sdlc/bin/read-config.mjs verify.typecheck)
+          if [ -z "$CMD" ]; then echo "verify.typecheck not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Lint
+        if: steps.mode.outputs.mode != 'existing'
+        id: lint
+        continue-on-error: true
+        run: |
+          CMD=$(node .sdlc/bin/read-config.mjs verify.lint)
+          if [ -z "$CMD" ]; then echo "verify.lint not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Unit tests
+        if: steps.mode.outputs.mode != 'existing'
+        id: unit
+        continue-on-error: true
+        run: |
+          CMD=$(node .sdlc/bin/read-config.mjs verify.unit)
+          if [ -z "$CMD" ]; then echo "verify.unit not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Build
+        if: steps.mode.outputs.mode != 'existing'
+        id: build
+        continue-on-error: true
+        run: |
+          CMD=$(node .sdlc/bin/read-config.mjs verify.build)
+          if [ -z "$CMD" ]; then echo "verify.build not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Digest failures
+        id: digest
+        if: steps.typecheck.outcome == 'failure' || steps.lint.outcome == 'failure' || steps.unit.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: node .sdlc/bin/sdlc-ctl.mjs digest --file /tmp/ci.log
+
+      - name: Post digest to the PR
+        if: steps.digest.outcome == 'success' && github.event.pull_request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUMMARY: ${{ steps.digest.outputs.summary }}
+        run: |
+          printf '## CI failed\n\n%s\n\n_Digest produced by regex, not a model._\n' "$SUMMARY" \
+            | gh pr comment "${{ github.event.pull_request.number }}" --body-file -
+
+      # Always, so a dispatched run never leaves `pending` on the commit — a status that never
+      # resolves stalls the gate exactly as thoroughly as a failing one, and says less.
+      - name: Report the result on the PR's commit
+        if: always() && steps.sha.outputs.sha != ''
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          FAILED="${{ steps.typecheck.outcome }} ${{ steps.lint.outcome }} ${{ steps.unit.outcome }} ${{ steps.build.outcome }}"
+          case "$FAILED" in *failure*) STATE=failure; DESC="a check failed" ;; *) STATE=success; DESC="all configured checks passed" ;; esac
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/${{ steps.sha.outputs.sha }}" \
+            -f state=$STATE -f context=ci-verify -f description="$DESC" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "reported $STATE on ${{ steps.sha.outputs.sha }}"
+
+      - name: Fail if any check failed
+        if: steps.typecheck.outcome == 'failure' || steps.lint.outcome == 'failure' || steps.unit.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: exit 1

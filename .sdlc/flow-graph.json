@@ -1,0 +1,158 @@
+{
+  "comment": [
+    "The pipeline's STAGES and which one may legally follow which. Data, not code, because",
+    "the Router composes a route out of it and a test has to be able to read the same thing.",
+    "",
+    "This is NOT the ledger's legal-transition map. That map is about STATES, and it exists to",
+    "make one claim impossible to record — 'QA passed' from somewhere that is not a QA run.",
+    "This is about which WORK runs next, which is a routing question, and collapsing the two",
+    "would put a guard on claims in the same file as a decision about throughput. They are",
+    "cross-checked instead: every stage's `state` here must be a real ledger state, and",
+    "tests/flow-graph.test.js walks each composable route through the state machine.",
+    "",
+    "`always: true` marks a stage a route may not drop. The Router chooses how much",
+    "deliberation a ticket gets; it does not get to route around the gate or around intake.",
+    "",
+    "`next` is FORWARD composition — what a route may put after this stage. `loops_to` is how a",
+    "failure comes back, which is not the same thing and must not be composable: review returns",
+    "to implement on a rejection, and a route reading `[\"qa\", \"implement\"]` would otherwise",
+    "validate as if testing something before building it were a plan."
+  ],
+  "stages": {
+    "intake": {
+      "workflow": "sdlc-intake.yml",
+      "state": "triage",
+      "input": "issue",
+      "always": true,
+      "next": [
+        "project",
+        "maintainer",
+        "plan",
+        "debug",
+        "qa"
+      ],
+      "why": "trust, risk, dependencies and dedupe. Runs on every issue; nothing may skip it."
+    },
+    "project": {
+      "workflow": "sdlc-project.yml",
+      "state": "planning",
+      "input": "issue",
+      "counter": "plan",
+      "next": [
+        "maintainer",
+        "plan",
+        "debug"
+      ],
+      "why": "the once-per-repo architecture decision, before anything is split or planned. Always ends at a human, and that gate is not a config flag."
+    },
+    "maintainer": {
+      "workflow": "sdlc-maintainer.yml",
+      "state": "planning",
+      "input": "epic",
+      "next": [],
+      "why": "splits an epic into issues, each of which gets its own route. Terminal for THIS issue."
+    },
+    "plan": {
+      "workflow": "sdlc-plan.yml",
+      "state": "planning",
+      "input": "issue",
+      "counter": "plan",
+      "next": [
+        "implement",
+        "review",
+        "qa"
+      ],
+      "why": "a feature is a design question. Emits the work order."
+    },
+    "debug": {
+      "workflow": "sdlc-plan.yml",
+      "state": "planning",
+      "input": "issue",
+      "counter": "plan",
+      "next": [
+        "implement"
+      ],
+      "why": "a bug is a question about what a running system is doing, answered by reproducing it."
+    },
+    "implement": {
+      "workflow": "sdlc-implement.yml",
+      "state": "implementing",
+      "input": "issue",
+      "counter": "ci",
+      "next": [
+        "gate"
+      ],
+      "why": "applies a decided work order. Always followed by the gate."
+    },
+    "gate": {
+      "workflow": "sdlc-gate.yml",
+      "state": "ci-green",
+      "input": "pr",
+      "always": true,
+      "next": [
+        "review",
+        "qa"
+      ],
+      "why": "waits for whatever checks gate this PR. A route may not skip verification.",
+      "loops_to": [
+        "implement"
+      ]
+    },
+    "review": {
+      "workflow": "sdlc-review.yml",
+      "state": "review",
+      "input": "pr",
+      "counter": "review",
+      "next": [
+        "qa"
+      ],
+      "why": "reads the diff against the work order. Skippable on a trivial change.",
+      "loops_to": [
+        "implement"
+      ]
+    },
+    "qa": {
+      "workflow": "sdlc-qa.yml",
+      "state": "qa",
+      "input": "pr",
+      "counter": "qa",
+      "next": [],
+      "why": "adversarial, live browser. The only stage that can run with no PR at all: routed alone it is an AUDIT, driven by issue number against what is already deployed.",
+      "input_alt": "issue",
+      "loops_to": [
+        "implement",
+        "root-cause"
+      ]
+    },
+    "root-cause": {
+      "workflow": "sdlc-root-cause.yml",
+      "state": "planning",
+      "input": "issue",
+      "counter": "plan",
+      "next": [],
+      "why": "puts the previous diagnosis on trial after a QA failure or a repeated mechanical one.",
+      "loops_to": [
+        "implement"
+      ]
+    }
+  },
+  "routable": [
+    "project",
+    "maintainer",
+    "plan",
+    "debug",
+    "implement",
+    "review",
+    "qa"
+  ],
+  "implicit": [
+    "intake",
+    "gate",
+    "root-cause"
+  ],
+  "on_complete": {
+    "merge": "the PR merges once every pre-merge claim re-establishes",
+    "file-issue-only": "no PR exists; every finding becomes its own issue",
+    "comment-only": "the artifact is posted for a person to read and the pipeline stops there"
+  }
+}
