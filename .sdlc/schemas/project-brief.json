@@ -676,9 +676,36 @@
                 "description": "The blocks and where they sit."
               },
               "states": {
-                "type": "string",
-                "maxLength": 600,
-                "description": "ideal / empty / loading / partial / error — all five, or say why one cannot happen."
+                "type": "object",
+                "description": "The five states, each described. A screen that cannot reach one says why under that key.",
+                "additionalProperties": false,
+                "properties": {
+                  "ideal": {
+                    "type": "string",
+                    "maxLength": 600,
+                    "description": "The state the screen is designed for."
+                  },
+                  "empty": {
+                    "type": "string",
+                    "maxLength": 600,
+                    "description": "No data yet — what the person sees and what it invites them to do."
+                  },
+                  "loading": {
+                    "type": "string",
+                    "maxLength": 600,
+                    "description": "While data is in flight. Skeleton, spinner, or nothing, and why."
+                  },
+                  "partial": {
+                    "type": "string",
+                    "maxLength": 600,
+                    "description": "Some data, some still arriving or missing."
+                  },
+                  "error": {
+                    "type": "string",
+                    "maxLength": 600,
+                    "description": "It failed. What is said, and what the person can do next."
+                  }
+                }
               },
               "responsive": {
                 "type": "string",

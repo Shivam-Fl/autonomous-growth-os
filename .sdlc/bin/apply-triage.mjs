@@ -5,7 +5,7 @@
 // diagnosis where a person will find it, and refuses two things the agent is not allowed to
 // have: a `rerun` it could not justify, and a framework edit.
 import { readFileSync, existsSync } from 'node:fs';
-import { gh, setOutput, die, repo as repoOf } from './lib/actions.js';
+import { gh, ghJson, setOutput, die, repo as repoOf } from './lib/actions.js';
 import { handOff } from './lib/handoff.js';
 import { advance } from './lib/advance.js';
 import { markResume } from './lib/route-io.js';
@@ -24,6 +24,9 @@ const t = JSON.parse(readFileSync('triage.json', 'utf8'));
 // script uses, because "run the review again" has to mean the same thing in both places.
 const STAGE = {
   plan:      { workflow: 'sdlc-plan.yml',      counter: 'plan',   state: 'planning',    rework: null },
+  // The once-per-repo architecture decision. Its failures arrive labelled `plan`, because that
+  // is the counter it spends, but the stage that re-runs it is its own.
+  project:   { workflow: 'sdlc-project.yml',   counter: 'plan',   state: 'planning',    rework: null },
   implement: { workflow: 'sdlc-implement.yml', counter: 'ci',     state: 'implementing', rework: 'fix:implement-failed' },
   ci:        { workflow: 'sdlc-implement.yml', counter: 'ci',     state: 'implementing', rework: 'fix:ci-red' },
   gate:      { workflow: 'sdlc-implement.yml', counter: 'ci',     state: 'implementing', rework: 'fix:gate-failed' },
@@ -116,7 +119,30 @@ if (verdict === 'escalate') {
 }
 
 if (verdict === 'replan') {
+  // Root cause revises a WORK ORDER. It starts by fetching one, and exits if there is none.
+  //
+  // A project-stage failure has none — that stage emits `project-brief.json`, and its failure
+  // counter is `plan`, so a replan verdict routed it to root-cause, which died on
+  // "no work order found on issue #1" and took the triage of its own failure down with it.
+  // The planning stage before a work order exists has the same shape.
+  //
+  // Where there is nothing to revise, the honest replan is to run the stage again — the
+  // diagnosis is on the issue, and the stage reads the issue.
+  const hasWorkOrder = await ghJson(['issue', 'view', String(issue), '--json', 'comments'])
+    .then((d) => (d.comments ?? []).some((c) => /```json[\s\S]*"acceptance"/.test(c.body ?? '')))
+    .catch(() => false);
+
   await advance(issue, 'planning', { agent: 'triage' });
+
+  if (!hasWorkOrder) {
+    const stageWorkflow = stage === 'project' ? 'sdlc-project.yml' : 'sdlc-plan.yml';
+    await handOff(stageWorkflow, ['-f', `issue=${issue}`], {
+      issue, pr, why: 'the triage found the plan wrong, and there is no work order to revise yet',
+    });
+    process.stdout.write(`issue #${issue}: replan with nothing to revise -> ${stageWorkflow}\n`);
+    process.exit(0);
+  }
+
   const args = ['-f', `issue=${issue}`];
   if (pr) args.push('-f', `pr=${pr}`);
   args.push('-f', 'from=failure');

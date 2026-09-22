@@ -70,8 +70,15 @@ export function renderUi(b) {
     section('Patterns', (u.patterns ?? []).map((p) =>
       `### ${p.pattern}\n\n${p.rule}` + (p.example ? `\n\n_Example._ ${p.example}` : '')).join('\n\n')),
     section('Screens', (u.layouts ?? []).map((l) =>
-      `### ${l.screen}\n\n**Answers.** ${l.purpose}\n\n**Regions.** ${l.regions}\n\n` +
-      `**States.** ${l.states}` + (l.responsive ? `\n\n**Narrow.** ${l.responsive}` : '')).join('\n\n')),
+      `### ${l.screen}\n\n**Answers.** ${l.purpose}\n\n**Regions.** ${l.regions}\n` +
+      // Five named states, each its own line. They were one string, which is how a screen ends
+      // up with an "empty / loading / error" sentence that describes none of them.
+      (l.states
+        ? '\n' + ['ideal', 'empty', 'loading', 'partial', 'error']
+            .filter((k) => l.states[k])
+            .map((k) => `- **${k}** — ${l.states[k]}`).join('\n') + '\n'
+        : '') +
+      (l.responsive ? `\n**Narrow.** ${l.responsive}` : '')).join('\n\n')),
     section('Accessibility', bullets(u.accessibility)),
   ].join('\n');
 }
