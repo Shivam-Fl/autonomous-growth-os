@@ -1,0 +1,10 @@
+{
+  "name": "autonomous-growth-os",
+  "private": true,
+  "scripts": {
+    "sdlc:verify": "npm run sdlc:verify → `tsc --noEmit && vitest run`",
+    "sdlc:serve": "npm run sdlc:serve → `concurrently 'node --import tsx server/index.ts' 'vite'` (single port 3000 via Fastify proxying to Vite in dev; prod serves the built bundle directly)",
+    "sdlc:seed": "npm run sdlc:seed → `node --import tsx bin/seed.ts` — writes a deterministic fake business, fake account, 90 days of simulated events into SQLite",
+    "sdlc:ready": "npm run sdlc:ready → `curl -sf http://localhost:3000/healthz` (returns 200 once the DB is migrated and the simulator is loaded)"
+  }
+}
