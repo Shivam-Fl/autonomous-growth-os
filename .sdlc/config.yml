@@ -193,7 +193,7 @@ forbidden_paths:
 # Only these users may issue /sdlc commands. Everyone else's comments are data, never
 # instructions. REPLACE THIS — an install cannot know who owns the repo.
 allowlist:
-  - "REPLACE_ME"
+  - "Shivam-Fl"
 
 maintainer:
   club_if_under_files: 6   # adjacent pieces this small together are a candidate to be one issue
