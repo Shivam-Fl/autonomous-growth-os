@@ -98,6 +98,23 @@ if (view.isDraft) await stop('the PR is a draft');
 // touch it again — the pipeline stopped, wearing the face of a pipeline waiting. Resolving a
 // conflict is mostly mechanical and the implementer already has the branch; when it is not
 // mechanical, it says so and stops, which is the same escalation a human would reach anyway.
+// `mergeable` is computed asynchronously, and it is UNKNOWN for a while after anything touches
+// the pull request or its base. Reading it once and treating anything that is not CONFLICTING as
+// clean is how a conflicting PR walked past this check and failed at the merge API instead —
+// reported as "the merge step itself failed", which is a tool error, not the truth.
+for (let i = 0; view.mergeable === 'UNKNOWN' && i < 6; i++) {
+  await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+  const again = await ghJson(['pr', 'view', pr, '--json', 'mergeable,mergeStateStatus'])
+    .catch(() => null);
+  if (!again) break;
+  view.mergeable = again.mergeable;
+  view.mergeStateStatus = again.mergeStateStatus;
+}
+if (view.mergeable === 'UNKNOWN') {
+  await stop('GitHub has not finished computing whether this merges cleanly — it stayed UNKNOWN. ' +
+             'Nothing is wrong yet; this is worth one more try in a minute.');
+}
+
 if (view.mergeable === 'CONFLICTING') {
   await gh(['pr', 'comment', String(pr), '--body',
     `## This branch conflicts with \`${cfg.base_branch || 'the base branch'}\`\n\n` +
@@ -145,7 +162,27 @@ await exec('node', ['.sdlc/bin/check-diff-forbidden.mjs'], { env: { ...process.e
 
 // --- merge ------------------------------------------------------------------
 const method = cfg.release?.merge_method ?? 'squash';
-await gh(['pr', 'merge', pr, `--${method}`, '--delete-branch']);
+await gh(['pr', 'merge', pr, `--${method}`, '--delete-branch']).catch(async (e) => {
+  // The API is the last word on mergeability, and it disagrees with the field often enough to
+  // matter. "is not mergeable" from here means the same thing CONFLICTING means above, and it
+  // deserves the same answer — the implementer resolving it — rather than a report that the
+  // tool did not finish.
+  const why = String(e.stderr || e.message);
+  if (!/not mergeable|cannot be cleanly created|merge conflict/i.test(why)) throw e;
+  await gh(['pr', 'comment', String(pr), '--body',
+    `## This branch conflicts with \`${cfg.base_branch || 'the base branch'}\`\n\n` +
+    'GitHub reported it mergeable and then refused the merge — mergeability is computed ' +
+    'asynchronously, so the field can be stale. Everything about this PR still stands; QA ' +
+    'passed it, and the conflict is with the base rather than with the work.\n\n' +
+    'Sending it back to the implementer to merge the base in and resolve, on the same branch.']).catch(() => {});
+  await advance(issue, 'implementing', { agent: 'release' }).catch(() => {});
+  await exec('node', ['.sdlc/bin/dispatch.mjs', 'sdlc-implement.yml',
+    '-f', `issue=${issue}`, '-f', 'rework=merge-conflict']);
+  setOutput('merged', 'false');
+  setOutput('reason', 'the merge API refused it as conflicting — sent back to resolve');
+  process.stdout.write(`issue #${issue}: PR #${pr} refused as conflicting -> implementer\n`);
+  process.exit(0);
+});
 setOutput('merged', 'true');
 process.stdout.write(`merged PR #${pr} (${method})${approved ? ', approved by a human,' : ''} — ` +
   `every pre-merge claim re-established against ${view.headRefOid.slice(0, 7)}\n`);

@@ -3,6 +3,7 @@
 import { gh, die, repo as repoOf } from './lib/actions.js';
 import { advance } from './lib/advance.js';
 import { routeOf } from './lib/route-io.js';
+import { updateLedger } from './lib/state-io.js';
 import { dispatchFor, loadGraph } from './lib/flow-graph.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -63,8 +64,13 @@ switch (cmd) {
         // step in sdlc-qa reads none of its outputs, so reporting from the caller only ever
         // covered `/sdlc approve`. A CRASH is still ours: stop() does not run when the
         // process dies, so nothing else can say that nothing was judged.
-        const refused = /^not merging: /m.test(run.stdout);
-        if (!refused) {
+        //
+        // Keyed off the EXIT CODE now, not the prose. merge-pr exits 0 for every outcome it
+        // decided — merged, refused at a gate, sent back because the branch conflicts with its
+        // base — and non-zero only when it crashed. Matching "not merging: " covered one of
+        // those, so a genuine conflict, routed correctly to the implementer, was announced as
+        // "the merge step itself failed — the tool that judges them did not finish".
+        if (run.crashed) {
           const noise = /^\s*(at\s|node:internal|\^|\}|\{|Node\.js v|code:|killed:|signal:|cmd:|stdout:|stderr:|const err|\s*$)/;
           const cause = (run.stderr || run.stdout).split('\n')
             .map((l) => l.replace(/^Error: Command failed:.*$/, '').trim())
@@ -166,6 +172,57 @@ switch (cmd) {
     await gh(['issue', 'comment', issue, '--body',
       `Attempt counters cleared and restarted at **${to}**. The budget is full again — ` +
       'if it stops here a second time, the cause is worth reading before retrying.']);
+    break;
+  }
+
+  // An answer is context, not a command to do something differently. It is recorded where the
+  // next agent will read it, and then the stage that asked runs again.
+  //
+  // Without this, `open_questions` was a dead end: the planner named what it could not settle,
+  // the person had no way to settle it, and the only levers were approve — proceed with the
+  // questions open — or replan, which throws the work away and asks them again.
+  case 'answer': {
+    const text = (process.env.ARGS ?? '').trim().replace(/^["']|["']$/g, '');
+    if (!text) {
+      await gh(['issue', 'comment', issue, '--body',
+        '`/sdlc answer` needs the answer: `/sdlc answer "Meta first. Google is a later epic."`' +
+        '\n\nIt is recorded on the ledger and read by every stage after this one, which is what ' +
+        'makes it different from a plain comment.']);
+      break;
+    }
+
+    const { ledger: l0 } = await routeOf(repoOf(), issue).catch(() => ({ ledger: null }));
+    await updateLedger(repoOf(), Number(issue), (l) => {
+      if (!l) return null;
+      l.answers = [...(l.answers ?? []), {
+        at: new Date().toISOString(),
+        by: process.env.COMMENT_AUTHOR ?? 'a maintainer',
+        answer: text.slice(0, 4000),
+      }].slice(-40);
+      return l;
+    }).catch((e) => process.stdout.write(`::warning::could not record the answer: ${e.message}\n`));
+
+    await gh(['issue', 'comment', issue, '--body',
+      `## Answered\n\n> ${text.split('\n').join('\n> ')}\n\n` +
+      'Recorded on this issue\'s ledger. Every stage from here reads it as **decided** — it is ' +
+      'not a suggestion to weigh again, and an agent that disagrees says so rather than ' +
+      'quietly doing something else.\n\nRe-running the stage that asked.']).catch(() => {});
+
+    // Re-run whatever was waiting. The resume point if there is one, otherwise the stage the
+    // ledger is sitting in — an answer with nothing to feed is only half an answer.
+    const target = l0?.resume_at
+      ?? { planning: 'plan', triage: 'triage', implementing: 'implement', review: 'review', qa: 'qa' }[l0?.state];
+    const d = target ? dispatchFor(target, { issue, pr: l0?.pr ?? null }) : null;
+    if (!d) {
+      await gh(['issue', 'comment', issue, '--body',
+        'Recorded, and nothing is currently waiting on it — so nothing was re-run. The answer ' +
+        'stands for the next stage that reads this issue.']).catch(() => {});
+      break;
+    }
+    await gh(['issue', 'edit', issue, '--remove-label', 'sdlc:needs-human']).catch(() => {});
+    await advance(issue, d.state, { agent: 'human' });
+    await gh(['workflow', 'run', d.workflow, ...d.args]);
+    process.stdout.write(`issue #${issue}: answered -> ${d.workflow}\n`);
     break;
   }
 

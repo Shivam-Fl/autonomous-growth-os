@@ -68,6 +68,16 @@ if (verdict.granted) {
     return {
       ...l,
       planned_route: verdict.route,
+      // A resume point from the OLD route is a lie once the route changes.
+      //
+      // The planner on a project issue noticed it had been routed to plan -> implement when the
+      // architecture was already decided, asked to be re-routed to the maintainer, and was
+      // granted it. The route became ["maintainer"]. `resume_at` still said `implement`, from
+      // the route that no longer existed — so `/sdlc approve` dispatched the implementer on an
+      // issue whose job was to split epics, and the run died with nothing to implement.
+      //
+      // Kept only when the stage it names is still somewhere on the new route.
+      resume_at: (l.resume_at && verdict.route.includes(l.resume_at)) ? l.resume_at : null,
       history: [...(l.history ?? []), {
         at: new Date().toISOString(),
         agent: from,

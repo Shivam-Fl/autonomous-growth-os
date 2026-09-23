@@ -8,9 +8,44 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 
 const pr = process.env.PR;
-const detail = await ghJson(['pr', 'view', pr, '--json', 'body']);
+const detail = await ghJson(['pr', 'view', pr, '--json', 'body,headRefName']);
 const issue = (detail.body ?? '').match(/(?:closes|fixes|resolves)\s+#(\d+)/i)?.[1];
-if (!issue) { process.stdout.write('PR #' + pr + ' closes no issue — nothing to advance\n'); process.exit(0); }
+
+// A merged pull request that does not CLOSE its issue still advances it.
+//
+// The project brief's PR deliberately carries no `Closes`: the architecture landing is not the
+// end of that issue, it is the start of everything planned against it. So merging it matched
+// nothing here, printed "closes no issue — nothing to advance", and the issue sat untouched.
+// A person merged the brief and watched the pipeline do nothing, which is the worst possible
+// answer — it looks like the merge was the wrong thing to do.
+//
+// The branch name is the link in that case. `sdlc/project-<n>` is written by
+// apply-project-brief and by nothing else.
+const advancing = issue ? null : (detail.headRefName ?? '').match(/^sdlc\/project-(\d+)$/)?.[1];
+
+if (!issue && !advancing) {
+  process.stdout.write('PR #' + pr + ' closes no issue and is not a project brief — nothing to advance\n');
+  process.exit(0);
+}
+
+if (advancing) {
+  // Not `merged`, and not closed: this issue continues. Hand it to whatever its route says
+  // comes after the architecture decision — the maintainer on an epic, the planner otherwise.
+  const { handOffNext } = await import('./lib/route-io.js');
+  const { repo: repoOf } = await import('./lib/actions.js');
+  await advance(advancing, 'planning', { agent: 'project-planner' }).catch(() => {});
+  await gh(['issue', 'comment', String(advancing), '--body',
+    `The architecture brief merged in #${pr}. \`.sdlc/memory/project.md\`, the ADRs and the ` +
+    'documents under `docs/` are on the default branch now, and every ticket after this is ' +
+    'planned against them.\n\nContinuing this issue — merging the brief is not the end of it.'])
+    .catch(() => {});
+  const { stage } = await handOffNext({
+    repo: repoOf(), issue: advancing, from: 'project', agent: 'project-planner',
+    why: 'the architecture brief merged, and what comes after it is on the route',
+  });
+  process.stdout.write(`issue #${advancing}: brief merged -> ${stage ?? '(end of route)'}\n`);
+  process.exit(0);
+}
 
 const ctl = (...a) => exec('node', ['.sdlc/bin/sdlc-ctl.mjs', ...a]);
 // The PR is merged — GitHub just said so. This records that fact; it does not ask the state

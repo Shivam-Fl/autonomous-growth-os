@@ -396,7 +396,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.ctx.outputs.pr }}
           ISSUE: ${{ steps.ctx.outputs.issue }}
-        run: node .sdlc/bin/merge-pr.mjs
+        run: |
+          # The framework's one dependency, re-checked. This job installs the app's own
+          # dependencies, boots it, and drives a browser for twenty minutes before reaching
+          # here, and the root node_modules did not survive that — the merge threw
+          # ERR_MODULE_NOT_FOUND on js-yaml after QA had already PASSED. The failure handler
+          # needs the same dependency, so nothing reported it and nothing retried either.
+          node .sdlc/bin/ensure-deps.mjs
+          node .sdlc/bin/merge-pr.mjs
 
       # A critical finding recorded in prose nobody actions is a finding that was not made.
       - name: File issues for out-of-scope bugs
@@ -429,4 +436,8 @@ jobs:
           ISSUE: ${{ steps.ctx.outputs.issue }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node .sdlc/bin/dispatch-fix.mjs
+        run: |
+          # A handler that shares a failure mode with what it handles is not one: js-yaml
+          # went missing, the merge threw, and then this threw the same way.
+          node .sdlc/bin/ensure-deps.mjs
+          node .sdlc/bin/dispatch-fix.mjs

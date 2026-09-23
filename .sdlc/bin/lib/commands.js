@@ -30,6 +30,11 @@ export const COMMANDS = {
   // And its sibling for the architecture. A real pivot — new stack, new module boundary —
   // rather than a correction to one ticket.
   'replan-project': { needsAllowlist: true, description: 'decide this repo\'s architecture again, with your note' },
+  // The other half of `open_questions`. Agents were asked to name what they could not settle,
+  // and nothing could settle it: the questions sat in a comment, the next agent read the issue
+  // and found a list of unanswered questions, and the only levers a person had were approve
+  // (proceed with them unanswered) or replan (start over). An answer is neither.
+  answer:   { needsAllowlist: true,  description: 'answer this issue\'s open questions, and continue' },
   override: { needsAllowlist: true,  description: 'bypass a gate — recorded in the ledger' },
   stop:     { needsAllowlist: true,  description: 'halt this issue and hand it to a human' },
   status:   { needsAllowlist: false, description: 'print the ledger (read-only, harmless)' },

@@ -135,6 +135,9 @@ await updateLedger(repo, issue, (l) => {
   return {
     ...l,
     planned_route: plan.route,
+    // Same reason as route-request: a resume point naming a stage the new route does not
+    // contain sends `/sdlc approve` to a stage this issue is no longer going through.
+    resume_at: (l.resume_at && plan.route.includes(l.resume_at)) ? l.resume_at : null,
     on_complete: plan.on_complete,
     flow_plan: {
       kind: plan.kind,

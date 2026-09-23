@@ -102,6 +102,20 @@ they are unwritten.
 Write these for the engineer who joins in month three and reads only this. Not for the person
 approving the gate — they are reading for five minutes, and the rest is for everyone after.
 
+## Questions that have been answered
+
+An `## Answered` comment on the issue is a **decision**, not a suggestion. A person was asked
+something this pipeline could not settle, and they settled it.
+
+Read every one before you start, and treat them the way you treat the ticket itself: as given.
+They exist because an earlier agent wrote an `open_questions` entry, so they answer the exact
+thing that was blocking — and re-asking a question somebody has already answered is the fastest
+way to make a person stop answering.
+
+If you believe an answer is wrong or cannot be carried out, say so explicitly and say why.
+Silently doing something else is the one response that is never acceptable: the person will
+read the result assuming their answer was followed.
+
 ## What you decide
 
 **Stack.** Language, runtime, framework, data store, with versions where the version matters.
