@@ -717,9 +717,11 @@ async function init() {
   process.stdout.write(cfg.runtime?.provider?.base_url
     ? `  1. gh secret set ANTHROPIC_API_KEY   (the key ${cfg.runtime.provider.base_url} issued you)\n`
     : '  1. claude setup-token   then   gh secret set CLAUDE_CODE_OAUTH_TOKEN\n');
-  process.stdout.write('  2. /install-github-app  (in Claude Code) to install the GitHub App\n');
-  process.stdout.write('  3. edit .sdlc/config.yml — especially env.url_allowlist and allowlist\n');
-  process.stdout.write('  4. sdlc doctor\n');
+  // No GitHub App: every agent step is handed the workflow's own GITHUB_TOKEN, scoped per job,
+  // and a read-only agent job is the point. Installing the Claude app would only add a second
+  // identity with more rights than the job that uses it.
+  process.stdout.write('  2. edit .sdlc/config.yml — especially env.url_allowlist and allowlist\n');
+  process.stdout.write('  3. sdlc doctor --live\n');
   process.stdout.write('\nTo stop everything: sdlc halt   (sdlc resume starts it again)\n\n');
 }
 

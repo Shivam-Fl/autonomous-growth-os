@@ -1,5 +1,5 @@
 {
-  "source_sha": "68d13d711d9ac974a45e6a38fafdb3ea21430eb8",
+  "source_sha": "98b16ade0993373ffe1a4a90dbf882d5792a8437",
   "files": {
     ".github/workflows/ci-verify.yml": "00dd3ad84c994ae51df62e54289bd3c5bbd960c80c9df56ad6720f27a54940a0",
     ".github/workflows/sdlc-gate.yml": "d142df3a2414cd71ef020b78ce4ba1b5714dab2bdc164148a08e6d4552eaa227",
@@ -67,7 +67,7 @@
     ".sdlc/bin/check-split-criteria.mjs": "dbe54c1bf96573cd0b41bc486c35dee78052d5f96034920e746504d82ab51959",
     ".sdlc/bin/check-split.mjs": "adc178c1e2848fabe6b2cdbae4408d4308fa1fc541448b380188e82755dd7248",
     ".sdlc/bin/check-url.mjs": "a7ed71906edc91fae6a6a530740720dc15825fdf738e1b6846c33eb159bc5e69",
-    ".sdlc/bin/claude-args.mjs": "84bf1324c36dc4a8ec9c086f153083c89654ea8aa2b4c3145481328ed69492a6",
+    ".sdlc/bin/claude-args.mjs": "2cda0a8ccc6a83b6ee1163f7f5ad73035cc77e2cda17f15967bc528f0e1bd99c",
     ".sdlc/bin/dispatch-fix.mjs": "68bde5b6ee7ec8d31ac75b95c1bfd345a17f73e25894deffba800c98f78b30dd",
     ".sdlc/bin/dispatch.mjs": "2af240f8eb68b04340e37fae68ba15e82ad29f2cca891b9946cc50529cfab9f5",
     ".sdlc/bin/ensure-ci.mjs": "b9d1c405fca7439563d8605e8a02ecc7ddf6e0952a24cb849530777377bedfb8",
@@ -156,6 +156,6 @@
     ".sdlc/bin/wake-dependents.mjs": "214d3afb8307d46d58f7c2bb0e535c66d7854f1ea5c2faf4b8279b9a2da5c851",
     ".sdlc/bin/watchdog-report.mjs": "28c36e3a877cd02f18e52425267f9d88de7ef33f83bf003936dc61f1902b0adf",
     ".sdlc/flow-graph.json": "bb0ce998b904bf37b8065d8cf5a542bbb995fd86ad39c6fbb4ac4a2d86ad9570",
-    "bin/sdlc": "8cca05313a9012fd8fb7b0ba256d0807fcde56ad4ba428f970620ef3d0011b55"
+    "bin/sdlc": "052830cba4a8ddb893f9371dcb221de9fb0e3798f9fffc55c594f4b43112446a"
   }
 }

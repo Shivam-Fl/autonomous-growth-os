@@ -148,12 +148,32 @@ export async function probe(cfg, env = process.env) {
   }
   if (env.ANTHROPIC_API_KEY) headers['x-api-key'] = env.ANTHROPIC_API_KEY;
 
+  // A key pasted from a page that masks it — "sk-HAOhL•••••" — is not a key. fetch refused it as
+  // "Cannot convert argument to a ByteString because the character at index 8 has a value of
+  // 8226", four times over, which names neither the secret nor the fix. No API key or header
+  // value holds a character outside printable ASCII, so say which one does, and where, without
+  // ever printing the value.
+  const oddChar = (v) => [...String(v ?? '')].findIndex((c) => c.charCodeAt(0) < 0x21 || c.charCodeAt(0) > 0x7e);
+  const hint = (name, v, i) => {
+    const c = [...String(v)][i];
+    const code = `U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+    return `${name} has ${c.trim() ? `'${c}' (${code})` : code} at character ${i + 1}, which no key or header holds` +
+      (c === '\u2022' || c === '*' ? ' — it looks like the masked copy a web page shows, not the key itself' : '');
+  };
+  const keyAt = env.ANTHROPIC_API_KEY ? oddChar(env.ANTHROPIC_API_KEY) : -1;
+  const badHeader = Object.entries(headers).filter(([k]) => k !== 'x-api-key')
+    .map(([k, v]) => [k, v, [...String(v)].findIndex((c) => c.charCodeAt(0) > 0xff)]).find(([, , i]) => i >= 0);
+  const refusal = keyAt >= 0
+    ? `${hint('ANTHROPIC_API_KEY', env.ANTHROPIC_API_KEY, keyAt)}. Set the real key: gh secret set ANTHROPIC_API_KEY`
+    : badHeader ? `${hint(`header ${badHeader[0]}`, badHeader[1], badHeader[2])}. Fix runtime.provider.headers` : null;
+
   const byModel = new Map();
   for (const r of ROLES) byModel.set(modelFor(cfg, r), [...(byModel.get(modelFor(cfg, r)) ?? []), r]);
   const results = [];
   for (const [model, roles] of byModel) {
     const role = roles.join(',');
     if (!model) { results.push({ role, model: '(action default)', status: 'skipped', body: 'no model named' }); continue; }
+    if (refusal) { results.push({ role, model, status: 0, body: refusal }); continue; }
     if (!env.ANTHROPIC_API_KEY) {
       results.push({ role, model, status: 'skipped', body: 'no ANTHROPIC_API_KEY — this probe covers the API-key path' });
       continue;
