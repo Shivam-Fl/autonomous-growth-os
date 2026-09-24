@@ -87,5 +87,263 @@
   },
   "stopped_at": null,
   "dispatched_stage": "maintainer",
-  "brief_pr": 15
+  "brief_pr": 15,
+  "breakdown": {
+    "deferred": [
+      {
+        "covers": [
+          "S-25"
+        ],
+        "what": "Google Ads as the second platform slice reusing the Meta adapter, kernel and measurement pattern",
+        "why": "Owner decision on #14: Meta end to end ships first; Google is a later epic that reuses what the Meta slice established, not work built in parallel.",
+        "issue": null
+      },
+      {
+        "covers": [
+          "S-32"
+        ],
+        "what": "Hosted runtime: Cloud Run, managed Postgres/pgvector, Temporal Cloud, per-PR previews",
+        "why": "v1 is local-first on SQLite with the in-process scheduler per project.md; hosted infrastructure is a later epic after the local slices prove the pattern.",
+        "issue": null
+      },
+      {
+        "covers": [
+          "S-17",
+          "S-18",
+          "S-33",
+          "TR-16"
+        ],
+        "what": "Self-improving brain: strategy DSL, champion/challenger promotion, protected evals, GitHub improvement pipeline",
+        "why": "Promotion gates need frozen replay, shadow and calibration history from the earlier slices before any candidate can be judged; not plannable until those exist.",
+        "issue": null
+      },
+      {
+        "covers": [
+          "S-27",
+          "TR-25"
+        ],
+        "what": "Creative generation and full fatigue modeling plus advanced causal layers (MMM, geo incrementality, bandits)",
+        "why": "Creative is experimental-by-default and TR-25 is could-priority; L1/L2 experiments come first and must earn the advanced layers.",
+        "issue": null
+      }
+    ],
+    "epic": 14,
+    "pieces": [
+      {
+        "acceptance": [
+          "GET /health returns 200 within seconds of npm run sdlc:serve on a clean runner with zero external services",
+          "All five screens render their empty states with the connect-Meta plus install-pixel checklist and theme tokens applied",
+          "Money unit tests prove integer micros end to end and review rejects float money in storage, APIs and utility",
+          "Raw source payloads and audit events are append-only: no update or delete path exists and replay rebuilds derived values",
+          "npm run sdlc:verify runs the node:test suites and sdlc:seed writes a demo tenant through the app"
+        ],
+        "context": "UI face: dashboard, journal, opportunities/experiments and approvals shells with ideal, empty, loading, partial and error states per docs/ui.md. Contract face: this slice defines the app contract — GET /health, SQLite behind repository interfaces, money micros plus tenant_id plus UTC on every record, event envelope with event_id idempotency, in-process workflow scheduler abstraction — which every later slice consumes.",
+        "covers": [
+          "S-22",
+          "S-23",
+          "S-35",
+          "S-36",
+          "TR-1",
+          "TR-20",
+          "TR-21",
+          "TR-22",
+          "TR-26"
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "Meta or Google platform calls",
+          "Event ingest and funnels",
+          "Decisions, shadow mode, execution"
+        ],
+        "risk": "Touches migrations, money representation and audit immutability; a mistake here corrupts every later slice.",
+        "title": "Boot local app with dashboard shell, health, money and audit foundations",
+        "why": "An operator can open localhost:3000 and see guard status plus empty states, and every later slice has a bootable app, a database and real sdlc verbs to build on.",
+        "issue": null
+      },
+      {
+        "acceptance": [
+          "A synthetic click-to-revenue journey posted to POST /v1/events resolves to the correct qualified-CPL figure",
+          "Metrics inside the lag window show maturity bars with data-through timestamps and are gated from strategic action classes",
+          "Posting the same event_id twice never double-counts",
+          "Stale provider or tracking data renders a banner with age while matured metrics stay visible"
+        ],
+        "context": "UI face: dashboard KPI strip (qualified CPL, qualified volume, maturity coverage) with skeleton, maturity-bar and stale-banner states. Contract face: consumes the foundation event envelope and defines the measurement contract — POST /v1/events for lead through margin events, privacy-aware journey graph, downstream quality funnel, maturity 0..1 with lag distributions and policy bands.",
+        "covers": [
+          "S-10",
+          "S-11",
+          "S-9",
+          "TR-14",
+          "TR-7",
+          "TR-9"
+        ],
+        "depends_on": [
+          1
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "Platform adapter reads",
+          "Shadow decisions and calibration",
+          "Any ad mutation"
+        ],
+        "risk": "Money-adjacent: funnel math and maturity gating decide what later slices may act on.",
+        "title": "Measure click-to-revenue truth with maturity-gated qualified CPL",
+        "why": "A growth lead sees owned qualified CPL against platform CPL with maturity badges, instead of the system acting on immature conversions.",
+        "issue": null
+      },
+      {
+        "acceptance": [
+          "Adapter contract tests run identically against the fake Meta provider and the live path with zero business-logic changes",
+          "Dashboard lists campaigns, ad sets, ads and insights synced from the fake provider with row counts and deterministic sort",
+          "Quota exhaustion or revoked permission renders a named error with last-good timestamp and retry, preserving prior data",
+          "The pinned Graph API version is asserted in exactly one constant and the fake implements the full typed interface"
+        ],
+        "context": "UI face: dashboard campaign regions with ideal, empty, loading and error states; failed sync names the failing check. Contract face: defines the Meta adapter contract — versioned typed reads (campaigns, ad sets, ads, insights) behind src/integrations/meta_ads, fake provider for tests and simulation, credential-gated live path.",
+        "covers": [
+          "S-26",
+          "TR-13"
+        ],
+        "depends_on": [
+          1
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "Meta writes, drafts and budgets",
+          "First-party funnel truth",
+          "Policy kernel and executor"
+        ],
+        "title": "Connect Meta read with fake provider and live campaign dashboard",
+        "why": "An operator sees real-shaped Meta campaigns, spend and insights in the dashboard with no write credentials anywhere in the path.",
+        "issue": null
+      },
+      {
+        "acceptance": [
+          "Decision writes without a state_snapshot id or a do-nothing alternative are rejected by schema tests",
+          "Frozen replay scenarios produce a calibration report with decision precision and false-intervention rate and execute zero mutations",
+          "A simulator episode that hits the CPL target still proposes frontier moves and records valid do-nothing decisions with reasons",
+          "Recent unevaluated decisions show awaiting-maturity with expected evaluation dates; replay failure preserves prior entries with per-scenario retry"
+        ],
+        "context": "UI face: decision journal table with filters plus detail drawer (alternatives, expected distributions, downside, evidence and memory refs, critic result, policy id) and calibration summary, all five states. Contract face: defines the decision record contract — immutable StateSnapshot referenced by every decision, alternatives including do-nothing, predicted impact scheduled for evaluation at maturity — which the safety slice later executes against.",
+        "covers": [
+          "S-14",
+          "S-31",
+          "TR-15",
+          "TR-23",
+          "TR-6",
+          "TR-8"
+        ],
+        "depends_on": [
+          2,
+          3
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "Executing or approving any mutation",
+          "Opportunity ranking and experiment evaluation"
+        ],
+        "title": "Record shadow decisions in a journal with calibration",
+        "why": "A founder sees what the system would do, its predicted impact, and whether past predictions were right — before a single rupee of spend moves.",
+        "issue": null
+      },
+      {
+        "acceptance": [
+          "Expired, replayed, over-scope and kill-switched capabilities all reject in the policy regression suite",
+          "Duplicate delivery of the same capability nonce against the fake Meta provider executes exactly once with reconciliation recorded",
+          "Spend-spike and tracking-loss fixtures freeze automation, raise a persistent guardian banner, and require explicit human or deterministic-policy re-enable",
+          "A calibrated low-risk action class executes autonomously under micro-limits while new-geography stays in shadow or approval",
+          "Approval action failure keeps the item pending and surfaces the reconciliation state; receipts confirm via toast naming the receipt id"
+        ],
+        "context": "UI face: approvals queue with impact, downside, evidence and expiry plus approve/reject with reason, executed receipts and lapsed section; guardian freeze banner until re-enabled. Contract face: defines the write contract — ActionIntent to deterministic Policy Kernel to signed capability (tenant, resource, action, constraints, expiry, nonce, policy version) to Executor validation; kill switches at global, tenant, provider and campaign levels outside agent authority; per-action-class trust ledger.",
+        "covers": [
+          "S-15",
+          "S-16",
+          "S-30",
+          "S-6",
+          "TR-19",
+          "TR-2",
+          "TR-24",
+          "TR-3",
+          "TR-4",
+          "TR-5"
+        ],
+        "depends_on": [
+          4
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "Autonomous strategic actions beyond micro-limits",
+          "Cross-channel allocation",
+          "Self-modifying strategy code"
+        ],
+        "risk": "Highest-risk piece: touches money movement, auth-equivalent capabilities, credential isolation and kill switches.",
+        "title": "Gate every write behind policy capabilities, approvals and guardian freezes",
+        "why": "An owner can approve a low-risk change with visible downside and receipt, and watch the guardian freeze automation when measurement or spend breaks.",
+        "issue": null
+      },
+      {
+        "acceptance": [
+          "Swapping the search provider behind the search interface passes the research pipeline tests with no business-logic edits",
+          "Contradiction fixtures yield CONTRADICTORY claim state with both sources retained, never silent overwrite",
+          "Out-of-scope and stale learnings are rejected by scope and evidence checks before any retrieval consumer sees them",
+          "Prompt-injection fixtures demanding credential upload or instruction override are classified malicious and cause no tool call",
+          "Swapping the model provider behind the router changes no business logic and every model call records versions, tokens, latency and cost"
+        ],
+        "context": "UI face: no new top-level screen; surfaces as research observations feeding the opportunities queue and evidence refs inside journal entries. Contract face: defines the knowledge contracts — model router abstraction, layered research mesh with evidence tiers and claim lifecycle, learning records with scope, evidence refs, effect intervals, confidence and status lifecycle with embeddings as retrieval assistance only.",
+        "covers": [
+          "S-12",
+          "S-20",
+          "S-7",
+          "S-8",
+          "TR-10",
+          "TR-11",
+          "TR-12",
+          "TR-17"
+        ],
+        "depends_on": [
+          2
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "Opportunity ranking weights",
+          "Experiment design and evaluation",
+          "Creative generation"
+        ],
+        "risk": "Touches the prompt-injection boundary: untrusted web content must never reach the executor or alter policy.",
+        "title": "Research demand and remember it with evidence-scoped learnings",
+        "why": "A strategist gets fresh market hypotheses with cited evidence and memory that expires or contradicts honestly, instead of eternal-truth notes.",
+        "issue": null
+      },
+      {
+        "acceptance": [
+          "Opportunity ranking fixtures with known values order correctly with all score components visible and stored",
+          "Underpowered experiment results are marked inconclusive, never forced to win or loss",
+          "A cheap low-quality versus expensive high-quality campaign scenario selects the profitable campaign on expected contribution",
+          "Experiment cards show caps, stop rules, state and data-through timestamps; drafts survive fetch failures",
+          "An empty opportunity queue triggers the research prompt explaining what the strategist investigates first"
+        ],
+        "context": "UI face: opportunities and experiments screen — ranked opportunity list with score components, experiment cards with caps and stop rules, hypothesis composer. Contract face: consumes the decision record, research observations and memory contracts; defines scoring components (value, success probability, fit, information value, reversibility, cost, downside, delay) and native A/B plus Bayesian evaluation with first-class inconclusive.",
+        "covers": [
+          "S-28",
+          "S-29",
+          "S-4",
+          "S-5",
+          "TR-18"
+        ],
+        "depends_on": [
+          4,
+          6
+        ],
+        "kind": "feature",
+        "out_of_scope": [
+          "New research sources",
+          "Guarded execution beyond experiment caps",
+          "L3/L4 causal methods and bandits"
+        ],
+        "title": "Rank opportunities and settle them with honest experiments",
+        "why": "A growth lead sees which bet deserves the next unit of spend and which results honestly mean we do not know yet.",
+        "issue": null
+      }
+    ],
+    "understanding": "Epic #14 is the whole Autonomous Growth OS: architecture decided and merged in #15, so this split orders the build per spec S-38 build order (measurement truth, then memory, then shadow intelligence, then bounded execution, then research-driven experimentation) with the recorded owner decision that Meta ships first and Google reuses it. Spec S-39 argues Google-first; that section is now stale on platform order by explicit human decision. Clubbing test, one line per adjacent pair (budget 6 files): pieces 1-2 SPLIT — foundation (boot, pages, SQLite, money, audit) vs measurement (events, funnel, maturity) touch different modules with separate demos (empty app vs qualified CPL) and together exceed one work order. Pieces 2-3 SPLIT — first-party measurement vs Meta adapter read touch different surfaces (measurement/API vs integrations/meta_ads) and each demos alone (owned truth vs platform campaigns). Pieces 3-4 SPLIT — Meta read vs shadow journal is new surface (decision records, snapshots, replay, calibration) needing 2+3 as input, not an incremental input mode. Pieces 4-5 SPLIT — journal (zero mutations) vs safety (capabilities, executor, approvals, guardian) is the spec's own phase gate (shadow before autonomy, engineering rule 17); shared decision records but a new authority boundary and the highest risk, and combined far exceeds one PR. Pieces 5-6 SPLIT — safety (policy/executor) vs research/memory (adapters, router, learnings) share no files and 6 depends only on 2, so they parallelize rather than chain. Pieces 6-7 SPLIT (closest call) — research/memory vs opportunities/experiments share evidence concepts and feed one screen, but combined (mesh plus router plus lifecycle plus scoring plus evaluator plus UI) exceeds one work order and each demos alone (scoped learning vs ranked bets with inconclusive states), so kept as consumer 7 on producer 6. Dependencies branch (2 and 3 off 1; 4 joins them; 6 off 2; 7 joins 4+6) so no linear chain of near-identical titles."
+  },
+  "children": []
 }
