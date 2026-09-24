@@ -22,13 +22,37 @@ import { dump } from './lib/js-yaml.mjs';
 export const LITELLM = 'litellm[proxy]==1.102.1';
 export const BRIDGE_PORT = 4000;
 
-/** Is any of these models served only on the OpenAI API? Then the job needs the translator. */
-export function needsBridge(cfg, models) {
-  const openai = new Set((cfg.runtime?.provider?.openai_models ?? []).map(String));
-  return Boolean(cfg.runtime?.provider?.base_url) && models.some((m) => openai.has(String(m)));
+/**
+ * runtime.provider.openai_models as model -> the OpenAI API it is served on. A list means every
+ * one is on chat/completions; a map names each (`chat` or `responses` — OpenCode serves Muse
+ * Spark on /responses and answers 503 for it on chat/completions).
+ */
+export function openaiApis(cfg) {
+  const v = cfg.runtime?.provider?.openai_models ?? [];
+  return new Map(Array.isArray(v) ? v.map((m) => [String(m), 'chat'])
+    : Object.entries(v).map(([m, api]) => [m, String(api) === 'responses' ? 'responses' : 'chat']));
 }
 
-export function bridgeConfig(cfg, { models, openai: openaiGiven, api = 'chat', run = process.env.GITHUB_RUN_ID ?? String(Date.now()) } = {}) {
+/** Is any of these models served only on the OpenAI API? Then the job needs the translator. */
+export function needsBridge(cfg, models) {
+  const apis = openaiApis(cfg);
+  return Boolean(cfg.runtime?.provider?.base_url) && models.some((m) => apis.has(String(m)));
+}
+
+/**
+ * The one OpenAI API a set of models is translated to, or an error naming why there is none.
+ * A translator takes one route for every model it serves, so a job cannot run a chat model and
+ * a responses model together.
+ */
+export function bridgeApi(apis, models) {
+  const used = [...new Set(models.filter((m) => apis.has(m)).map((m) => apis.get(m)))];
+  if (used.length > 1) {
+    throw new Error(`one job runs models on both OpenAI APIs (${models.filter((m) => apis.has(m)).map((m) => `${m}: ${apis.get(m)}`).join(', ')}) — give its roles models on one of them`);
+  }
+  return used[0] ?? 'chat';
+}
+
+export function bridgeConfig(cfg, { models, openai: openaiGiven, api: apiGiven, run = process.env.GITHUB_RUN_ID ?? String(Date.now()) } = {}) {
   const p = cfg.runtime?.provider ?? {};
   if (!p.base_url) throw new Error('runtime.provider.base_url is empty — there is no gateway to bridge to');
   const list = [...new Set((models ?? p.openai_models ?? []).map((m) => String(m).trim()).filter(Boolean))];
@@ -36,7 +60,11 @@ export function bridgeConfig(cfg, { models, openai: openaiGiven, api = 'chat', r
   // the job uses goes through it: the OpenAI-only ones translated, the rest passed straight to
   // the gateway's own Messages API. With no openai_models list (the probe's --bridge), every
   // model given is treated as OpenAI-only.
-  const openai = new Set((openaiGiven ?? (p.openai_models?.length ? p.openai_models : list)).map(String));
+  const configured = openaiApis(cfg);
+  const apis = openaiGiven ? new Map(openaiGiven.map((m) => [String(m), apiGiven ?? configured.get(String(m)) ?? 'chat']))
+    : configured.size ? configured : new Map(list.map((m) => [m, apiGiven ?? 'chat']));
+  const openai = new Set(apis.keys());
+  const api = apiGiven ?? bridgeApi(apis, list);
   const gateway = String(p.base_url).replace(/\/+$/, '').replace(/\/v1$/, '');
   const headers = Object.fromEntries(Object.entries(p.headers ?? {})
     .map(([k, v]) => [k, String(v).replaceAll('{run}', run)]));

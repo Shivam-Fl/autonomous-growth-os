@@ -23,38 +23,40 @@ runtime:
     headers:
       x-opencode-session: "sdlc-{run}"   # required: without it the endpoint answers an opaque 500
     # Served only on OpenCode Go's OpenAI API; the job running one starts a local translator.
-    openai_models: [glm-5.3-flash]
+    openai_models:
+      glm-5.3-flash: chat                      # OpenCode serves it on /v1/chat/completions
+      muse-spark-1.3-contributor: responses    # and this one on /v1/responses only
   # Model per STEP. Empty = the action's default — a CLAUDE model, so with a provider above
   # every step must name a model that provider serves (claude-args refuses otherwise, and so
   # does doctor). A council member inherits its stage only when its key is absent.
   # Spend where a mistake is hardest to recover from: the diagnosis every later stage
   # inherits, and the last read before code is trusted.
   model:
-    plan:               minimax-m3
-    plan_proposer:      glm-5.3-flash
-    plan_critic:        qwen3.6-plus
-    plan_arbiter:       minimax-m3
-    plan_reviewer:      minimax-m3
+    plan:               muse-spark-1.3-contributor
+    plan_proposer:      muse-spark-1.3-contributor
+    plan_critic:        minimax-m3
+    plan_arbiter:       muse-spark-1.3-contributor
+    plan_reviewer:      glm-5.3-flash
     debug:              minimax-m3
     implement:          glm-5.3-flash
-    review:             qwen3.7-plus
-    review_correctness: qwen3.7-plus
-    review_design:      qwen3.7-plus
+    review:             muse-spark-1.3-contributor
+    review_correctness: muse-spark-1.3-contributor
+    review_design:      muse-spark-1.3-contributor
     qa:                 minimax-m3
-    root_cause:         qwen3.7-plus
+    root_cause:         muse-spark-1.3-contributor
     # Reads a whole failed run's log and decides what the failure MEANS — the one step whose
     # wrong answer spends another agent's entire run.
-    triage:             qwen3.7-plus
-    librarian:          qwen3.6-plus
-    release:            qwen3.6-plus
-    maintainer:         qwen3.7-plus
+    triage:             muse-spark-1.3-contributor
+    librarian:          muse-spark-1.3-contributor
+    release:            muse-spark-1.3-contributor
+    maintainer:         muse-spark-1.3-contributor
     # Decides the stack once, for the life of the repo. The one place to spend the most
     # capable model you have.
-    project:            qwen3.7-plus
+    project:            muse-spark-1.3-contributor
     # Decides WHICH STAGES a ticket needs, and only when the free rules decline. It runs on
     # every issue they miss, so this is the one step where model cost is a tax on the whole
     # backlog. Never Opus: classifying a ticket is not the hard part of this pipeline.
-    router:             qwen3.6-plus
+    router:             muse-spark-1.3-contributor
 
   # Turn limits. EMPTY MEANS NO LIMIT, which is the default and usually right: the action
   # validates the count after the run, so exceeding a cap discards completed work instead of

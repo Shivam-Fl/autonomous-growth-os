@@ -549,6 +549,26 @@ async function doctor() {
   // of the three below shipped broken at least once, and every symptom pointed somewhere
   // else: an issue nothing would touch, a ticket terminated while its first stage was going
   // fine, a gate that gave up before CI could finish.
+  // One translator per job takes one OpenAI route, so a job whose roles use a chat/completions
+  // model and a Responses model together cannot start. Found here, not in the first run of it.
+  {
+    const { openaiApis, bridgeApi } = await import('../.sdlc/bin/model-bridge.mjs');
+    const apis = openaiApis(cfg ?? {});
+    if (apis.size) {
+      section('Models behind the translator');
+      let clashes = 0;
+      try {
+        for (const f of readdirSync(join(ROOT, '.github/workflows')).filter((x) => x.endsWith('.yml'))) {
+          for (const m of readFileSync(join(ROOT, '.github/workflows', f), 'utf8').matchAll(/provider-settings\.mjs\s+([a-z_ ]+)/g)) {
+            const jobModels = [...new Set(m[1].trim().split(/\s+/).map((r) => modelFor(cfg, r)).filter(Boolean))];
+            try { bridgeApi(apis, jobModels); } catch (e) { clashes++; fail(`${f}: ${e.message}`, 'put the roles of one job on models of one OpenAI API'); }
+          }
+        }
+      } catch { /* no workflows — an earlier check already said so */ }
+      if (!clashes) pass('every job runs its translated models on one OpenAI API', [...apis].map(([m, a]) => `${m}: ${a}`).join(', '));
+    }
+  }
+
   section('Limits that have to agree with the workflows');
 
   const jobCaps = [];
@@ -607,17 +627,28 @@ async function doctor() {
 // with four hours of cooldowns. Only the runner holds the secret, so the runner asks.
 async function liveProbe(cfg) {
   section('Live model probe (sdlc-probe.yml)');
+  const arg = (flag) => { const i = process.argv.indexOf(flag); return i > 0 ? String(process.argv[i + 1] ?? '') : ''; };
+  const models = arg('--models');
+  const runs = [];
+  if (process.argv.includes('--bridge')) {
+    runs.push({ models, bridge: arg('--bridge'), api: process.argv.includes('--responses') ? 'responses' : '' });
+  } else {
+    // The configured OpenAI-only models are probed through the translator, since that is how
+    // their stages call them — one run per OpenAI API, because one translator takes one route.
+    const { openaiApis } = await import('../.sdlc/bin/model-bridge.mjs');
+    const groups = { chat: [], responses: [] };
+    if (!models) for (const [m, api] of openaiApis(cfg ?? {})) groups[api].push(m);
+    runs.push({ models, bridge: groups.chat.join(','), api: '' });
+    if (groups.responses.length) runs.push({ direct: 'false', bridge: groups.responses.join(','), api: 'responses' });
+  }
+  for (const r of runs) await probeRun({ ...r, agent: process.argv.includes('--agent') });
+}
+
+async function probeRun({ models = '', bridge = '', api = '', direct = '', agent = false }) {
   const since = Date.now() - 60_000;   // our clock and the runner's disagree by seconds
-  const at = process.argv.indexOf('--models');
-  const models = at > 0 ? String(process.argv[at + 1] ?? '') : '';
-  const bt = process.argv.indexOf('--bridge');
-  // The configured OpenAI-only models are probed through the translator too, since that is how
-  // their stages will call them; a direct probe would only report the 503 they answer there.
-  const configuredBridge = (cfg?.runtime?.provider?.openai_models ?? []).join(',');
-  const bridge = bt > 0 ? String(process.argv[bt + 1] ?? '') : (process.argv.includes('--models') ? '' : configuredBridge);
-  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : []), ...(bridge ? ['-f', `bridge=${bridge}`] : []),
-    ...(bridge && process.argv.includes('--agent') ? ['-f', 'agent_check=true'] : []),
-    ...(bridge && process.argv.includes('--responses') ? ['-f', 'bridge_api=responses'] : [])]); } catch (e) {
+  const inputs = [['models', models], ['bridge', bridge], ['bridge_api', api], ['direct', direct],
+    ['agent_check', bridge && agent ? 'true' : '']].filter(([, v]) => v).flatMap(([k, v]) => ['-f', `${k}=${v}`]);
+  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...inputs]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -637,18 +668,15 @@ async function liveProbe(cfg) {
   const dir = mkdtempSync(join(tmpdir(), 'sdlc-probe-'));
   try {
     await gh(['run', 'download', String(id), '-n', 'sdlc-probe', '-D', dir]);
-    const bridged = existsSync(join(dir, 'bridge.json'))
-      ? JSON.parse(readFileSync(join(dir, 'bridge.json'), 'utf8')).filter((r) => r.role !== 'catalog')
-        .map((r) => ({ ...r, model: `${r.model} (via translator)` }))
-      : [];
-    if (existsSync(join(dir, 'agent.json'))) {
-      for (const a of JSON.parse(readFileSync(join(dir, 'agent.json'), 'utf8'))) {
-        (a.ok ? pass : warn)(`Claude Code on ${a.model} (via translator) ${a.ok ? 'finished the task' : 'did not finish the task'}`,
-          `${a.secs}s, ${a.turns ?? '?'} turns${a.error ? ` — ${a.error}` : ''}`);
-      }
+    const read = (f) => (existsSync(join(dir, f)) ? JSON.parse(readFileSync(join(dir, f), 'utf8')) : []);
+    const bridged = read('bridge.json').filter((r) => r.role !== 'catalog')
+      .map((r) => ({ ...r, model: `${r.model} (via translator${api === 'responses' ? ', responses' : ''})` }));
+    for (const a of read('agent.json')) {
+      (a.ok ? pass : warn)(`Claude Code on ${a.model} (via translator) ${a.ok ? 'finished the task' : 'did not finish the task'}`,
+        `${a.secs}s, ${a.turns ?? '?'} turns${a.error ? ` — ${a.error}` : ''}`);
     }
     if (bridge && !bridged.length) fail('the translator probe produced nothing', `read the "Start the translator" step of run ${id}`);
-    for (const r of [...JSON.parse(readFileSync(join(dir, 'probe.json'), 'utf8')), ...bridged]) {
+    for (const r of [...read('probe.json'), ...bridged]) {
       const timing = r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s ping${r.tool_ms ? `, ${(r.tool_ms / 1000).toFixed(1)}s tool call` : ''}` : '';
       if (r.role === 'catalog') { pass('the gateway lists', String(r.body).split(',').filter(Boolean).length + ' models'); process.stdout.write(`      ${r.body}\n`); }
       else if (r.status === 'bridged') continue;
@@ -660,7 +688,7 @@ async function liveProbe(cfg) {
         (r.role === 'candidate' ? warn : fail)(`${r.model} answers but cannot call tools: ${r.tools}`,
           r.role === 'candidate' ? 'unusable for an agent stage' : 'pick a model that returns tool_use for ' + r.role);
       } else if (r.role === 'candidate') {
-        warn(`${r.model}: HTTP ${r.status} ${String(r.body).replace(/\s+/g, ' ').slice(0, 200)}`, 'not served on /v1/messages with this key');
+        warn(`${r.model}: HTTP ${r.status} ${String(r.body).replace(/\s+/g, ' ').slice(0, 200)}`, 'not served on this route with this key');
       } else {
         fail(`${r.role} → ${r.model}: HTTP ${r.status} ${String(r.body).replace(/\s+/g, ' ').slice(0, 300)}`,
              'fix runtime.provider / runtime.model or the ANTHROPIC_API_KEY secret, then sdlc doctor --live');

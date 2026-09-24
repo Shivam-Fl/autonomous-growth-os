@@ -9,6 +9,7 @@
 // proposer and the arbiter can run at different weights.
 
 import { realpathSync, writeFileSync } from 'node:fs';
+import { openaiApis } from './model-bridge.mjs';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, setOutput, die } from './lib/actions.js';
 
@@ -140,6 +141,8 @@ export function providerProblem(cfg, role) {
  * handling reads as a rate limit, and answers with four hours of cooldowns. This asks first.
  */
 export async function probe(cfg, env = process.env) {
+  // A second probe run that exercises only another translator route has nothing to ask here.
+  if (env.PROBE_DIRECT === 'false') return [];
   const base = (env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '');
   const headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' };
   for (const line of String(env.ANTHROPIC_CUSTOM_HEADERS ?? '').split('\n')) {
@@ -203,7 +206,7 @@ export async function probe(cfg, env = process.env) {
     if (!model) { results.push({ role, model: '(action default)', status: 'skipped', body: 'no model named' }); continue; }
     // Served only on the OpenAI API: its stages reach it through the translator, and the probe
     // workflow probes it there. Asked directly it would only answer 503.
-    if (!candidates.length && (cfg.runtime?.provider?.openai_models ?? []).includes(model)) {
+    if (!candidates.length && openaiApis(cfg).has(model)) {
       results.push({ role, model, status: 'bridged', body: 'probed through the translator' }); continue;
     }
     if (refusal) { results.push({ role, model, status: 0, body: refusal }); continue; }

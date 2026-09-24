@@ -1,5 +1,5 @@
 {
-  "source_sha": "85021f4b9f6f1213c02142db877ce2640c1499e9",
+  "source_sha": "8cb4b09bf242106dbcfea4dfedc29f9b5c0e9a7e",
   "files": {
     ".github/workflows/ci-verify.yml": "00dd3ad84c994ae51df62e54289bd3c5bbd960c80c9df56ad6720f27a54940a0",
     ".github/workflows/sdlc-gate.yml": "d142df3a2414cd71ef020b78ce4ba1b5714dab2bdc164148a08e6d4552eaa227",
@@ -9,7 +9,7 @@
     ".github/workflows/sdlc-loop.yml": "4524cba941b71d2961f0717c7bef1a1414d30df5b465f026c7a57c2db923afd7",
     ".github/workflows/sdlc-maintainer.yml": "c9d4fb1c7cc233740f0b34c9ac6e853a6308b8ec6b100285cfeab3b1210cc944",
     ".github/workflows/sdlc-plan.yml": "d4dd7add50d6147698448115a3e7c01e820d267fa7721a284f858ded674004d8",
-    ".github/workflows/sdlc-probe.yml": "44694b78911b2cc33a2d139186a9c836d08e418156f6220aa5f63227354e1901",
+    ".github/workflows/sdlc-probe.yml": "a6639ced32bedb5a3b240ed06b784f5f6edfedecc85585080a0ad45b2e6f4a23",
     ".github/workflows/sdlc-project.yml": "2169ffd7ffda43a300200a702bc19c9cb7091636ea3c9a1dbb19be6f23a2e77f",
     ".github/workflows/sdlc-qa.yml": "9f84fb866732f35ea2492bd532c60ac565740f659324c1325d6e0bae350c6788",
     ".github/workflows/sdlc-release.yml": "f2d6169f19b83f25caf2fc7837175b09dd6497f65f2242850e0f1b085c71dc31",
@@ -68,7 +68,7 @@
     ".sdlc/bin/check-split-criteria.mjs": "dbe54c1bf96573cd0b41bc486c35dee78052d5f96034920e746504d82ab51959",
     ".sdlc/bin/check-split.mjs": "adc178c1e2848fabe6b2cdbae4408d4308fa1fc541448b380188e82755dd7248",
     ".sdlc/bin/check-url.mjs": "a7ed71906edc91fae6a6a530740720dc15825fdf738e1b6846c33eb159bc5e69",
-    ".sdlc/bin/claude-args.mjs": "6235f674d7b246918ae870e7dcddb147487e9ea4deb9cbf6818c728462a0bb84",
+    ".sdlc/bin/claude-args.mjs": "25a4826bb99df152621c7d3c1c9205e4694b37ad66a517e1037b9b3ddac1d962",
     ".sdlc/bin/dispatch-fix.mjs": "7c1444b155431033726a2617278c5402e095e0172e8db2ba12b369aabd6e392c",
     ".sdlc/bin/dispatch.mjs": "2af240f8eb68b04340e37fae68ba15e82ad29f2cca891b9946cc50529cfab9f5",
     ".sdlc/bin/ensure-ci.mjs": "b9d1c405fca7439563d8605e8a02ecc7ddf6e0952a24cb849530777377bedfb8",
@@ -116,7 +116,7 @@
     ".sdlc/bin/maintainer-inputs.mjs": "f45265d501f6619453481c2cf304d443c47f13623dedfaf0fbfda51cbd377eb5",
     ".sdlc/bin/merge-memory-prs.mjs": "259a7da602c147a7cafffdea7e6428cd42a9166c31df012791eb23ea4da41dbe",
     ".sdlc/bin/merge-pr.mjs": "c5aff16f3a6ec6bb1dc46c958514f01265f7619ca68be964fe30bac795ab8a9a",
-    ".sdlc/bin/model-bridge.mjs": "0c788603f66ab66265935f49093f8f2499b1b40fcb52d48b75af6eeefc4ae2f3",
+    ".sdlc/bin/model-bridge.mjs": "bf69e1025c16604aaecc0b24190b48b3273f7450c00b3b7e18f9070445159e31",
     ".sdlc/bin/on-close.mjs": "de6e25879c58b3037022bbed285b04e03a6264b9a3ef70739e0f41efdd27c2b0",
     ".sdlc/bin/on-merge.mjs": "eac5052e5d9c1d53029bf28ab631053f6ee1f5e9a8181c1ab0c6629ca84be30e",
     ".sdlc/bin/open-memory-pr.mjs": "9f54d02bb19492fb39912a6b2be1eaf85fc340b631d3640b453166ce26a67fde",
@@ -159,6 +159,6 @@
     ".sdlc/bin/wake-dependents.mjs": "214d3afb8307d46d58f7c2bb0e535c66d7854f1ea5c2faf4b8279b9a2da5c851",
     ".sdlc/bin/watchdog-report.mjs": "28c36e3a877cd02f18e52425267f9d88de7ef33f83bf003936dc61f1902b0adf",
     ".sdlc/flow-graph.json": "bb0ce998b904bf37b8065d8cf5a542bbb995fd86ad39c6fbb4ac4a2d86ad9570",
-    "bin/sdlc": "e27ed8261e3b5444a08c9b657f1661ff03852a30bc1389115c3cf322bc2ea8af"
+    "bin/sdlc": "d24cce3728e184b79578009e36b3a4177432d9273a963c490ba6af039c801edc"
   }
 }

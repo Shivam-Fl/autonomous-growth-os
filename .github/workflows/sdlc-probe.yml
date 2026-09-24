@@ -16,6 +16,8 @@ on:
       agent_check: { required: false, type: string, default: '' }
       # 'responses' translates to the OpenAI Responses API instead of chat/completions.
       bridge_api: { required: false, type: string, default: '' }
+      # 'false' skips the direct Messages probe (a second run probing only another translator route).
+      direct: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -40,6 +42,7 @@ jobs:
           ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PROBE_MODELS: ${{ inputs.models }}
+          PROBE_DIRECT: ${{ inputs.direct }}
         run: node .sdlc/bin/claude-args.mjs --probe probe.json
       - name: Start the translator
         if: inputs.bridge != ''
