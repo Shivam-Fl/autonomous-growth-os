@@ -104,7 +104,7 @@
         ],
         "what": "Hosted runtime: Cloud Run, managed Postgres/pgvector, Temporal Cloud, per-PR previews",
         "why": "v1 is local-first on SQLite with the in-process scheduler per project.md; hosted infrastructure is a later epic after the local slices prove the pattern.",
-        "issue": null
+        "issue": 24
       },
       {
         "covers": [
