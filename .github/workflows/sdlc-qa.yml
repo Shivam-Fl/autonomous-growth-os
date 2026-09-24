@@ -556,6 +556,14 @@ jobs:
         if: always() && needs.prepare.outputs.mode == 'compose'
         run: '[ -f /tmp/app.pid ] && kill "$(cat /tmp/app.pid)" || true'
 
+      # After a failed agent step, what the translator saw. Its log is in this job's RUNNER_TEMP
+      # and the job that answers the failure runs elsewhere, so a request the translator refused
+      # left nothing readable for triage. A plain tail: nothing from the tree the agent had
+      # write access to is executed here. GitHub masks the key in job logs.
+      - name: What the translator saw
+        if: failure() && steps.prov.outputs.bridged == 'true'
+        run: tail -n 200 "$RUNNER_TEMP/litellm.log" 2>/dev/null || echo "no translator log in $RUNNER_TEMP"
+
   # Everything that acts on the result, from a fresh checkout of the framework: the report and
   # the evidence arrive as an artifact and are judged here, and nothing in this job runs npm or
   # touches _pr. It also runs after a failed test job, to answer it — that job has no token that

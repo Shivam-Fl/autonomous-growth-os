@@ -202,6 +202,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
+      # After a failed agent step, what the translator saw. Its log is in this job's RUNNER_TEMP
+      # and the job that answers the failure runs elsewhere, so a request the translator refused
+      # left nothing readable for triage. A plain tail: nothing from the tree the agent had
+      # write access to is executed here. GitHub masks the key in job logs.
+      - name: What the translator saw
+        if: failure() && steps.prov.outputs.bridged == 'true'
+        run: tail -n 200 "$RUNNER_TEMP/litellm.log" 2>/dev/null || echo "no translator log in $RUNNER_TEMP"
+
   act:
     needs: diagnose
     # Whatever happened to the diagnosis, the issue is told — a triage that died silently leaves
