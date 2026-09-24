@@ -31,5 +31,12 @@
       "agent": "intake",
       "action": "-> planning"
     }
+  ],
+  "answers": [
+    {
+      "at": "2026-09-24T18:36:15.700Z",
+      "by": "Shivam-Fl",
+      "answer": "Meta Ads first, Google Ads after. The first ad-platform epic is the Meta Ads integration end to end; Google Ads is a later epic that reuses what the Meta slice established. This overrides the Google-first argument in spec §37."
+    }
   ]
 }
