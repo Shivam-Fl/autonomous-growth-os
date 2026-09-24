@@ -28,7 +28,7 @@ export function needsBridge(cfg, models) {
   return Boolean(cfg.runtime?.provider?.base_url) && models.some((m) => openai.has(String(m)));
 }
 
-export function bridgeConfig(cfg, { models, run = process.env.GITHUB_RUN_ID ?? String(Date.now()) } = {}) {
+export function bridgeConfig(cfg, { models, openai: openaiGiven, api = 'chat', run = process.env.GITHUB_RUN_ID ?? String(Date.now()) } = {}) {
   const p = cfg.runtime?.provider ?? {};
   if (!p.base_url) throw new Error('runtime.provider.base_url is empty — there is no gateway to bridge to');
   const list = [...new Set((models ?? p.openai_models ?? []).map((m) => String(m).trim()).filter(Boolean))];
@@ -36,7 +36,7 @@ export function bridgeConfig(cfg, { models, run = process.env.GITHUB_RUN_ID ?? S
   // the job uses goes through it: the OpenAI-only ones translated, the rest passed straight to
   // the gateway's own Messages API. With no openai_models list (the probe's --bridge), every
   // model given is treated as OpenAI-only.
-  const openai = new Set((p.openai_models?.length ? p.openai_models : list).map(String));
+  const openai = new Set((openaiGiven ?? (p.openai_models?.length ? p.openai_models : list)).map(String));
   const gateway = String(p.base_url).replace(/\/+$/, '').replace(/\/v1$/, '');
   const headers = Object.fromEntries(Object.entries(p.headers ?? {})
     .map(([k, v]) => [k, String(v).replaceAll('{run}', run)]));
@@ -52,8 +52,9 @@ export function bridgeConfig(cfg, { models, run = process.env.GITHUB_RUN_ID ?? S
     })),
     litellm_settings: {
       // LiteLLM sends /v1/messages for an openai/ model through the Responses API by default,
-      // and these models are served on chat/completions only.
-      use_chat_completions_url_for_anthropic_messages: true,
+      // and most of these models are served on chat/completions only. `api: 'responses'` is for
+      // the ones OpenCode serves on /responses instead (Muse Spark).
+      ...(api === 'responses' ? {} : { use_chat_completions_url_for_anthropic_messages: true }),
       // Claude Code sends Anthropic-only fields (cache_control, thinking budgets, metadata) a
       // chat/completions backend rejects; dropping what the backend does not take is the point.
       drop_params: true,
@@ -86,8 +87,10 @@ export async function startBridge(cfg, models, { dir = process.env.RUNNER_TEMP |
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const out = process.argv[2] || die('usage: model-bridge.mjs <out.yaml>');
-  const models = process.env.BRIDGE ? process.env.BRIDGE.split(',') : undefined;
-  const cfg = bridgeConfig(await loadConfig(), { models });
+  const models = process.env.BRIDGE ? process.env.BRIDGE.split(',').map((m) => m.trim()).filter(Boolean) : undefined;
+  // Models named explicitly (the probe's --bridge) are the ones being translated, whatever the
+  // configured list says: treating them as native sent them to /v1/messages, which answered 503.
+  const cfg = bridgeConfig(await loadConfig(), { models, openai: models, api: process.env.BRIDGE_API || 'chat' });
   if (!cfg.model_list.length) die('no models to bridge: set BRIDGE or runtime.provider.openai_models');
   writeFileSync(out, dump(cfg));
   process.stdout.write(`bridging ${cfg.model_list.map((m) => m.model_name).join(', ')} -> ${cfg.model_list[0].litellm_params.api_base}\n`);

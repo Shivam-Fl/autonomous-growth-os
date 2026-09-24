@@ -14,6 +14,8 @@ on:
       # 'true' also runs a real Claude Code session on each bridged model (write a file, read it
       # back): streaming and multi-turn tool results, which a ping cannot exercise.
       agent_check: { required: false, type: string, default: '' }
+      # 'responses' translates to the OpenAI Responses API instead of chat/completions.
+      bridge_api: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -44,6 +46,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           BRIDGE: ${{ inputs.bridge }}
+          BRIDGE_API: ${{ inputs.bridge_api }}
         run: |
           python3 -m venv /tmp/litellm
           /tmp/litellm/bin/pip install -q 'litellm[proxy]==1.102.1'

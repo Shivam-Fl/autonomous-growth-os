@@ -616,7 +616,8 @@ async function liveProbe(cfg) {
   const configuredBridge = (cfg?.runtime?.provider?.openai_models ?? []).join(',');
   const bridge = bt > 0 ? String(process.argv[bt + 1] ?? '') : (process.argv.includes('--models') ? '' : configuredBridge);
   try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : []), ...(bridge ? ['-f', `bridge=${bridge}`] : []),
-    ...(bridge && process.argv.includes('--agent') ? ['-f', 'agent_check=true'] : [])]); } catch (e) {
+    ...(bridge && process.argv.includes('--agent') ? ['-f', 'agent_check=true'] : []),
+    ...(bridge && process.argv.includes('--responses') ? ['-f', 'bridge_api=responses'] : [])]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
