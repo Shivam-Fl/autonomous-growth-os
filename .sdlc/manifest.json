@@ -1,5 +1,5 @@
 {
-  "source_sha": "79c6918545624647ebb1b778318ad46723438566",
+  "source_sha": "f9114198c196b122054bb55af573c8b6835a05f9",
   "files": {
     ".github/workflows/ci-verify.yml": "e70d32c31bc0a09bfa049641664ea88027ffda2703b0058272ce14fa9ea250fd",
     ".github/workflows/sdlc-gate.yml": "d142df3a2414cd71ef020b78ce4ba1b5714dab2bdc164148a08e6d4552eaa227",
@@ -133,7 +133,7 @@
     ".sdlc/bin/provider-settings.mjs": "fc5b9a121e8a18a41d734d4f61a2d30661b3741338191568a21e111dc1ec19a8",
     ".sdlc/bin/publish-release-notes.mjs": "0a2e6cdd4127bd569372ad73d8b8ee32d61a7054497c566ff6e491ce308ca342",
     ".sdlc/bin/qa-credentials.mjs": "99dda0ea91ed9bc8a31ea61ce17dc10351e3250701d59dee081e04786cf67084",
-    ".sdlc/bin/read-config.mjs": "b558c64b748d0d90410d9ff3a4ef64c9c50ca81fe9e2c664027c7eb0bb912c64",
+    ".sdlc/bin/read-config.mjs": "bc0821c0b8307aaff4ad46e528086f1ff94f4019e8aa3e334b59eee3d2431d64",
     ".sdlc/bin/reconcile-merged.mjs": "f988d58ab96af5c2344c2c37b1b8ee28c2cb73ee3b7cdcce2dfa03c30e5de1fe",
     ".sdlc/bin/resolve-deployment.mjs": "07b8c27a3854846145cae70bb72ca07f0fb3ba1ee3cbf0d6d0719fd60dd8e349",
     ".sdlc/bin/resolve-workflow-run.mjs": "b5ca90db953f7be09b251966ba7a47cee8808904e0461fb5ff5612bfbc473c76",
