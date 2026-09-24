@@ -1,0 +1,939 @@
+{
+  "issue": 12,
+  "product": "Autonomous Growth OS is a production-grade autonomous growth intelligence system that continuously researches markets, manages advertising through bounded capabilities, measures real business outcomes against first-party truth rather than platform self-reporting, learns causally from its actions, and improves its own strategies while never holding credentials that would let it spend money unchecked. The system builds a private causal understanding of how a specific business grows, runs controlled experiments to move the efficient-growth frontier, and continuously searches for the next growth opportunity—not by hitting a CPL target and stopping, but by asking what the next unit of budget is worth and whether advertising is still the bottleneck. It maintains an epistemic operating memory that distinguishes correlation from causal evidence, respects conversion lag and attribution maturity, and can decide that the best action is 'do nothing yet.' The first production slice is Meta Ads integration (owner decision overrides spec §37's Google-first argument), built on a simulator-first foundation so autonomous logic is never tested against real spend without a replay environment.",
+  "stack": {
+    "choice": "Python 3.12+ with FastAPI for the API/BFF, PostgreSQL 16 with pgvector for operational state and semantic memory, Temporal Cloud for durable workflow orchestration (stubbed initially with in-process workers), Docker Compose for local QA environment, Meta Marketing API as the first ad platform integration. Package.json provides the four sdlc: npm scripts that delegate to Python tooling (pytest, uvicorn, scripts).",
+    "why": "The specification heavily implies Python throughout (§17 shows Python ModelProvider class, §19 discusses Temporal Python workflows, §36 lists Python-heavy growth system). Python has mature Temporal SDK, strong statistical/ML libraries (numpy, scipy, pandas) needed for causal inference and response curves, and excellent Meta/Facebook SDK support. PostgreSQL with pgvector satisfies §21 Phase 1 data architecture. Temporal Cloud is the spec's preferred orchestration (§19) for durable multi-day workflows with retries, timers, and crash recovery. Docker Compose is required by config.yml env.mode=compose for QA to drive a real browser against a real preview. FastAPI is the boring, production-ready Python web framework with async support, automatic OpenAPI docs, and excellent Docker integration. Meta Ads is first per owner decision in issue #12.",
+    "rejected": [
+      {
+        "option": "Node.js/TypeScript for the entire stack",
+        "because": "The specification's examples and architecture assume Python (§17, §19, §36). Python has superior libraries for the statistical work (causal inference, Bayesian inference, response curves, MMM) that §27 requires. Temporal Python SDK is production-ready. Switching to TypeScript would mean reimplementing or wrapping Python ML libraries."
+      },
+      {
+        "option": "Google Ads as the first integration (per spec §37)",
+        "because": "Issue #12 owner decision explicitly overrules §37: 'Meta Ads first, Google Ads after. The first ad-platform epic is the Meta Ads integration end to end; Google Ads is a later epic that reuses what the Meta slice established.' The spec's argument for Google-first is sound but has been considered and rejected by the human."
+      },
+      {
+        "option": "Kubernetes from day one",
+        "because": "Spec §20 explicitly says 'Do not deploy Kubernetes early.' The cost-sensible alpha is Cloud Run services scaling to zero, one strategy worker, one integration worker, smallest Cloud SQL instance. Kubernetes adds operational complexity the team does not need until scale demands it."
+      },
+      {
+        "option": "BigQuery from day one",
+        "because": "Spec §21 Phase 1 says 'PostgreSQL is enough' for configuration, current resource model, research, memory, actions, experiments, modest event volume, embeddings, audit references. BigQuery is added later when event volume grows. Starting with both adds cost and complexity without benefit."
+      },
+      {
+        "option": "Real ad platform credentials before simulator",
+        "because": "Spec §36 Phase 0 says 'simulator first. A fake advertising universe: fake Google Ads adapter, fake business funnel, delayed conversion generator, seasonality, campaign saturation, lead-quality variation, manual external changes, API failures, tracking outages. You cannot safely build autonomous logic against real spend before having a replay/simulation environment.'"
+      },
+      {
+        "option": "Temporal self-hosted instead of Temporal Cloud",
+        "because": "Spec §19 prefers Temporal Cloud for durable workflow state, retries, timers, long waits, signals, history, crash recovery. Self-hosting Temporal adds operational burden (Cassandra/PostgreSQL backend, Elasticsearch, monitoring) that the team does not need at alpha. Cloud is usage-based and scales to zero."
+      }
+    ]
+  },
+  "architecture": {
+    "shape": "Monorepo with clear zone boundaries: apps/ (web UI, API/BFF), services/ (policy_kernel, executor, event_ingest, research, measurement, simulator), integrations/ (meta_ads, llm, browser, web_search), domain/ (money, objectives, evidence, actions, experiments, policy), data/ (models, repositories, migrations), workers/ (Temporal workflow workers), agents/ (growth_director, research_planner, market_researcher, etc.), evals/ (frozen tests, historical replay), infra/ (Docker, Terraform). Policy Kernel and Executor are the only services that reach ad mutation secrets; agents never hold credentials. All mutations flow: Agent → ActionIntent → Policy Kernel → signed ActionCapability → Executor → Meta API. Event-driven: services emit domain events (metrics.synced, action.executed, experiment.matured) to Pub/Sub (or in-process event bus initially), consumers are idempotent. Temporal workflows orchestrate multi-step durable processes (experiment lifecycle, research pipeline, self-improvement).",
+    "modules": [
+      {
+        "path": "apps/api",
+        "holds": "FastAPI application on port 3000, REST endpoints for UI, webhook receivers, event ingestion API (POST /v1/events), health check (/health), OpenAPI docs. No ad write credentials."
+      },
+      {
+        "path": "apps/web",
+        "holds": "Minimal web UI (React or plain HTML/JS initially) for onboarding, dashboard, approval workflows, experiment viewer. Driven by QA in compose mode."
+      },
+      {
+        "path": "services/policy_kernel",
+        "holds": "Deterministic policy enforcement: evaluates ActionIntent against autonomy tier, spend limits, action class trust, maturity thresholds, kill switches. Issues signed ActionCapability with TTL, nonce, constraints. No LLM. Boring and correct."
+      },
+      {
+        "path": "services/executor",
+        "holds": "Only service with Meta Ads write credentials. Validates signed capability (signature, nonce, TTL, resource, constraints). Performs typed mutation via Meta Marketing API. Idempotent. Reconciles with provider state. No strategy, no LLM."
+      },
+      {
+        "path": "services/event_ingest",
+        "holds": "Receives first-party events (lead_created, purchase, refund), validates schema, assigns event_id, publishes to event bus. Idempotent on event_id. Stores raw normalized events."
+      },
+      {
+        "path": "services/simulator",
+        "holds": "Fake Meta Ads adapter, synthetic business funnel, delayed conversion generator, seasonality, saturation, lead quality variance, scenario runner. Phase 0 foundation. No real credentials."
+      },
+      {
+        "path": "integrations/meta_ads",
+        "holds": "Meta Marketing API adapter: OAuth, read campaigns/ad sets/ads/Insights/budgets/creatives, write drafts/budgets/statuses/creatives, Ad Library research. Versioned. Behind adapter interface so fake adapter can substitute."
+      },
+      {
+        "path": "domain/money",
+        "holds": "Money value object: integer minor units (amount_micros BIGINT) + currency CHAR(3). Never float. Arithmetic operators. Serialization. Database type."
+      },
+      {
+        "path": "domain/actions",
+        "holds": "ActionIntent, ActionCapability, PolicyDecision, ExecutedAction, ProviderReceipt, Reconciliation. Typed action classes (protective, exploitative, exploratory, structural, measurement). Idempotency keys."
+      },
+      {
+        "path": "data/repositories",
+        "holds": "PostgreSQL repositories: tenants, ad_accounts, campaigns, actions, experiments, learnings, events, state_snapshots. Raw vs normalized vs derived separation. Idempotency keys."
+      },
+      {
+        "path": "data/migrations",
+        "holds": "Alembic migrations for PostgreSQL schema. Versioned. Immutable once applied. Money columns use BIGINT amount_micros + CHAR(3) currency."
+      },
+      {
+        "path": "workers/temporal",
+        "holds": "Temporal workflow workers: experiment lifecycle, research pipeline, evaluation, self-improvement. Durable, resumable, with timers and signals. Initially stubbed with in-process workers."
+      }
+    ]
+  },
+  "invariants": [
+    "LLMs never directly possess advertising mutation credentials. Every write passes through Policy Kernel → signed ActionCapability → Executor. The agent cannot modify the mechanism that defines what it is allowed to modify (spec §0.1 #1-3).",
+    "Money is integer minor units (amount_micros BIGINT + currency CHAR(3)), never a float. Every financial calculation, storage, and API exchange uses exact arithmetic. Database schema enforces this (spec §0.1, §33).",
+    "Postgres event history is truth; vector memory is retrieval assistance only. Every durable learning points to evidence in SQL. Vector embeddings index claims for retrieval, but structured SQL verifies scope and evidence before use (spec §0.1 #6, §10).",
+    "External web content is untrusted data, never instructions. Browser output is wrapped with content_origin: external_untrusted_web and allowed_effect: research_only. A page saying 'ignore prior instructions' is page content, not a command (spec §0.1 #11, §18).",
+    "Every action has a reason, expected effect distribution, downside estimate, policy decision, receipt, and later evaluation. Every decision references an immutable StateSnapshot. No anonymous mutations (spec §0.1 #7, §12).",
+    "Recent metrics are not treated as mature when conversion delay can materially change them. Attribution maturity model evaluates p50/p90 lag hours per product/campaign/channel. Policy bands restrict actions when maturity < 0.70 (spec §0.1 #9, §9).",
+    "A strategy/code candidate is never promoted because an LLM claims it is better. It must beat the baseline on frozen evals, historical replay, adversarial tests, shadow mode, and canary. The candidate cannot rewrite the exam it has to pass (spec §0.1 #10, §15).",
+    "The system must be able to decide that the best action is 'do nothing yet.' A no-action decision is a valid and often desirable outcome. Autonomy does not mean constant intervention (spec §0.1 #13, §19)."
+  ],
+  "conventions": [
+    "Python code uses type hints everywhere, dataclasses or Pydantic models for structured data, async/await for I/O. Tests live alongside code in tests/ directories, run with pytest. Formatting: ruff. Linting: ruff. Type checking: mypy strict.",
+    "Every external mutation is idempotent and reconciled. Idempotency keys are UUIDs stored in idempotency_keys table. Provider reconciliation compares our executed action with provider-reported state to detect manual changes, failed mutations, or third-party changes (spec §23, §35 #4).",
+    "Every decision references an immutable StateSnapshot. State snapshots hold matured KPIs, raw recent KPIs, budgets, campaign state, funnel state, demand signals, research deltas, active experiments, system health, applicable memories. Every decision record points to one snapshot_id (spec §12, §21.2).",
+    "Domain events are immutable and carry event_id, event_type, occurred_at, tenant_id, correlation_id, causation_id, schema_version, payload. Consumers must be idempotent. Events are stored in raw_provider_events before normalization (spec §22, §21.1).",
+    "Provider-specific APIs stay behind adapters. integrations/meta_ads/ exposes a MetaAdsClient interface. services/simulator/ provides a FakeMetaAdsClient implementing the same interface. Business logic depends on the interface, not the implementation (spec §35 #14).",
+    "Every material architecture change requires an ADR. ADRs live in docs/adr/ and are numbered sequentially. An ADR without consequences is an announcement: every ADR states what was decided, why, and what it makes easy/hard (spec §35 #15).",
+    "Money values are serialized as {amount_micros: int, currency: str} in JSON. API responses never use floating-point for financial values. Database columns use BIGINT for amount_micros and CHAR(3) for currency (spec §33)."
+  ],
+  "commands": {
+    "verify": "pytest tests/ -v --cov=apps --cov=services --cov=domain --cov=integrations --cov=data --cov-fail-under=80",
+    "serve": "docker compose up --build --abort-on-container-exit",
+    "seed": "python -m scripts.seed --scenarios default --reset",
+    "ready": "curl -f http://localhost:3000/health || exit 1",
+    "stubbed": [
+      "sdlc:seed is 'exit 0' until the simulator service exists (issue #1 of the first epic), which provides the synthetic business and fake Meta adapter that seed scripts populate.",
+      "sdlc:ready polls /health but the API app does not exist until the first epic's apps/api module is built; until then, compose up exits immediately and QA has nothing to drive.",
+      "Temporal workflows are stubbed with in-process synchronous workers until the workers/temporal module is built and Temporal Cloud is provisioned (later epic)."
+    ]
+  },
+  "deploy": "Local development and QA use Docker Compose (env.mode=compose in config.yml): docker compose up --build starts the API on localhost:3000, PostgreSQL with pgvector, and (later) Temporal workers. Pull request previews are the same compose stack spun up on the GitHub Actions runner; QA drives the preview with a real browser. Production deployment is Google Cloud: Cloud Run services (API, Policy Kernel, Executor, Event Ingest) scaling to zero, Cloud Run worker pools (Temporal strategy/research/integration workers), Cloud SQL PostgreSQL with pgvector, Secret Manager for OAuth tokens, KMS for capability-signing key, Pub/Sub for events, Cloud Run Jobs for replay/research batches. GitHub Actions deploys via OIDC (no long-lived service-account keys). No production deployment exists yet; the first epic delivers the compose stack and simulator, and a later epic provisions GCP infrastructure (spec §20, §32).",
+  "decisions": [
+    {
+      "title": "Meta Ads first, Google Ads after",
+      "decision": "The first ad-platform epic is the Meta Ads integration end to end (simulator, read, shadow, write). Google Ads is a later epic that reuses what the Meta slice established (adapter interface, Policy Kernel, Executor, event ingestion, measurement).",
+      "because": "Issue #12 owner decision explicitly states: 'Meta Ads first, Google Ads after. The first ad-platform epic is the Meta Ads integration end to end; Google Ads is a later epic that reuses what the Meta slice established. This overrides the Google-first argument in spec §37.' The spec's §37 argument for Google-first (query intent interpretable, reporting API strong, experiments native) is sound but has been considered and overruled by the human.",
+      "consequences": "Easy: Meta's creative-focused optimization (broad automated delivery, creative portfolio, audience hypotheses) forces early attention to creative intelligence and customer-language mining, which are core differentiators. Hard: Meta's API requires app review for ads_management permission, which takes time; Google's API is more straightforward for read-only access. Meta's attribution is less interpretable than Google's keyword-level intent."
+    },
+    {
+      "title": "Simulator before real credentials",
+      "decision": "Phase 0 builds a fake Meta Ads adapter, synthetic business funnel, delayed conversion generator, seasonality, saturation, lead quality variance, and scenario runner before any real Meta Ads integration. Real credentials are not touched until the simulator can replay realistic scenarios.",
+      "because": "Spec §36 Phase 0: 'A fake advertising universe: fake Google Ads adapter, fake business funnel, delayed conversion generator, seasonality, campaign saturation, lead-quality variation, manual external changes, API failures, tracking outages. You cannot safely build autonomous logic against real spend before having a replay/simulation environment.' Example scenario: campaign A cheap low-quality leads; B expensive high-quality; C an initial winner that saturates after ₹5k/day; checkout breaks on day 10; a competitor enters on day 15; conversion delay increases on day 20. The agent should make sensible decisions.",
+      "consequences": "Easy: Autonomous logic can be tested adversarially without risking real money. Scenarios can reproduce failures (double writes, attribution impatience, memory poisoning) as regression tests. Hard: The simulator must be realistic enough that lessons transfer to real platforms; building a good fake is non-trivial. Delay before first real integration."
+    },
+    {
+      "title": "Temporal Cloud for orchestration, stubbed initially",
+      "decision": "Temporal Cloud is the durable workflow engine for multi-day processes (experiment lifecycle, research pipeline, self-improvement). Initially stubbed with in-process synchronous Python workers so the first epic can run without Temporal Cloud provisioning. The workflow abstraction is defined early so stubs can be replaced with real Temporal workflows later.",
+      "because": "Spec §19: 'Do not use a giant cron script. These are durable multi-day workflows: create experiment → wait 7 days → conversion events arrive → wait until maturity → evaluate → promote or rollback.' Temporal provides durable workflow state, retries, timers, long waits, signals, history, crash recovery. Cloud Run worker pools are intended for continuous non-request background work (Temporal workers). The cost-sensible alpha uses managed Temporal Cloud rather than self-hosted.",
+      "consequences": "Easy: Multi-day workflows are resumable across crashes. Timers and signals are first-class. History provides audit trail. Hard: Temporal Cloud costs money (usage-based). Learning curve for workflow/activity patterns. Initial stubs do not provide durability; switching to real Temporal requires care to preserve workflow semantics."
+    },
+    {
+      "title": "PostgreSQL with pgvector for Phase 1, BigQuery later",
+      "decision": "Phase 1 uses PostgreSQL 16 with pgvector for all operational state: configuration, current resource model, research, memory, actions, experiments, modest event volume, embeddings, audit references. BigQuery is added in Phase 2 when event volume grows (operational state in Postgres, high-volume event history in BigQuery, assets in GCS).",
+      "because": "Spec §21 Phase 1: 'PostgreSQL is enough (Cloud SQL supports pgvector): configuration, current resource model, research, memory, actions, experiments, modest event volume, embeddings, audit references. Partition where needed.' Phase 2 adds BigQuery for high-volume event history and large-scale replay/analytics. Starting with both adds cost and complexity without benefit at alpha scale.",
+      "consequences": "Easy: One database to operate, backup, and query. pgvector handles semantic memory without a separate vector database. Hard: Event volume may hit Postgres limits sooner than expected; partitioning strategy needed early. Analytical queries on large event tables may be slow; materialized views or read replicas may be needed."
+    },
+    {
+      "title": "Policy Kernel and Executor are the only services with ad mutation secrets",
+      "decision": "Policy Kernel holds the capability-signing key (via KMS). Executor holds Meta Ads OAuth tokens. No other service (agents, research, UI) reaches these secrets. Agents propose ActionIntents; Policy Kernel evaluates and signs ActionCapabilities; Executor validates and executes. Service isolation enforced by IAM and network policies.",
+      "because": "Spec §0.1 #1-3: 'LLMs never directly possess advertising mutation credentials. All external mutations pass through one deterministic Policy Kernel and one isolated Executor. The agent cannot modify the mechanism that defines what the agent is allowed to modify.' Spec §32: 'Separate service identities: api-read, research-worker, strategy-worker, policy-kernel, executor-google, executor-meta, event-ingest, self-improvement-observer, deploy-controller. Only executor accounts reach platform mutation secrets; only the Policy Kernel reaches the capability-signing key; the Self-Improvement Agent reaches neither.'",
+      "consequences": "Easy: Even if an agent is compromised (prompt injection, memory poisoning), it cannot spend money. Hard boundary. Hard: More services to operate, more IAM policies, more network rules. Debugging requires tracing across service boundaries. Latency of capability issuance."
+    },
+    {
+      "title": "Docker Compose for QA, Cloud Run for production",
+      "decision": "Local development and QA use Docker Compose (env.mode=compose in config.yml). Pull request previews are the same compose stack on GitHub Actions runner. Production deployment is Google Cloud Run services, worker pools, Cloud SQL, Secret Manager, KMS, Pub/Sub. GitHub Actions deploys via OIDC.",
+      "because": "Config.yml specifies env.mode=compose and env.boot='npm run sdlc:serve' which runs docker compose. QA drives a real browser against a real preview; compose provides that. Spec §20 recommends Google Cloud + Temporal Cloud + GitHub for production. Spec §32 shows the production topology with Cloud Run. GitHub Actions uses OIDC to authenticate to GCP (no long-lived service-account keys).",
+      "consequences": "Easy: QA can drive the same stack locally and in CI. No environment drift. Compose is simple to understand. Hard: Compose does not scale to production traffic; Cloud Run requires Terraform and IAM setup. Two deployment targets to maintain (compose vs Cloud Run). Cloud Run cold starts may affect latency."
+    },
+    {
+      "title": "Money is integer minor units, never float",
+      "decision": "All monetary values are stored as BIGINT amount_micros + CHAR(3) currency. Serialized as {amount_micros: int, currency: str} in JSON. Python code uses a Money value object with integer arithmetic. No floating-point for financial calculations anywhere in the stack.",
+      "because": "Spec §33: 'Money: never use float. amount_micros BIGINT + currency CHAR(3), or exact NUMERIC.' Floating-point arithmetic introduces rounding errors that compound across calculations. Financial systems must be exact. This is a domain invariant that, if violated, causes subtle bugs in billing, reporting, and optimization.",
+      "consequences": "Easy: Exact arithmetic. No rounding errors. Audit-friendly. Hard: More verbose than float. Every financial calculation must use Money type. API consumers must handle the {amount_micros, currency} structure. Conversion to/from display values (₹) requires care."
+    },
+    {
+      "title": "Event-driven architecture with idempotent consumers",
+      "decision": "Services emit domain events (metrics.synced, conversion.received, action.executed, experiment.matured, etc.) to an event bus (Pub/Sub in production, in-process bus initially). Consumers are idempotent on event_id. Raw events are stored before normalization. Multi-step mutations use saga/compensating actions in durable workflows, not long-running functions.",
+      "because": "Spec §22: 'Event-driven architecture. Consumers must be idempotent. Multi-step mutations (create budget → campaign → ad group → ads → experiment) need saga/compensating actions in a durable workflow, not a long Python function.' Events provide loose coupling, audit trail, and replay capability. Idempotency prevents duplicate processing on retries.",
+      "consequences": "Easy: Services are loosely coupled. Events can be replayed for debugging or backfill. Audit trail is built-in. Hard: Eventual consistency is harder to reason about than synchronous calls. Idempotency keys must be managed. Event schema evolution requires care. Debugging requires tracing across events."
+    }
+  ],
+  "research": {
+    "questions": [
+      "What is the current stable version of Temporal Python SDK, and does it support all the workflow patterns needed (timers, signals, queries, child workflows)?",
+      "What permissions does the Meta Marketing API require for read vs write access, and what is the app review timeline for ads_management?",
+      "What is the current stable version of pgvector, and does it integrate cleanly with PostgreSQL 16 on Cloud SQL?",
+      "Does FastAPI support the async patterns needed for Temporal workflow clients and Meta API calls?",
+      "What are the operational traps of running Temporal Cloud with Cloud Run workers (networking, authentication, scaling)?"
+    ],
+    "findings": [
+      {
+        "claim": "Temporal Python SDK is production-ready and supports durable workflows with timers, signals, queries, and child workflows.",
+        "evidence": "Spec §19 cites Temporal documentation (https://docs.temporal.io/) and recommends Temporal Cloud for durable workflow state, retries, timers, long waits, signals, history, crash recovery. Spec §36 lists Temporal workers as part of the production topology. The specification was written in September 2026 and references Temporal as the preferred orchestration.",
+        "source": "Spec §19, §36, §43 (Temporal documentation link)",
+        "confidence": 90,
+        "affects": "Stack choice: Temporal Python SDK for workflow orchestration."
+      },
+      {
+        "claim": "Meta Marketing API requires ads_management permission for write access, and app review is required.",
+        "evidence": "Spec §24: 'Use the official Marketing API / Business SDK behind a versioned adapter; it requires an app and advertising permissions such as ads_management.' Spec §43 links to Meta Marketing API documentation (https://developers.facebook.com/docs/marketing-api/). App review is a known Meta requirement for production apps.",
+        "source": "Spec §24, §43 (Meta Marketing API documentation)",
+        "confidence": 85,
+        "affects": "Timeline: Meta Ads integration requires app review, which takes time. Simulator-first approach avoids this delay for initial development."
+      },
+      {
+        "claim": "pgvector is a stable PostgreSQL extension for vector similarity search, supported on Cloud SQL.",
+        "evidence": "Spec §21 Phase 1: 'PostgreSQL is enough (Cloud SQL supports pgvector).' Spec §43 links to Cloud SQL extensions documentation (https://docs.cloud.google.com/sql/docs/postgres/extensions). pgvector is the standard open-source vector extension for PostgreSQL, with HNSW and IVFFlat indexes.",
+        "source": "Spec §21, §43 (Cloud SQL extensions documentation)",
+        "confidence": 90,
+        "affects": "Data architecture: PostgreSQL with pgvector for semantic memory and embeddings."
+      },
+      {
+        "claim": "FastAPI is a production-ready Python web framework with async support, suitable for the API/BFF.",
+        "evidence": "FastAPI is widely used in production for Python web APIs, with automatic OpenAPI docs, async/await support, and excellent Docker integration. It is the boring, standard choice for Python web APIs in 2026. Spec §32 shows Cloud Run API/BFF as part of the production topology.",
+        "source": "General knowledge of Python web frameworks, FastAPI documentation",
+        "confidence": 95,
+        "affects": "Stack choice: FastAPI for apps/api."
+      },
+      {
+        "claim": "Temporal Cloud integrates with Cloud Run worker pools via standard Temporal client authentication.",
+        "evidence": "Spec §19 shows the production topology: 'Temporal Service → growth / experiment / research / evaluation / self-improvement workflows. Cloud Run Worker Pools → Temporal strategy, research, integration, evaluation workers.' Spec §32 shows Temporal Cloud as part of the architecture. Temporal Cloud uses mTLS or API keys for authentication, which can be configured in Cloud Run workers via environment variables or Secret Manager.",
+        "source": "Spec §19, §32, Temporal Cloud documentation",
+        "confidence": 80,
+        "affects": "Infrastructure: Temporal Cloud + Cloud Run worker pools for durable workflows."
+      }
+    ],
+    "rejected_sources": [
+      "Blog posts recommending LangChain or AutoGen for agent orchestration: the spec's agent topology (§11) is deterministic services with scoped model calls, not a generic multi-agent framework. The system is closer to an autonomous growth scientist than a chatbot around ads."
+    ]
+  },
+  "assumptions": [
+    {
+      "assumption": "Meta Marketing API app review for ads_management permission can be completed within the first epic's timeline, or the simulator can substitute for real integration during initial development.",
+      "basis": "Meta's app review process is documented but timeline varies. Spec §24 notes the requirement.",
+      "if_wrong": "If app review takes longer than expected, the first epic delivers the simulator and read-only research features, with real Meta integration deferred to a follow-up epic. The simulator provides a realistic fake for development and testing.",
+      "validate_by": "Submit Meta app for review at the start of the first epic. Track review status. If review is delayed, adjust scope to focus on simulator and policy kernel."
+    },
+    {
+      "assumption": "Temporal Cloud pricing is acceptable for alpha usage (usage-based, scales to zero).",
+      "basis": "Spec §20 recommends Temporal Cloud for the cost-sensible alpha. Temporal Cloud pricing is usage-based (per workflow execution, per activity execution).",
+      "if_wrong": "If Temporal Cloud costs are higher than expected, the initial stub (in-process synchronous workers) can be extended, or Google Cloud Workflows can substitute (spec §19 mentions it as a lower-dependency alternative).",
+      "validate_by": "Monitor Temporal Cloud usage and costs during the first epic. Set budget alerts. If costs exceed expectations, evaluate Google Cloud Workflows or extended stubs."
+    },
+    {
+      "assumption": "The team has sufficient Python expertise to build a production-grade FastAPI + Temporal + PostgreSQL system.",
+      "basis": "The specification assumes Python throughout (§17, §19, §36). Python is widely used for data-intensive applications.",
+      "if_wrong": "If the team lacks Python expertise, the learning curve may slow initial development. However, Python is a mainstream language with extensive documentation and community support. The alternative (TypeScript) would require reimplementing or wrapping Python ML libraries.",
+      "validate_by": "Assess team skills at project kickoff. If Python expertise is lacking, allocate time for training or consider hiring. The spec's Python assumption is load-bearing."
+    },
+    {
+      "assumption": "Docker Compose is sufficient for QA to drive a real browser against a real preview in GitHub Actions.",
+      "basis": "Config.yml specifies env.mode=compose and env.boot='npm run sdlc:serve'. GitHub Actions supports Docker Compose. QA needs a running app on localhost:3000.",
+      "if_wrong": "If Docker Compose is too slow or resource-constrained in GitHub Actions, QA may timeout or fail to drive the preview. The alternative is a preview deployment to Cloud Run, but that requires GCP provisioning (later epic).",
+      "validate_by": "Run the first epic's CI with Docker Compose in GitHub Actions. Monitor QA runtime and reliability. If Compose is problematic, evaluate Cloud Run previews (requires infra epic first)."
+    },
+    {
+      "assumption": "PostgreSQL with pgvector can handle the initial event volume and semantic memory requirements without performance issues.",
+      "basis": "Spec §21 Phase 1: 'PostgreSQL is enough.' pgvector is a mature extension with HNSW indexing. Initial event volume is modest.",
+      "if_wrong": "If event volume grows faster than expected or pgvector queries are slow, partitioning strategies or read replicas may be needed. BigQuery can be added in Phase 2 for high-volume event history (spec §21).",
+      "validate_by": "Monitor query performance and event volume during the first epic. Set up alerts for slow queries. If performance degrades, implement partitioning or evaluate BigQuery earlier than planned."
+    }
+  ],
+  "prd": {
+    "problem": "Businesses spending ₹1L–₹20L monthly on advertising need autonomous growth optimization, but existing tools are either manual (dashboards that produce recommendations), rule-based (if/else engines with AI-generated rules), or unsafe (chatbots around ads that give LLMs direct write credentials). None build a private causal understanding of how the business grows, verify outcomes against first-party truth rather than platform self-reporting, learn causally from interventions, or continuously search for the next growth frontier. Most optimize toward a CPL target and stop, rather than asking what the next unit of budget is worth and whether advertising is still the bottleneck.",
+    "users": [
+      {
+        "who": "Growth marketer at a B2B lead-generation company",
+        "context": "Managing ₹5L monthly Meta Ads spend, 3-4 campaigns, a CRM with qualified/unqualified lead labels, a clear product website. Wants to improve qualified CPL and pipeline volume without manually auditing campaigns daily.",
+        "pain": "Spends hours reviewing campaign performance, identifying wasted spend, and testing new audiences/creatives. Platform self-reported ROAS disagrees with CRM outcomes. Does not know which interventions actually caused improvement. Fears making a bad change that wastes budget.",
+        "sophistication": "Intermediate: understands CPL, ROAS, conversion rate, but not causal inference or attribution maturity."
+      },
+      {
+        "who": "Founder of a D2C brand",
+        "context": "Spending ₹10L monthly on Meta Ads, 10+ campaigns, seasonal demand, creative fatigue. Wants to scale efficiently without hiring a large performance marketing team.",
+        "pain": "Creative fatigue sets in every 2-3 weeks. Does not know when to refresh creatives vs when to test new audiences. Platform metrics (CTR, CPC) do not correlate with profit. Does not know if a bad week is seasonality, competition, or a bad decision.",
+        "sophistication": "Advanced: understands unit economics, contribution margin, LTV. Wants the system to reason in business outcomes, not platform metrics."
+      },
+      {
+        "who": "Performance marketing agency managing 5-10 clients",
+        "context": "Each client spends ₹2L–₹10L monthly on Meta Ads. Agency wants to offer autonomous optimization as a differentiator without hiring more media buyers.",
+        "pain": "Media buyers spend most of their time on routine optimizations (negative keywords, budget reallocation, creative refresh) rather than strategy. Hard to scale without hiring. Clients expect transparency and causality, not just platform reports.",
+        "sophistication": "Advanced: manages multiple accounts, understands portfolio optimization, wants the system to handle routine work and surface strategic opportunities."
+      }
+    ],
+    "jobs": [
+      "Research the market continuously: discover new personas, geographies, keyword clusters, use cases, offers, positioning angles, seasonal events. Convert research into testable hypotheses.",
+      "Run bounded advertising experiments: control/treatment, primary metric, guardrails, sample/runtime, stop rules, rollback rules, spend cap. Never force a binary win/loss when evidence is weak.",
+      "Measure real business outcomes against first-party truth: lead quality, qualification rate, opportunity creation, deal won, purchase, refund, subscription renewal, gross margin. Do not depend only on platform self-reported attribution.",
+      "Learn causally from what the system did: every action has a reason, expected effect, downside, policy decision, receipt, and later evaluation. Distinguish correlation from causal evidence.",
+      "Optimize the Pareto frontier: profit, qualified volume, acquisition cost, revenue, margin, customer quality, LTV, growth rate, volatility, risk, market diversification, information gain. Never define success as 'if CPL <= target: done.'",
+      "Improve its own strategy and decision process: evaluate predictions, discover reasoning/tool/code weaknesses, create candidates, replay + adversarial eval, shadow/canary, promote or reject.",
+      "Detect when advertising is not the current bottleneck: if payment success collapses, do not tweak targeting. If qualified lead rate collapses, do not call the campaign a winner. Escalate to market/funnel exploration.",
+      "Decide that the best action is 'do nothing yet' when evidence is weak, attribution is immature, or intervention interference is too high."
+    ],
+    "scope": [
+      "Meta Ads simulator: fake Meta Ads adapter, synthetic business funnel, delayed conversion generator, seasonality, saturation, lead quality variance, scenario runner. Phase 0 foundation.",
+      "Policy Kernel: deterministic policy enforcement, ActionIntent evaluation, signed ActionCapability issuance, kill switches, circuit breakers. No LLM. Boring and correct.",
+      "Executor: only service with Meta Ads write credentials. Validates signed capability, performs typed mutation, reconciles with provider state. Idempotent. No strategy, no LLM.",
+      "Event ingestion API: POST /v1/events for first-party events (lead_created, purchase, refund). Validates schema, assigns event_id, stores raw normalized events. Idempotent.",
+      "Meta Ads read integration: OAuth, campaigns/ad sets/ads/Insights/budgets/creatives. Behind adapter interface so fake adapter can substitute.",
+      "State snapshots: immutable snapshots holding matured KPIs, raw recent KPIs, budgets, campaign state, funnel state, demand signals, active experiments, applicable memories. Every decision references one.",
+      "Basic UI: onboarding, dashboard, approval workflows, experiment viewer. Driven by QA in compose mode.",
+      "Money type: integer minor units (amount_micros BIGINT + currency CHAR(3)). Never float. Value object with arithmetic operators.",
+      "Domain events: metrics.synced, conversion.received, action.executed, experiment.matured, etc. Idempotent consumers. Raw events stored before normalization.",
+      "Docker Compose stack: API on localhost:3000, PostgreSQL with pgvector, (later) Temporal workers. QA drives this."
+    ],
+    "non_goals": [
+      "Real Meta Ads write access before the simulator is proven. Spec §36 Phase 0: simulator first. Real credentials are not touched until the simulator can replay realistic scenarios.",
+      "Google Ads integration. Owner decision: Meta Ads first, Google Ads after. Google is a later epic that reuses what Meta established.",
+      "Temporal Cloud workflows in the first epic. Initially stubbed with in-process synchronous workers. Temporal is a later epic.",
+      "Self-improvement pipeline (strategy DSL, champion/challenger, replay, shadow, auto promotion, code improvement). Spec §36 Phase 8. Much later.",
+      "Advanced causal inference (incrementality, response curves, MMM, hierarchical priors, contextual bandits, value-of-information). Spec §36 Phase 9. Much later.",
+      "Cross-channel portfolio optimization (where should the next ₹1 go?). Spec §36 Phase 7. Requires both Meta and Google.",
+      "Browser research (managed browser, Playwright fallback, prompt-injection boundary, competitor monitor). Spec §36 week 14. Later.",
+      "Historical replay (frozen snapshots, decision replay, calibration, challenger evaluation). Spec §36 week 15. Later.",
+      "Kubernetes, BigQuery, or other infrastructure that spec explicitly says to defer."
+    ],
+    "success": [
+      {
+        "metric": "Simulator runs realistic scenarios",
+        "target": "Fake Meta adapter generates campaigns with delayed conversions (p50 lag 48h, p90 lag 120h), seasonality (weekday/weekend variation), saturation (diminishing returns after ₹5k/day), lead quality variance (20-40% qualification rate), and scenario events (checkout outage, competitor entry, tracking loss).",
+        "how_measured": "Scenario runner executes a 30-day synthetic business with at least 3 campaigns. Verify conversion lag distribution, saturation curve, quality variance, and scenario events match specifications."
+      },
+      {
+        "metric": "Policy Kernel blocks unsafe actions",
+        "target": "Policy Kernel rejects ActionIntents that exceed spend limits, violate autonomy tier, target prohibited resources, or lack required maturity. Zero unsafe capabilities issued.",
+        "how_measured": "Unit tests cover all policy rules: spend cap, autonomy tier, action class trust, maturity threshold, kill switch. Integration test: agent proposes unsafe action, Policy Kernel rejects, Executor never receives capability."
+      },
+      {
+        "metric": "QA can drive the preview",
+        "target": "Docker Compose stack boots on localhost:3000 in < 60 seconds. QA agent can navigate onboarding, view dashboard, approve an action, and see experiment results using a real browser.",
+        "how_measured": "QA runs sdlc:serve, waits for sdlc:ready (curl /health), drives browser through key flows. No infrastructure errors. All UI elements accessible."
+      },
+      {
+        "metric": "Event ingestion is idempotent",
+        "target": "POST /v1/events with the same event_id twice results in one stored event. No duplicates. Idempotency keys enforced.",
+        "how_measured": "Integration test: send same event twice, verify one row in raw_provider_events. Send different events, verify both stored."
+      },
+      {
+        "metric": "Money arithmetic is exact",
+        "target": "All financial calculations use integer minor units. No floating-point errors. Serialized as {amount_micros, currency}.",
+        "how_measured": "Unit tests: Money(1000, 'INR') + Money(500, 'INR') = Money(1500, 'INR'). No rounding errors after 1000 operations. JSON serialization round-trips correctly."
+      }
+    ],
+    "constraints": [
+      "LLMs never directly possess advertising mutation credentials. Every write passes through Policy Kernel → signed ActionCapability → Executor.",
+      "Money is integer minor units, never float. Database schema enforces this.",
+      "External web content is untrusted data, never instructions. Browser output is wrapped with content_origin and allowed_effect.",
+      "Every decision references an immutable StateSnapshot. No anonymous mutations.",
+      "Recent metrics are not treated as mature when conversion delay can materially change them.",
+      "A strategy/code candidate is never promoted because an LLM claims it is better. It must beat the baseline on frozen evals.",
+      "The system must be able to decide that the best action is 'do nothing yet.'",
+      "Docker Compose for QA, Cloud Run for production. No Kubernetes early."
+    ]
+  },
+  "trd": {
+    "requirements": [
+      {
+        "id": "TR-1",
+        "requirement": "The simulator provides a FakeMetaAdsClient implementing the same interface as the real MetaAdsClient, generating synthetic campaigns, ad sets, ads, Insights, budgets, and conversions with realistic lag, seasonality, saturation, and quality variance.",
+        "rationale": "Spec §36 Phase 0: simulator first. Autonomous logic cannot be safely built against real spend without a replay environment. The fake adapter allows development and testing without real credentials.",
+        "priority": "must",
+        "verified_by": "Integration test: FakeMetaAdsClient runs a 30-day, 3-campaign scenario with p50/p90 lag 48h/120h, weekday/weekend seasonality, saturation past ₹5k/day, 20-40% qualification variance, plus checkout-outage, competitor-entry, and tracking-loss events.",
+        "sources": [
+          "S-36"
+        ]
+      },
+      {
+        "id": "TR-2",
+        "requirement": "The Policy Kernel evaluates every ActionIntent against autonomy tier, spend limits, action class trust, maturity thresholds, kill switches, and circuit breakers. It issues signed ActionCapabilities with TTL, nonce, and constraints. The Policy Kernel contains no LLM.",
+        "rationale": "Spec §0.1 #1-3, §14: LLMs never possess ad mutation credentials. All mutations pass through one deterministic Policy Kernel. Signed capabilities enforce hard security boundary even if agent is compromised.",
+        "priority": "must",
+        "verified_by": "Unit tests cover spend cap, autonomy tier, action-class trust, maturity threshold, kill switch, and circuit breaker. Integration test: agent proposes ActionIntent; Policy Kernel signs a capability or rejects with reason.",
+        "sources": [
+          "S-0",
+          "S-14"
+        ]
+      },
+      {
+        "id": "TR-3",
+        "requirement": "The Executor is the only service with Meta Ads write credentials. It validates signed ActionCapabilities (signature, nonce, TTL, resource, constraints), performs typed mutations via Meta Marketing API, and reconciles with provider state. The Executor is idempotent on capability_id. The Executor contains no strategy logic and no LLM.",
+        "rationale": "Spec §0.1 #1-3, §14.1, §35 #4: Only Executor reaches ad write secrets. Validates signature + nonce + TTL + resource + constraints. Idempotent and reconciled. No strategy, no LLM.",
+        "priority": "must",
+        "verified_by": "Integration test: Executor receives signed capability, validates signature, performs mutation via FakeMetaAdsClient, stores receipt, reconciles with provider state. Test replayed nonce is rejected. Test expired capability is rejected. Test wrong resource is rejected.",
+        "sources": [
+          "S-0",
+          "S-14",
+          "S-35"
+        ]
+      },
+      {
+        "id": "TR-4",
+        "requirement": "The event ingestion API (POST /v1/events) receives first-party events (lead_created, lead_qualified, purchase, refund, etc.), validates schema, assigns event_id, and stores raw normalized events. The API is idempotent on event_id.",
+        "rationale": "Spec §7.2, §21.1, §22: First-party measurement is the growth truth layer. Raw events are never discarded prematurely. Idempotency prevents duplicate processing.",
+        "priority": "must",
+        "verified_by": "Integration test: POST /v1/events with event_id 'evt_123' stores one row in raw_provider_events. POST same event_id again returns 200 OK but does not create a duplicate. POST different event_id stores a second row.",
+        "sources": [
+          "S-7",
+          "S-21",
+          "S-22"
+        ]
+      },
+      {
+        "id": "TR-5",
+        "requirement": "The Meta Ads read integration (MetaAdsClient) authenticates via OAuth, reads campaigns, ad sets, ads, Insights, budgets, and creatives. The client is behind an adapter interface so FakeMetaAdsClient can substitute.",
+        "rationale": "Spec §24: Use official Marketing API behind a versioned adapter. Adapter interface allows fake adapter to substitute for testing.",
+        "priority": "must",
+        "verified_by": "Integration test: MetaAdsClient authenticates with OAuth token, fetches campaigns list, fetches Insights for a campaign. FakeMetaAdsClient implements the same interface and returns synthetic data.",
+        "sources": [
+          "S-24"
+        ]
+      },
+      {
+        "id": "TR-6",
+        "requirement": "State snapshots are immutable records holding matured KPIs, raw recent KPIs, budgets, campaign state, funnel state, demand signals, active experiments, system health, and applicable memories. Every decision references a snapshot_id.",
+        "rationale": "Spec §12, §21.2: Every decision references an immutable StateSnapshot. Essential for replay and evaluation.",
+        "priority": "must",
+        "verified_by": "Unit test: StateSnapshot is created with all required fields. Decision record references snapshot_id. Attempt to modify a snapshot raises an error.",
+        "sources": [
+          "S-12",
+          "S-21"
+        ]
+      },
+      {
+        "id": "TR-7",
+        "requirement": "Money values are stored as BIGINT amount_micros + CHAR(3) currency in the database. Money arithmetic uses integer operations. JSON serialization uses {amount_micros: int, currency: str}. No floating-point for financial calculations.",
+        "rationale": "Spec §33, §35 #3: Money is integer minor units, never float. Floating-point introduces rounding errors.",
+        "priority": "must",
+        "verified_by": "Unit test: Money(1000, 'INR') + Money(500, 'INR') = Money(1500, 'INR'). Database column type is BIGINT for amount_micros and CHAR(3) for currency. JSON serialization round-trips correctly. No float in any financial calculation.",
+        "sources": [
+          "S-33",
+          "S-35"
+        ]
+      },
+      {
+        "id": "TR-8",
+        "requirement": "Domain events (metrics.synced, conversion.received, action.executed, experiment.matured, etc.) are emitted to an event bus. Consumers are idempotent on event_id. Events are stored in raw_provider_events before normalization.",
+        "rationale": "Spec §22: Event-driven architecture. Consumers must be idempotent. Raw events stored before normalization.",
+        "priority": "must",
+        "verified_by": "Integration test: service emits event, event bus receives it, consumer processes it idempotently. Replay same event, consumer does not duplicate work.",
+        "sources": [
+          "S-22"
+        ]
+      },
+      {
+        "id": "TR-9",
+        "requirement": "The API application (FastAPI) runs on port 3000, exposes /health endpoint, and serves OpenAPI docs at /docs. The API contains no ad write credentials.",
+        "rationale": "Config.yml: env.base_url='http://localhost:3000', env.ready='/'. Spec §32: API/BFF is a Cloud Run service. API should not reach ad mutation secrets.",
+        "priority": "must",
+        "verified_by": "Integration test: boot API via Docker Compose, curl /health returns 200 OK, curl /docs returns OpenAPI spec. Grep codebase for ad credentials in apps/api; none found.",
+        "sources": [
+          "S-32"
+        ]
+      },
+      {
+        "id": "TR-10",
+        "requirement": "Docker Compose stack boots the API, PostgreSQL with pgvector, and (later) Temporal workers. The stack is ready in < 60 seconds. QA can drive the preview with a real browser.",
+        "rationale": "Config.yml: env.mode=compose, env.boot='npm run sdlc:serve'. QA drives a real browser against a real preview.",
+        "priority": "must",
+        "verified_by": "Run sdlc:serve, wait for sdlc:ready (curl /health). Verify boot time < 60 seconds. QA agent navigates onboarding, dashboard, approval workflow, experiment viewer.",
+        "sources": [
+          "S-32"
+        ]
+      },
+      {
+        "id": "TR-11",
+        "requirement": "The basic UI provides onboarding (connect Meta Ads account or use simulator), dashboard (campaign overview, KPIs, recent actions), approval workflow (review and approve/reject proposed actions), and experiment viewer (control/treatment, metrics, status).",
+        "rationale": "Spec §36 Phase 3: approval UI. Spec §41: acceptance criteria include UI for onboarding, dashboard, approvals.",
+        "priority": "should",
+        "verified_by": "QA drives browser through onboarding, views dashboard, approves an action, views experiment results. All UI elements are accessible and functional.",
+        "sources": [
+          "S-36",
+          "S-41"
+        ]
+      },
+      {
+        "id": "TR-12",
+        "requirement": "The Meta Ads adapter interface defines methods for reading campaigns, ad sets, ads, Insights, budgets, and creatives. Both MetaAdsClient (real) and FakeMetaAdsClient (simulator) implement this interface.",
+        "rationale": "Spec §35 #14: Provider-specific APIs stay behind adapters. Adapter interface allows fake adapter to substitute.",
+        "priority": "must",
+        "verified_by": "Unit test: code depends on MetaAdsInterface, not concrete implementation. Swap MetaAdsClient and FakeMetaAdsClient, same code works.",
+        "sources": [
+          "S-35"
+        ]
+      },
+      {
+        "id": "TR-13",
+        "requirement": "Idempotency keys are UUIDs stored in idempotency_keys table. Every external mutation checks the idempotency key before executing. Duplicate keys return the original result.",
+        "rationale": "Spec §35 #4: Every external mutation is idempotent and reconciled.",
+        "priority": "must",
+        "verified_by": "Integration test: execute mutation with idempotency key 'key_123', store result. Execute same mutation with same key, return original result without re-executing.",
+        "sources": [
+          "S-35"
+        ]
+      },
+      {
+        "id": "TR-14",
+        "requirement": "Raw provider events are stored with provider, account, resource, source timestamp, ingestion timestamp, API version, payload hash, normalized payload, and replay key. Raw events are never overwritten with normalized calculations.",
+        "rationale": "Spec §21.1, §33: Raw vs derived separation. Never overwrite raw source truth with normalized calculations.",
+        "priority": "must",
+        "verified_by": "Unit test: raw event stored with all required fields. Normalized event stored separately. Raw event is immutable.",
+        "sources": [
+          "S-21",
+          "S-33"
+        ]
+      },
+      {
+        "id": "TR-15",
+        "requirement": "The attribution maturity model evaluates p50/p90 lag hours per product/campaign/channel. Metrics with maturity < 0.70 are not eligible for strategic conclusions. Policy bands: < 0.35 emergency-only, 0.35-0.70 observation + low-risk, 0.70-0.90 moderate optimization, > 0.90 strategic conclusions.",
+        "rationale": "Spec §9, §0.1 #9: Recent metrics are not treated as mature when conversion delay can materially change them.",
+        "priority": "should",
+        "verified_by": "Unit test: maturity model calculates p50/p90 lag hours. Policy band logic enforces action restrictions based on maturity.",
+        "sources": [
+          "S-9",
+          "S-0"
+        ]
+      }
+    ],
+    "data_model": [
+      {
+        "entity": "tenants",
+        "holds": "Organization, users, memberships, products, business units. Tenant isolation enforced.",
+        "keys": "id (UUID), organization_id, created_at",
+        "notes": "Multi-tenant. RLS considered for later."
+      },
+      {
+        "entity": "provider_connections",
+        "holds": "OAuth tokens (encrypted), provider (meta_ads), account_id, status, permissions. Only Executor reads write tokens.",
+        "keys": "id, tenant_id, provider, account_id",
+        "notes": "Encrypted at rest. Access audit logged."
+      },
+      {
+        "entity": "campaigns",
+        "holds": "Campaign metadata: name, status, budget, objective, targeting, provider_resource_id, last_synced_at.",
+        "keys": "id, tenant_id, provider_connection_id, provider_resource_id",
+        "notes": "Synced from provider. Provider-specific fields in JSONB."
+      },
+      {
+        "entity": "action_intents",
+        "holds": "Proposed action: action_type, resource, parameters, expected_outcome, risk, evidence_refs, memory_refs, proposed_by_agent.",
+        "keys": "id, tenant_id, state_snapshot_id",
+        "notes": "Proposed by agents, evaluated by Policy Kernel."
+      },
+      {
+        "entity": "policy_decisions",
+        "holds": "Policy Kernel evaluation: action_intent_id, decision (approved/rejected), reason, constraints, capability_id, policy_version.",
+        "keys": "id, action_intent_id",
+        "notes": "Deterministic. No LLM."
+      },
+      {
+        "entity": "action_capabilities",
+        "holds": "Signed capability: capability_id, tenant_id, provider, resource, action, constraints, expires_at, nonce, signature, policy_version.",
+        "keys": "capability_id, nonce",
+        "notes": "Signed by Policy Kernel. Validated by Executor."
+      },
+      {
+        "entity": "executed_actions",
+        "holds": "Executed mutation: capability_id, action_type, resource, parameters, provider_receipt_id, executed_at, reconciled.",
+        "keys": "id, capability_id, provider_receipt_id",
+        "notes": "Idempotent on capability_id."
+      },
+      {
+        "entity": "raw_provider_events",
+        "holds": "Raw event from provider: provider, account, resource, source_timestamp, ingestion_timestamp, api_version, payload_hash, payload, replay_key.",
+        "keys": "id, replay_key",
+        "notes": "Immutable. Never overwritten."
+      },
+      {
+        "entity": "state_snapshots",
+        "holds": "Immutable snapshot: matured_kpis, raw_recent_kpis, budgets, campaign_state, funnel_state, demand_signals, active_experiments, system_health, applicable_memories.",
+        "keys": "id, tenant_id, created_at",
+        "notes": "Immutable. Every decision references one."
+      },
+      {
+        "entity": "experiments",
+        "holds": "Experiment: name, hypothesis, control_arm, treatment_arms, primary_metric, guardrails, sample_size, runtime, status, started_at, matured_at.",
+        "keys": "id, tenant_id, state_snapshot_id",
+        "notes": "Control/treatment. Native platform experiments preferred."
+      },
+      {
+        "entity": "learnings",
+        "holds": "Durable learning: claim, scope, evidence_refs, evidence_type, effect, confidence, applicability_score, status (candidate/accepted/contradicted/stale/rejected), valid_from, stale_after.",
+        "keys": "id, tenant_id, status",
+        "notes": "Every learning points to evidence. Vector embeddings index claim for retrieval."
+      },
+      {
+        "entity": "idempotency_keys",
+        "holds": "Idempotency key: key, resource, result, created_at, expires_at.",
+        "keys": "key",
+        "notes": "Prevents duplicate mutations."
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "POST /v1/events",
+        "shape": "Accepts first-party events (lead_created, purchase, refund, etc.). Request: {event_id, event_name, occurred_at, user_reference, session_reference, order_reference, value, currency, properties}. Response: 200 OK with {event_id, status}. Idempotent on event_id.",
+        "errors": "400 Bad Request (invalid schema), 409 Conflict (duplicate event_id with different payload), 500 Internal Server Error",
+        "idempotency": "Idempotent on event_id. Duplicate event_id with same payload returns 200 OK without creating duplicate."
+      },
+      {
+        "name": "GET /health",
+        "shape": "Health check endpoint. Response: 200 OK with {status: 'healthy', timestamp, version}. Used by sdlc:ready command.",
+        "errors": "503 Service Unavailable (database connection failed, critical service down)"
+      },
+      {
+        "name": "GET /docs",
+        "shape": "OpenAPI specification. Auto-generated by FastAPI. Response: 200 OK with OpenAPI JSON.",
+        "errors": "None"
+      },
+      {
+        "name": "MetaAdsInterface.read_campaigns",
+        "shape": "Reads campaigns from Meta Ads. Parameters: tenant_id, account_id, filters (optional). Returns: List[Campaign].",
+        "errors": "AuthenticationError (invalid OAuth token), RateLimitError (API rate limit exceeded), ProviderError (Meta API error)"
+      },
+      {
+        "name": "MetaAdsInterface.read_insights",
+        "shape": "Reads Insights (metrics) for a campaign or ad set. Parameters: tenant_id, account_id, resource_id, date range, fields. Returns: List[Insight] with spend, impressions, clicks, platform-reported conversions.",
+        "errors": "AuthenticationError (invalid OAuth token), RateLimitError (API rate limit exceeded), ProviderError (Meta API error)"
+      },
+      {
+        "name": "PolicyKernel.evaluate",
+        "shape": "Evaluates an ActionIntent against autonomy tier, spend limits, action-class trust, maturity bands, kill switches, and circuit breakers, using the referenced StateSnapshot. Returns: approved with a signed ActionCapability, or rejected with reason and policy_version.",
+        "errors": "PolicyDenied (rule + reason), StaleSnapshot (snapshot superseded), KillSwitchEngaged (all writes frozen)"
+      },
+      {
+        "name": "Executor.execute",
+        "shape": "Validates a signed ActionCapability (signature, nonce, TTL, resource, constraints) and performs one typed mutation via the Meta Marketing API, then stores the provider receipt and reconciles. Parameters: capability, idempotency key.",
+        "errors": "InvalidCapability (bad signature, replayed nonce, expired TTL, or resource mismatch), ProviderError, ReconciliationMismatch",
+        "idempotency": "Idempotent on capability_id; a replayed capability returns the original receipt without re-executing."
+      },
+      {
+        "name": "EventBus.publish",
+        "shape": "Publishes domain events (metrics.synced, conversion.received, action.executed, experiment.matured). Envelope: event_id, event_type, occurred_at, tenant_id, correlation_id, schema_version, payload.",
+        "errors": "SchemaViolation (unknown event_type or schema_version)",
+        "idempotency": "Consumers are idempotent on event_id; redelivery never duplicates effects."
+      }
+    ]
+  },
+  "coverage": [
+    {
+      "section": "S-1",
+      "disposition": "scope",
+      "refs": [
+        "product"
+      ]
+    },
+    {
+      "section": "S-2",
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-3"
+      ]
+    },
+    {
+      "section": "S-3",
+      "disposition": "scope",
+      "refs": [
+        "prd.problem",
+        "prd.jobs"
+      ]
+    },
+    {
+      "section": "S-4",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Digital-twin composition needs snapshots, memory, and measurement first; the first slice builds those inputs (TR-4, TR-6) and assembles the twin in a later epic."
+    },
+    {
+      "section": "S-5",
+      "disposition": "scope",
+      "refs": [
+        "prd.jobs"
+      ]
+    },
+    {
+      "section": "S-6",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Durable multi-time-scale orchestration needs Temporal; the first slice stubs workers in-process (commands.stubbed) and promotes them in a later epic."
+    },
+    {
+      "section": "S-7",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "The Research Mesh (source cascade, opportunity objects, evidence hierarchy) ships after Meta read and measurement; no research service exists in the first slice."
+    },
+    {
+      "section": "S-8",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Competitor monitoring and customer-language mining need the research mesh and browser; later epic."
+    },
+    {
+      "section": "S-9",
+      "disposition": "requirement",
+      "refs": [
+        "TR-4",
+        "TR-14",
+        "TR-15"
+      ]
+    },
+    {
+      "section": "S-10",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Triangulation across platform, first-party, and modeled signals needs several mature inputs; the first slice banks raw truth (TR-4, TR-14) and adds reconciliation later."
+    },
+    {
+      "section": "S-11",
+      "disposition": "requirement",
+      "refs": [
+        "TR-15"
+      ]
+    },
+    {
+      "section": "S-12",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Epistemic memory services (learning lifecycle, contradiction, staleness) come after snapshots and experiments; the learnings table already exists in the data model for them."
+    },
+    {
+      "section": "S-13",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Agent roles beyond propose, evaluate, and execute arrive with the research and strategy epics."
+    },
+    {
+      "section": "S-14",
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-6"
+      ]
+    },
+    {
+      "section": "S-15",
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-3"
+      ]
+    },
+    {
+      "section": "S-16",
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-3"
+      ]
+    },
+    {
+      "section": "S-17",
+      "disposition": "non_goal",
+      "refs": [],
+      "why": "Strategy DSL, replay-gated promotion, and code self-improvement are Phase 8 work, explicitly out of the first slice."
+    },
+    {
+      "section": "S-18",
+      "disposition": "non_goal",
+      "refs": [],
+      "why": "Champion/challenger evolution needs frozen evals and replay; out of the first slice with the rest of self-improvement."
+    },
+    {
+      "section": "S-19",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Model routing and cost observability need running workloads first; the first slice uses direct provider calls behind the adapter interface."
+    },
+    {
+      "section": "S-20",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "No browser ships in the first slice; the untrusted-content boundary arrives with the research browser epic."
+    },
+    {
+      "section": "S-21",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Temporal Cloud orchestration is defined as an abstraction and stubbed in-process (commands.stubbed); durable workflows are a later epic."
+    },
+    {
+      "section": "S-22",
+      "disposition": "scope",
+      "refs": [
+        "deploy"
+      ]
+    },
+    {
+      "section": "S-23",
+      "disposition": "requirement",
+      "refs": [
+        "TR-4",
+        "TR-6",
+        "TR-14"
+      ]
+    },
+    {
+      "section": "S-24",
+      "disposition": "requirement",
+      "refs": [
+        "TR-8"
+      ]
+    },
+    {
+      "section": "S-25",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Owner decision on issue #12: Google Ads is a later epic that reuses the Meta slice's adapter interface, Policy Kernel, Executor, and measurement."
+    },
+    {
+      "section": "S-26",
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-5",
+        "TR-12"
+      ]
+    },
+    {
+      "section": "S-27",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Creative testing and portfolio intelligence need Meta read plus the experiment stack; later epic."
+    },
+    {
+      "section": "S-28",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Opportunity scoring needs the research mesh and hypothesis engine; later epic."
+    },
+    {
+      "section": "S-29",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Experiment registry, evaluators, and maturity-gated promotion ship after the executor and maturity model; the first slice lays shadow and approval foundations (TR-11)."
+    },
+    {
+      "section": "S-30",
+      "disposition": "requirement",
+      "refs": [
+        "TR-2"
+      ]
+    },
+    {
+      "section": "S-31",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "The system self-audit needs running cost, calibration, and decision data; scheduled after the first loops run."
+    },
+    {
+      "section": "S-32",
+      "disposition": "non_goal",
+      "refs": [],
+      "why": "Runtime self-repair is Phase 8+ behavior; the first slice fails closed through kill switches and circuit breakers (TR-2)."
+    },
+    {
+      "section": "S-33",
+      "disposition": "non_goal",
+      "refs": [],
+      "why": "No self-modifying GitHub pipeline in v1; the framework pipeline, not the product, opens the product's pull requests."
+    },
+    {
+      "section": "S-34",
+      "disposition": "requirement",
+      "refs": [
+        "TR-9",
+        "TR-10"
+      ]
+    },
+    {
+      "section": "S-35",
+      "disposition": "requirement",
+      "refs": [
+        "TR-7",
+        "TR-13",
+        "TR-14"
+      ]
+    },
+    {
+      "section": "S-36",
+      "disposition": "scope",
+      "refs": [
+        "architecture.modules"
+      ]
+    },
+    {
+      "section": "S-37",
+      "disposition": "requirement",
+      "refs": [
+        "TR-3",
+        "TR-12",
+        "TR-13"
+      ]
+    },
+    {
+      "section": "S-38",
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-11"
+      ]
+    },
+    {
+      "section": "S-39",
+      "disposition": "scope",
+      "refs": [
+        "decisions"
+      ]
+    },
+    {
+      "section": "S-40",
+      "disposition": "deferred",
+      "refs": [],
+      "why": "Full tracing and cost observability ship with running services; the first slice's observable surface is the health endpoint (TR-9)."
+    },
+    {
+      "section": "S-41",
+      "disposition": "requirement",
+      "refs": [
+        "TR-3"
+      ]
+    },
+    {
+      "section": "S-42",
+      "disposition": "scope",
+      "refs": [
+        "invariants"
+      ]
+    },
+    {
+      "section": "S-43",
+      "disposition": "scope",
+      "refs": [
+        "prd.success"
+      ]
+    },
+    {
+      "section": "S-44",
+      "disposition": "scope",
+      "refs": [
+        "product"
+      ]
+    },
+    {
+      "section": "S-45",
+      "disposition": "scope",
+      "refs": [
+        "research"
+      ]
+    }
+  ]
+}

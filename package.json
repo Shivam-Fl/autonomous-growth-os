@@ -1,0 +1,10 @@
+{
+  "name": "autonomous-growth-os",
+  "private": true,
+  "scripts": {
+    "sdlc:verify": "pytest tests/ -v --cov=apps --cov=services --cov=domain --cov=integrations --cov=data --cov-fail-under=80",
+    "sdlc:serve": "docker compose up --build --abort-on-container-exit",
+    "sdlc:seed": "python -m scripts.seed --scenarios default --reset",
+    "sdlc:ready": "curl -f http://localhost:3000/health || exit 1"
+  }
+}
