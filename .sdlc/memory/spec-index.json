@@ -1,0 +1,319 @@
+{
+  "sections": [
+    {
+      "id": "S-1",
+      "title": "Autonomous Growth OS",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1,
+      "sha": "45b87a311139"
+    },
+    {
+      "id": "S-2",
+      "title": "0. Prime directive",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 18,
+      "sha": "df9d52e6e732"
+    },
+    {
+      "id": "S-3",
+      "title": "1. Real-world product thesis",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 108,
+      "sha": "cc06860238e0"
+    },
+    {
+      "id": "S-4",
+      "title": "2. The business digital twin",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 157,
+      "sha": "efb91ee64575"
+    },
+    {
+      "id": "S-5",
+      "title": "3. Optimization philosophy: move the Pareto frontier",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 182,
+      "sha": "4bdc6be38d0c"
+    },
+    {
+      "id": "S-6",
+      "title": "4. Multi-time-scale autonomy",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 253,
+      "sha": "9f504a344598"
+    },
+    {
+      "id": "S-7",
+      "title": "5. Research Mesh",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 280,
+      "sha": "d7f86e239471"
+    },
+    {
+      "id": "S-8",
+      "title": "6. Product and competitor intelligence",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 373,
+      "sha": "ebf47faca509"
+    },
+    {
+      "id": "S-9",
+      "title": "7. First-party measurement: the growth truth layer",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 395,
+      "sha": "9fb40be81057"
+    },
+    {
+      "id": "S-10",
+      "title": "8. Measurement triangulation",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 436,
+      "sha": "17fc10e2b3e2"
+    },
+    {
+      "id": "S-11",
+      "title": "9. Attribution maturity and conversion lag",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 462,
+      "sha": "50fda4273f0d"
+    },
+    {
+      "id": "S-12",
+      "title": "10. Memory: an epistemic operating memory",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 491,
+      "sha": "8583a2058593"
+    },
+    {
+      "id": "S-13",
+      "title": "11. Agent topology",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 535,
+      "sha": "f65d42fd5e23"
+    },
+    {
+      "id": "S-14",
+      "title": "12. Decision protocol",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 578,
+      "sha": "9ab5a344ba42"
+    },
+    {
+      "id": "S-15",
+      "title": "13. Action classes",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 613,
+      "sha": "a419be837009"
+    },
+    {
+      "id": "S-16",
+      "title": "14. Policy Kernel",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 627,
+      "sha": "a08159b5136b"
+    },
+    {
+      "id": "S-17",
+      "title": "15. Self-improvement: brain, kernel, infra",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 672,
+      "sha": "b0e52d3e015e"
+    },
+    {
+      "id": "S-18",
+      "title": "16. Champion / challenger evolution",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 738,
+      "sha": "3d5019da94ae"
+    },
+    {
+      "id": "S-19",
+      "title": "17. Model architecture",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 760,
+      "sha": "7cfedc6a7de5"
+    },
+    {
+      "id": "S-20",
+      "title": "18. Browser security model",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 789,
+      "sha": "dc73101f941f"
+    },
+    {
+      "id": "S-21",
+      "title": "19. Orchestration",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 820,
+      "sha": "3ab40f1b69d7"
+    },
+    {
+      "id": "S-22",
+      "title": "20. Where to run it",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 850,
+      "sha": "9756ed21bcf7"
+    },
+    {
+      "id": "S-23",
+      "title": "21. Data architecture",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 878,
+      "sha": "a1b61f91f545"
+    },
+    {
+      "id": "S-24",
+      "title": "22. Event-driven architecture",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 895,
+      "sha": "c403f2898770"
+    },
+    {
+      "id": "S-25",
+      "title": "23. Google Ads integration",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 915,
+      "sha": "481f38d7e0dc"
+    },
+    {
+      "id": "S-26",
+      "title": "24. Meta Ads integration",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 937,
+      "sha": "cc405f960ac4"
+    },
+    {
+      "id": "S-27",
+      "title": "25. Creative intelligence",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 953,
+      "sha": "169208df5d5d"
+    },
+    {
+      "id": "S-28",
+      "title": "26. Opportunity economy",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 973,
+      "sha": "8f24e67cb2c1"
+    },
+    {
+      "id": "S-29",
+      "title": "27. Causal experimentation stack",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 993,
+      "sha": "369856f9bf0e"
+    },
+    {
+      "id": "S-30",
+      "title": "28. Autonomy is earned per action class",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1010,
+      "sha": "7e7d601a64f5"
+    },
+    {
+      "id": "S-31",
+      "title": "29. System self-audit",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1030,
+      "sha": "e370af009da0"
+    },
+    {
+      "id": "S-32",
+      "title": "30. Self-healing examples",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1047,
+      "sha": "ad1e85f77032"
+    },
+    {
+      "id": "S-33",
+      "title": "31. GitHub self-improvement pipeline",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1061,
+      "sha": "463b39cd11dc"
+    },
+    {
+      "id": "S-34",
+      "title": "32. Production topology",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1083,
+      "sha": "8fa831afa841"
+    },
+    {
+      "id": "S-35",
+      "title": "33. Database domains",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1121,
+      "sha": "3cba3413b886"
+    },
+    {
+      "id": "S-36",
+      "title": "34. Repository layout",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1154,
+      "sha": "b6dbfac1c005"
+    },
+    {
+      "id": "S-37",
+      "title": "35. Engineering rules",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1183,
+      "sha": "8afaa5647393"
+    },
+    {
+      "id": "S-38",
+      "title": "36. Implementation sequence",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1206,
+      "sha": "55d3e42c3e67"
+    },
+    {
+      "id": "S-39",
+      "title": "37. First production wedge",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1261,
+      "sha": "98c0a16f13c3"
+    },
+    {
+      "id": "S-40",
+      "title": "38. Observability",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1277,
+      "sha": "a94c170e022c"
+    },
+    {
+      "id": "S-41",
+      "title": "39. Security",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1293,
+      "sha": "72351facb238"
+    },
+    {
+      "id": "S-42",
+      "title": "40. Failure modes",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1312,
+      "sha": "65b00d3f2bc7"
+    },
+    {
+      "id": "S-43",
+      "title": "41. Acceptance criteria — when it is actually good",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1329,
+      "sha": "55ca96543e69"
+    },
+    {
+      "id": "S-44",
+      "title": "42. North star",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1352,
+      "sha": "bdf14a94dc9b"
+    },
+    {
+      "id": "S-45",
+      "title": "43. Source notes",
+      "source": "docs/spec/autonomous-growth-os.md",
+      "line": 1375,
+      "sha": "1ca1fe5b995c"
+    }
+  ]
+}

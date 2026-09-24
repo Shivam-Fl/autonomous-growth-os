@@ -1,9 +1,4 @@
-<!-- sdlc:stub -->
 # Stable selectors
+<!-- sdlc:stub -->
 
-_None recorded yet._ Prefer a selector listed here over anything derived from text or DOM
-position: copy edits change text and layout changes positions, and both produce failures that
-waste an attempt. The Librarian adds rows as QA finds selectors that hold.
-
-| Element | Selector |
-|---|---|
+Nothing recorded for this project yet. QA adds selectors here as it finds ones that survive copy and layout changes.
