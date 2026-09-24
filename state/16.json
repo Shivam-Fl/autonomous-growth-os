@@ -253,7 +253,26 @@
     ],
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "package.json",
+    "src/index.js",
+    "src/domain/money.js",
+    "src/domain/events.js",
+    "src/data/db.js",
+    "src/data/repositories.js",
+    "src/workflows/scheduler.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "src/web/styles.css",
+    "src/web/client.js",
+    "scripts/seed.js",
+    "test/domain/money.test.js",
+    "test/data/append-only.test.js",
+    "test/data/tenant-isolation.test.js",
+    "test/domain/events.test.js",
+    "test/workflows/scheduler.test.js",
+    "test/api/health.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
