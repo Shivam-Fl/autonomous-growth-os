@@ -124,7 +124,7 @@
         ],
         "what": "Creative generation and full fatigue modeling plus advanced causal layers (MMM, geo incrementality, bandits)",
         "why": "Creative is experimental-by-default and TR-25 is could-priority; L1/L2 experiments come first and must earn the advanced layers.",
-        "issue": null
+        "issue": 26
       }
     ],
     "epic": 14,
