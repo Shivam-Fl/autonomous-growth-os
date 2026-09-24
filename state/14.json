@@ -277,7 +277,7 @@
         "risk": "Highest-risk piece: touches money movement, auth-equivalent capabilities, credential isolation and kill switches.",
         "title": "Gate every write behind policy capabilities, approvals and guardian freezes",
         "why": "An owner can approve a low-risk change with visible downside and receipt, and watch the guardian freeze automation when measurement or spend breaks.",
-        "issue": null
+        "issue": 20
       },
       {
         "acceptance": [
@@ -349,6 +349,7 @@
     16,
     17,
     18,
-    19
+    19,
+    20
   ]
 }
