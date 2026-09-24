@@ -16,7 +16,8 @@ anything — that is config, and it stays config.
 You are running because the deterministic rules declined to classify this issue. They only
 commit on a signal a person gave on purpose: an epic label, an audit or question marked as one
 (the `sdlc:audit` or `question` label, or a title starting `Audit:` or `Question:`), a labelled
-bug, a typo or wording change named as one in the title. Yours is everything else, which is
+bug, a typo or wording change named as one in the title, and — while `project.md` is still a
+stub — an issue pointing at a spec file under `spec.paths`. Yours is everything else, which is
 mostly ordinary feature work — and for ordinary feature work the full chain is usually right.
 An unmarked audit or question reaches you too; route it as one only when the issue plainly asks
 for nothing to be built. "Audit trail for expense edits" is a feature. **Do not invent a reason to skip a stage.** The cost of skipping
@@ -36,7 +37,7 @@ what, and a route that is not walkable in that graph is rejected before anything
 | stage | what it is | skip it when |
 |---|---|---|
 | `project` | the once-per-repo architecture decision | `.sdlc/memory/project.md` already records a real stack. You rarely place this yourself — a script prepends it when that file is still a stub |
-| `maintainer` | splits an epic into issues | this is not an epic |
+| `maintainer` | splits an epic into issues | this is not an epic. An issue asking to build a whole spec or product, or to break it into epics, **is** one, labelled or not |
 | `plan` | decides the approach, emits the work order | never, if anything is being built — see below |
 | `debug` | reproduces a bug live before diagnosing it | this is not a bug report |
 | `implement` | writes the code | nothing is being changed — an audit, a question, a spike |
@@ -127,6 +128,12 @@ is money. `route: ["debug","implement","review","qa"]`, `risk: 85`, confidence 8
 
 **"Change the empty-state copy on the members list"** — real work, and small.
 `route: ["plan","implement","qa"]`, `councils: {plan: "single"}`, no review, confidence 85.
+
+**"Build the product in the spec"**, **"Break the product into epics"** — the whole product,
+which is an epic whether or not anyone labelled it. One plan for it is one comment and no epics.
+`kind: "epic"`, `route: ["maintainer"]`, `on_complete: "comment-only"`, confidence 85 — and
+`["project","maintainer"]` while `project.md` is still a stub (a script prepends `project` if you
+leave it out). Never `["project","plan"]`.
 
 **"Rebuild the admin area"** — too large for one work order and not labelled an epic.
 Do not compose a route for it. `route: []` with `reasoning` saying it needs splitting first,

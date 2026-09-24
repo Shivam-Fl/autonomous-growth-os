@@ -6,9 +6,11 @@
 // actually checked, and this sits on the trust boundary between agents.
 
 const ANNOTATIONS = new Set(['$id', '$schema', 'title', 'description', 'examples', 'default']);
+// No maxLength and no maxItems: an artifact is never refused for how much it says. A cap that
+// creeps back into a schema is refused here as unsupported, and by a test before it ships.
 const KEYWORDS = new Set([
   'type', 'required', 'additionalProperties', 'properties', 'items',
-  'minItems', 'maxItems', 'enum', 'pattern', 'minLength', 'maxLength',
+  'minItems', 'enum', 'pattern', 'minLength',
   'minimum', 'maximum',
 ]);
 
@@ -60,9 +62,6 @@ function walk(schema, data, path, errors) {
     if (schema.minLength !== undefined && data.length < schema.minLength) {
       err(`shorter than minLength ${schema.minLength} (got ${data.length})`);
     }
-    if (schema.maxLength !== undefined && data.length > schema.maxLength) {
-      err(`longer than maxLength ${schema.maxLength} (got ${data.length})`);
-    }
     if (schema.pattern !== undefined && !new RegExp(schema.pattern).test(data)) {
       err(`does not match pattern ${schema.pattern}`);
     }
@@ -76,9 +75,6 @@ function walk(schema, data, path, errors) {
   if (t === 'array') {
     if (schema.minItems !== undefined && data.length < schema.minItems) {
       err(`needs at least ${schema.minItems} item(s), got ${data.length}`);
-    }
-    if (schema.maxItems !== undefined && data.length > schema.maxItems) {
-      err(`allows at most ${schema.maxItems} item(s), got ${data.length}`);
     }
     if (schema.items !== undefined) {
       data.forEach((item, i) => walk(schema.items, item, `${path}[${i}]`, errors));

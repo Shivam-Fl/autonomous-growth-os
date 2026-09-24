@@ -10,7 +10,6 @@
   "properties": {
     "issues": {
       "type": "array",
-      "maxItems": 5,
       "items": {
         "type": "object",
         "required": [
@@ -21,13 +20,11 @@
         "properties": {
           "title": {
             "type": "string",
-            "minLength": 10,
-            "maxLength": 200
+            "minLength": 10
           },
           "body": {
             "type": "string",
             "minLength": 10,
-            "maxLength": 8000,
             "description": "What should be true when it is done, and why. `Covers:`, `Part of #<epic>` and `Depends on #<n>` lines are read as written."
           },
           "epic": {
@@ -40,7 +37,6 @@
     },
     "epic_links": {
       "type": "array",
-      "maxItems": 10,
       "items": {
         "type": "object",
         "required": [

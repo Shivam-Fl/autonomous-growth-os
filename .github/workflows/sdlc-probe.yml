@@ -1,9 +1,13 @@
-# One real one-token request per model, with the runner's own key and headers. Started by
-# `sdlc doctor --live`, which reads the uploaded probe.json and fails on any non-2xx.
+# One real one-token request per model, plus one forced tool call, with the runner's own key and
+# headers. Started by `sdlc doctor --live`, which reads the uploaded probe.json and fails on any
+# non-2xx or on a model that cannot return a tool call. `models` probes candidates instead of the
+# configured map (`sdlc doctor --live --models a,b`), for choosing what a stage should run.
 name: sdlc-probe
 
 on:
   workflow_dispatch:
+    inputs:
+      models: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -11,7 +15,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
@@ -27,6 +31,7 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
           ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROBE_MODELS: ${{ inputs.models }}
         run: node .sdlc/bin/claude-args.mjs --probe probe.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:

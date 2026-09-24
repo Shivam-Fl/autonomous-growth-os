@@ -489,7 +489,7 @@ jobs:
       - name: Post the review
         if: needs.prepare.outputs.mode != 'council' && hashFiles('review/review.md') != ''
         run: |
-          { echo "## Review"; echo; sed 's/^/> /' review/review.md; } | gh pr comment "$PR" --body-file -
+          { echo "## Review"; echo; sed 's/^/> /' review/review.md; } | node .sdlc/bin/post-comment.mjs pr "$PR"
 
       - name: Post the cross-verified review
         id: council

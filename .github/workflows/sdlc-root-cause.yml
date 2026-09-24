@@ -298,9 +298,7 @@ jobs:
             impossible to regress silently.
 
             The validator applies these limits. Write within them the first time — a run should
-            not be spent discovering them. Prose over a cap is trimmed, which loses YOUR words,
-            not the schema's; an acceptance criterion over its cap is REJECTED, because a
-            criterion cut short is a different criterion:
+            not be spent discovering them:
 
             ${{ steps.limits.outputs.limits }}
 

@@ -608,7 +608,9 @@ async function doctor() {
 async function liveProbe() {
   section('Live model probe (sdlc-probe.yml)');
   const since = Date.now() - 60_000;   // our clock and the runner's disagree by seconds
-  try { await gh(['workflow', 'run', 'sdlc-probe.yml']); } catch (e) {
+  const at = process.argv.indexOf('--models');
+  const models = at > 0 ? String(process.argv[at + 1] ?? '') : '';
+  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : [])]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -620,7 +622,7 @@ async function liveProbe() {
     if (!id) await sleep(2000);
   }
   if (!id) return fail('the probe run never appeared', 'gh run list --workflow sdlc-probe.yml');
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 400; i++) {
     const v = await gh(['run', 'view', String(id), '--json', 'status']).then(JSON.parse).catch(() => ({}));
     if (v.status === 'completed') break;
     await sleep(5000);
@@ -629,9 +631,18 @@ async function liveProbe() {
   try {
     await gh(['run', 'download', String(id), '-n', 'sdlc-probe', '-D', dir]);
     for (const r of JSON.parse(readFileSync(join(dir, 'probe.json'), 'utf8'))) {
-      if (r.status === 'skipped') warn(`${r.model} (${r.role}) was not probed`, r.body);
-      else if (r.status >= 200 && r.status < 300) pass(`${r.model} answers`, r.role);
-      else {
+      const timing = r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s ping${r.tool_ms ? `, ${(r.tool_ms / 1000).toFixed(1)}s tool call` : ''}` : '';
+      if (r.role === 'catalog') { pass('the gateway lists', String(r.body).split(',').filter(Boolean).length + ' models'); process.stdout.write(`      ${r.body}\n`); }
+      else if (r.status === 'skipped') warn(`${r.model} (${r.role}) was not probed`, r.body);
+      else if (r.status >= 200 && r.status < 300 && r.tools === 'ok') pass(`${r.model} answers and calls tools`, r.role + timing);
+      else if (r.status >= 200 && r.status < 300) {
+        // A candidate that cannot call tools is information; a CONFIGURED stage that cannot is a
+        // pipeline whose every agent turn will fail.
+        (r.role === 'candidate' ? warn : fail)(`${r.model} answers but cannot call tools: ${r.tools}`,
+          r.role === 'candidate' ? 'unusable for an agent stage' : 'pick a model that returns tool_use for ' + r.role);
+      } else if (r.role === 'candidate') {
+        warn(`${r.model}: HTTP ${r.status} ${String(r.body).replace(/\s+/g, ' ').slice(0, 200)}`, 'not served on /v1/messages with this key');
+      } else {
         fail(`${r.role} → ${r.model}: HTTP ${r.status} ${String(r.body).replace(/\s+/g, ' ').slice(0, 300)}`,
              'fix runtime.provider / runtime.model or the ANTHROPIC_API_KEY secret, then sdlc doctor --live');
       }
@@ -905,7 +916,7 @@ if (!run) {
     '  setup                     interactive: scan this repo and write its config\n' +
     '  install --target <repo>   copy the framework into another repository\n' +
     '  init                      labels and state branch (run inside the repo)\n' +
-    '  doctor [--live]           verify every token, secret and integration\n' +
+    '  doctor [--live [--models a,b]]  verify every token, secret and integration\n' +
     '                            (--live: one real request per model, from the runner)\n' +
     '  status                    show every issue in flight\n' +
     '  halt                      disable every pipeline workflow and cancel its runs\n' +

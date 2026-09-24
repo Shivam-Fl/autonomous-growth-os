@@ -1,37 +1,23 @@
 // Fix what is mechanically fixable, before deciding anything is wrong.
 //
-// A plan council — three agents, twenty minutes of model work — was thrown away because one
-// prose string came out 513 characters against a 500 limit. The pipeline was correct by its
-// own rules and useless in practice, and the same shape had already cost a root-cause run and
-// a QA run.
+// "Fail closed, loudly" is right for a CLAIM: a verdict with no evidence, a work order touching
+// a reserved path, a `next_action` nobody can route. It is wrong for a REPRESENTATION — the
+// right number wearing quotes, an enum in the wrong case, a field the schema never asked for.
+// Discarding the whole artifact over one of those breaks everything downstream by definition.
 //
-// The rule I had applied everywhere, "fail closed, loudly", is right for a CLAIM: a verdict
-// with no evidence, a work order touching a reserved path, a `next_action` nobody can route.
-// It is wrong for a LIMIT. Length caps, array caps and stray fields exist to keep artifacts
-// readable, and nothing downstream breaks if a sentence is trimmed — whereas discarding the
-// whole artifact breaks everything downstream by definition.
+// Length is not repaired, because nothing is limited by it: the schemas carry no length or
+// count caps. They were trimmed here and rejected there, and between them threw away a plan
+// council, a root-cause run, a QA run and a project brief — each correct, each discarded for
+// how much it said. GitHub's own limits on a title or a body are met where the text is posted,
+// in gh() (lib/actions.js), not by making the artifact shorter.
 //
-// So: repair the cosmetic, then validate the rest. What gets repaired is reported, because a
-// silent trim is how a limit becomes invisible and then meaningless.
+// So: repair the representation, then validate the rest. What gets repaired is reported,
+// because a silent repair is how a rule becomes invisible.
 
-const ELLIPSIS = '…';
-
-// Strings that ARE claims, so over-long is an error to re-emit, never a sentence to shorten.
-//
-// Root-cause wrote a 1,140-character acceptance criterion ending "...and the total equals the sum
-// of line items exactly for amounts up to 10^9 minor units". The trim cut it at a word boundary
-// before the invariant, the revision was posted, implemented and QA'd against what was left, and
-// the only record of the cut was one line in a validate log. A criterion is a finding in the same
-// sense a list entry is: losing its end changes what gets built and what gets certified.
-const NEVER_TRIM = new Set([
-  'acceptance[].check', 'acceptance[].how_to_verify',            // work-order
-  'trd.requirements[].requirement', 'trd.requirements[].verified_by', 'prd.scope[]',  // project-brief
-  'pieces[].acceptance[]',                                       // breakdown
-]);
 const scalar = (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
 
 /**
- * @returns {{data: any, repairs: string[]}} the document with cosmetic violations corrected
+ * @returns {{data: any, repairs: string[]}} the document with representation slips corrected
  */
 export function repair(schema, data, path = '') {
   const repairs = [];
@@ -68,16 +54,8 @@ export function repair(schema, data, path = '') {
     }
 
     if (sch.type === 'array' && Array.isArray(val)) {
-      // Entries are repaired; the LIST is never shortened.
-      //
-      // This used to keep the first N and drop the rest, which is indefensible for the arrays
-      // these schemas actually hold: `bugs`, `tests`, `acceptance_rollup`, `files`. Dropping
-      // the 61st bug from a QA report produces a report that passes its own consistency check
-      // and no longer says what the agent found — a silent edit to a merge decision.
-      //
-      // Trimming a sentence loses wording. Trimming a list loses findings. An over-long list
-      // is rare, always meaningful, and the agent is now told the cap up front, so overflow
-      // fails loudly and is re-emitted rather than quietly becoming a shorter truth.
+      // Entries are repaired; the list is never shortened. Dropping the 61st bug from a QA report
+      // leaves a report that passes its own consistency check and no longer says what was found.
       return val.map((v, i) => walk(sch.items, v, `${where}[${i}]`));
     }
 
@@ -141,22 +119,6 @@ export function repair(schema, data, path = '') {
         repairs.push(`${where}: "${val}" read as "${hit}"`);
         return hit;
       }
-    }
-
-    if (sch.type === 'string' && typeof val === 'string') {
-      const claim = NEVER_TRIM.has(String(where).replace(/\[\d+\]/g, '[]'));
-      if (typeof sch.maxLength === 'number' && val.length > sch.maxLength && !claim) {
-        repairs.push(`${where}: trimmed from ${val.length} to ${sch.maxLength} characters`);
-        // Cut at a word boundary where one is near the end, so the trim reads as an edit
-        // rather than as corruption.
-        const cut = val.slice(0, sch.maxLength - ELLIPSIS.length);
-        const space = cut.lastIndexOf(' ');
-        // `> 0` matters: lastIndexOf returns -1 when there is no space at all, and -1 clears
-        // any negative threshold, which silently cut one more character than intended.
-        const atWord = space > 0 && space > cut.length - 60;
-        return (atWord ? cut.slice(0, space) : cut) + ELLIPSIS;
-      }
-      return val;
     }
 
     return val;

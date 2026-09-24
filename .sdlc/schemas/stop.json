@@ -14,8 +14,7 @@
     "reason": {
       "description": "What exactly stops you, what you tried, and what a person would have to provide or decide to unblock it.",
       "type": "string",
-      "minLength": 10,
-      "maxLength": 2000
+      "minLength": 10
     }
   }
 }

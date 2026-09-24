@@ -23,22 +23,18 @@
     },
     "understanding": {
       "type": "string",
-      "minLength": 10,
-      "maxLength": 2000
+      "minLength": 10
     },
     "root_cause": {
-      "type": "string",
-      "maxLength": 2000
+      "type": "string"
     },
     "approach": {
       "type": "string",
-      "minLength": 10,
-      "maxLength": 2000
+      "minLength": 10
     },
     "files": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 50,
       "items": {
         "type": "object",
         "required": [
@@ -50,8 +46,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 400
+            "minLength": 1
           },
           "action": {
             "type": "string",
@@ -63,19 +58,16 @@
           },
           "change": {
             "type": "string",
-            "minLength": 5,
-            "maxLength": 2000
+            "minLength": 5
           },
           "why": {
-            "type": "string",
-            "maxLength": 500
+            "type": "string"
           }
         }
       }
     },
     "tests": {
       "type": "array",
-      "maxItems": 50,
       "items": {
         "type": "object",
         "required": [
@@ -87,8 +79,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 400
+            "minLength": 1
           },
           "action": {
             "type": "string",
@@ -101,7 +92,6 @@
           "cases": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 40,
             "items": {
               "type": "string",
               "minLength": 3
@@ -113,7 +103,6 @@
     "acceptance": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 80,
       "items": {
         "type": "object",
         "required": [
@@ -128,12 +117,10 @@
           },
           "check": {
             "type": "string",
-            "minLength": 5,
-            "maxLength": 2000
+            "minLength": 5
           },
           "how_to_verify": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "string"
           },
           "source": {
             "description": "The requirement this criterion answers: an IAC-n from the issue's '## Acceptance (from the split)' section, or a TR-n from the project brief. Every IAC-n on the issue must be the source of at least one criterion, or be deferred in out_of_scope as 'IAC-n: reason'.",
@@ -150,7 +137,6 @@
     },
     "qa_script": {
       "type": "array",
-      "maxItems": 60,
       "items": {
         "type": "string",
         "minLength": 2
@@ -158,14 +144,12 @@
     },
     "risks": {
       "type": "array",
-      "maxItems": 20,
       "items": {
         "type": "string"
       }
     },
     "out_of_scope": {
       "type": "array",
-      "maxItems": 20,
       "items": {
         "type": "string"
       }
@@ -185,8 +169,7 @@
       "description": "How sure the plan is. Drives whether a human is pulled in regardless of the approval gate."
     },
     "confidence_rationale": {
-      "type": "string",
-      "maxLength": 2000
+      "type": "string"
     },
     "reproduced": {
       "type": "boolean",
@@ -194,16 +177,13 @@
     },
     "evidence": {
       "type": "array",
-      "maxItems": 40,
       "items": {
-        "type": "string",
-        "maxLength": 1000
+        "type": "string"
       },
       "description": "What was actually observed: failing request, console error, state at the moment it broke."
     },
     "alternatives_considered": {
       "type": "array",
-      "maxItems": 10,
       "items": {
         "type": "object",
         "required": [
@@ -213,43 +193,34 @@
         "additionalProperties": false,
         "properties": {
           "approach": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           },
           "rejected_because": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           }
         }
       }
     },
     "assumptions": {
       "type": "array",
-      "maxItems": 20,
       "items": {
-        "type": "string",
-        "maxLength": 500
+        "type": "string"
       }
     },
     "unknowns": {
       "type": "array",
-      "maxItems": 20,
       "items": {
-        "type": "string",
-        "maxLength": 500
+        "type": "string"
       }
     },
     "debate_summary": {
       "type": "string",
-      "maxLength": 4000,
       "description": "Council only. What the critique changed and what the arbiter rejected, with reasons."
     },
     "residual_risks": {
       "type": "array",
-      "maxItems": 20,
       "items": {
-        "type": "string",
-        "maxLength": 500
+        "type": "string"
       },
       "description": "Deliberately not covered. QA reads this first."
     },
@@ -293,8 +264,7 @@
         },
         "reason": {
           "type": "string",
-          "minLength": 10,
-          "maxLength": 500
+          "minLength": 10
         }
       }
     }

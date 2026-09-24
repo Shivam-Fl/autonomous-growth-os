@@ -167,9 +167,33 @@ export async function probe(cfg, env = process.env) {
     ? `${hint('ANTHROPIC_API_KEY', env.ANTHROPIC_API_KEY, keyAt)}. Set the real key: gh secret set ANTHROPIC_API_KEY`
     : badHeader ? `${hint(`header ${badHeader[0]}`, badHeader[1], badHeader[2])}. Fix runtime.provider.headers` : null;
 
+  // PROBE_MODELS (comma-separated) probes candidates instead of the configured map: choosing a
+  // model for a stage is a question about what this gateway serves on THIS API, and the docs'
+  // list of which models speak /v1/messages was not the whole truth — deepseek-v4.1-flash
+  // answered there although it is documented as OpenAI-format only.
   const byModel = new Map();
-  for (const r of ROLES) byModel.set(modelFor(cfg, r), [...(byModel.get(modelFor(cfg, r)) ?? []), r]);
+  const candidates = String(env.PROBE_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
+  if (candidates.length) for (const m of candidates) byModel.set(m, ['candidate']);
+  else for (const r of ROLES) byModel.set(modelFor(cfg, r), [...(byModel.get(modelFor(cfg, r)) ?? []), r]);
   const results = [];
+  const post = (body, ms) => fetch(`${base}/v1/messages`, {
+    method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
+  // Every agent step is Claude Code, which works only through tool calls. A model that answers a
+  // ping and cannot return a tool_use block passes "answers" and then fails every stage's first
+  // turn, so the probe forces one tool call and records whether it came back.
+  const TOOL = { name: 'record', description: 'Record a value.',
+    input_schema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } };
+  const toolCheck = async (model) => {
+    try {
+      const t0 = Date.now();
+      const res = await post({ model, max_tokens: 256, tools: [TOOL], tool_choice: { type: 'tool', name: 'record' },
+        messages: [{ role: 'user', content: 'Call the record tool with value "ok".' }] }, 120_000);
+      const text = await res.text();
+      let used = false;
+      try { used = (JSON.parse(text).content ?? []).some((b) => b.type === 'tool_use' && b.name === 'record'); } catch { /* not JSON */ }
+      return { tools: used ? 'ok' : `no tool_use (HTTP ${res.status}: ${text.replace(/\s+/g, ' ').slice(0, 200)})`, tool_ms: Date.now() - t0 };
+    } catch (e) { return { tools: `tool request failed: ${e.message}` }; }
+  };
   for (const [model, roles] of byModel) {
     const role = roles.join(',');
     if (!model) { results.push({ role, model: '(action default)', status: 'skipped', body: 'no model named' }); continue; }
@@ -179,15 +203,23 @@ export async function probe(cfg, env = process.env) {
       continue;
     }
     try {
-      const res = await fetch(`${base}/v1/messages`, {
-        method: 'POST', headers,
-        body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      results.push({ role, model, status: res.status, body: (await res.text()).slice(0, 500) });
+      const t0 = Date.now();
+      const res = await post({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, 60_000);
+      const entry = { role, model, status: res.status, body: (await res.text()).slice(0, 500), ms: Date.now() - t0 };
+      if (res.ok) Object.assign(entry, await toolCheck(model));
+      results.push(entry);
     } catch (e) {
       results.push({ role, model, status: 0, body: `request failed: ${e.message}` });
     }
+  }
+  // What the gateway says it serves, when it says: the ids to try, not a promise that each one
+  // speaks /v1/messages — the per-model tool check above is what answers that.
+  if (env.ANTHROPIC_API_KEY && !refusal) {
+    try {
+      const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(30_000) });
+      const j = JSON.parse(await res.text());
+      results.push({ role: 'catalog', model: '(gateway)', status: res.status, body: (j.data ?? j.models ?? []).map((m) => m.id ?? m.name ?? m).join(',') });
+    } catch { /* a gateway with no model list is not a failure */ }
   }
   return results;
 }

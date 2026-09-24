@@ -37,6 +37,25 @@ export function prose(body = '') {
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
 }
 
+/** Where the spec lives when config does not say: spec-index.mjs reads the same default. */
+export const SPEC_PATHS = ['docs/spec', 'SPEC.md'];
+
+/**
+ * The spec path the text names or links (`docs/spec/x.md`, a blob URL, a bare `SPEC.md`), or null.
+ * A path under a spec directory counts, and so does the directory itself; `docs/specification.md`
+ * and `MYSPEC.md` do not.
+ */
+export function specPointer(text = '', specPaths = SPEC_PATHS) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const p of specPaths ?? SPEC_PATHS) {
+    const path = String(p).trim().replace(/^\.\//, '').replace(/\/+$/, '');
+    if (!path) continue;
+    const m = String(text).match(new RegExp(`(?<![\\w.-])${esc(path)}(?:/[\\w./-]*[\\w-])?(?![\\w-])`, 'i'));
+    if (m) return m[0];
+  }
+  return null;
+}
+
 /** Paths the issue names explicitly, in backticks, that we can check actually exist. */
 export function namedPaths(body = '') {
   const out = new Set();
@@ -82,7 +101,9 @@ const TRIVIAL = /^\s*(?:#+\s*)?(typo|wording|spelling|grammar|label text|placeho
  * indistinguishable from one a model made badly.
  *
  * @param {{number: number, title?: string, body?: string, labels?: any[], kind?: string}} issue
- * @param {{existingPaths?: string[]}} facts  paths from namedPaths() that really exist in the repo
+ * @param {{existingPaths?: string[], greenfield?: boolean, specPaths?: string[]}} facts
+ *        existingPaths: paths from namedPaths() that really exist in the repo; greenfield:
+ *        `.sdlc/memory/project.md` is still a stub; specPaths: config's `spec.paths`
  */
 export function fastPath(issue = {}, facts = {}) {
   const labels = labelNames(issue);
@@ -167,6 +188,25 @@ export function fastPath(issue = {}, facts = {}) {
       on_complete: 'merge',
       confidence: 90,
       matched_rule: 'label:bug',
+    });
+  }
+
+  // On a greenfield repo the issue that points at the spec IS the product epic. Nothing is built
+  // and nothing is decided, so what it asks for is everything the spec describes, and a single
+  // plan for that is one plan for the whole product that stops at a comment — no epics, ever.
+  // Seen live: "Decide the architecture ... specified in docs/spec/… ... break it into epics" was
+  // routed project -> plan, comment-only, and only worked before because it carried the label.
+  // Last, so a label a person gave on purpose still wins; never on a piece of an epic.
+  const spec = facts.greenfield && !epicOf(issue.body ?? '')
+    && specPointer(`${title}\n${issue.body ?? ''}`, facts.specPaths);
+  if (spec) {
+    return plan({
+      kind: 'epic',
+      reasoning: `Points at the spec (${spec}) on a repository that has not decided what it is built out of, which makes it the product itself. It goes to the maintainer to be split into epics once the architecture is decided, and each piece is routed on its own.`,
+      route: ['maintainer'],
+      on_complete: 'comment-only',
+      confidence: 90,
+      matched_rule: 'greenfield-spec',
     });
   }
 

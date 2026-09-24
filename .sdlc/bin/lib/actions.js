@@ -47,8 +47,50 @@ function viaStdin(args, input) {
   };
 }
 
+// GitHub's own hard limits, met here because every title and body the pipeline posts comes
+// through this function. The artifacts behind them are uncapped by design, so a long one is
+// cut on the way out — never refused, and never a failed run. The whole text is not lost: a
+// work order lives on the ledger, and every agent's file is in the run's artifacts.
+export const TITLE_MAX = 256;
+export const BODY_MAX = 65536;
+
+/** A title that fits, cut at a word boundary with "…". */
+export function fitTitle(title) {
+  const t = String(title);
+  if (t.length <= TITLE_MAX) return t;
+  const cut = t.slice(0, TITLE_MAX - 1);
+  const space = cut.lastIndexOf(' ');
+  return (space > TITLE_MAX / 2 ? cut.slice(0, space) : cut).trimEnd() + '…';
+}
+
+/** A body that fits, keeping its head and its tail — where a verdict or a fenced block sits. */
+export function fitBody(body) {
+  const b = String(body);
+  if (b.length <= BODY_MAX) return b;
+  const marker = (n) => `\n\n[… ${n} characters cut: the full text is on the ledger / in the run's artifacts …]\n\n`;
+  // Sized with the longest count the marker could carry, so the real one never overflows.
+  const keep = BODY_MAX - marker(b.length).length;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return b.slice(0, head) + marker(b.length - keep) + b.slice(b.length - tail);
+}
+
+function fitted({ args, input }) {
+  const t = args.indexOf('--title') + 1;
+  if (t > 0 && String(args[t]).length > TITLE_MAX) {
+    process.stderr.write(`sdlc: title cut from ${String(args[t]).length} characters to GitHub's ${TITLE_MAX}\n`);
+    args = args.with(t, fitTitle(args[t]));
+  }
+  const b = args.indexOf('--body-file') + 1;
+  if (b > 0 && args[b] === '-' && typeof input === 'string' && input.length > BODY_MAX) {
+    process.stderr.write(`sdlc: body cut from ${input.length} characters to GitHub's ${BODY_MAX}\n`);
+    input = fitBody(input);
+  }
+  return { args, input };
+}
+
 export function gh(argv, { input: stdin, ...opts } = {}) {
-  const { args, input } = viaStdin(argv, stdin);
+  const { args, input } = fitted(viaStdin(argv, stdin));
   return new Promise((resolve, reject) => {
     const child = spawn('gh', args, { stdio: ['pipe', 'pipe', 'pipe'], ...opts });
     let stdout = '';

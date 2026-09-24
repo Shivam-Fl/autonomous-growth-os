@@ -152,11 +152,11 @@ const commands = {
     // Through the loader every script that ACTS on an artifact uses, so this step and those
     // scripts cannot disagree about what is valid.
     //
-    // It repairs the cosmetic before judging the rest. A plan council's work — three agents,
-    // twenty minutes — was discarded because one prose string was 513 characters against a
-    // limit of 500. Length caps and stray fields keep artifacts readable; nothing downstream
-    // breaks when a sentence is trimmed, while throwing the artifact away breaks everything
-    // downstream by definition. The strictness is kept for claims, which is what it was for.
+    // It repairs representation slips (a quoted number, an enum in the wrong case, a stray
+    // field) before judging the rest, because throwing the artifact away over one breaks
+    // everything downstream by definition. Length is never judged: the schemas carry no caps,
+    // and gh() meets GitHub's limits where the text is posted. The strictness is kept for
+    // claims, which is what it was for.
     const art = loadArtifact(name, file, { root: ROOT });
     if (art.repairs.length) {
       writeFileSync(file, `${JSON.stringify(art.data, null, 2)}\n`);
@@ -384,7 +384,8 @@ const commands = {
 
     const { ledger } = await updateLedger(repo, issue, (l) => {
       const base = l ?? newLedger(issue);
-      const bumped = bumpAttempt(base, stage, { agent: flags.agent ?? stage });
+      // Which run spent it, so this run's failure handler can tell it is already counted.
+      const bumped = bumpAttempt(base, stage, { agent: flags.agent ?? stage, runId: process.env.GITHUB_RUN_ID ?? null });
       if (!bumped.ok) fail(bumped.reason);
       const budget = checkBudget(bumped.ledger, cfg.limits);
       if (!budget.ok) {
@@ -456,6 +457,7 @@ const commands = {
       next = {
         ...next,
         attempts: Object.fromEntries(STAGES.map((st) => [st, 0])),
+        attempt_run: null,
         history: [...next.history, {
           at: new Date().toISOString(), agent: 'human',
           action: `budget reset (was ${JSON.stringify(l.attempts)})`,

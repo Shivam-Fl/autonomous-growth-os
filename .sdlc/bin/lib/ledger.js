@@ -96,6 +96,10 @@ export function newLedger(issue, now = new Date()) {
   // rather than only how old the lock is. A cancelled job never reaches its unlock step.
   lock_run: null,
     attempts: Object.fromEntries(STAGES.map((s) => [s, 0])),
+    // The last attempt spent, as {counter, n, run}: which Actions run spent it. A stage spends
+    // its attempt before it can fail, so the failure handler asks this whether the run that
+    // failed is already counted rather than guessing "one more than the counter".
+    attempt_run: null,
     // `/sdlc stop`, as {by, at, why}. While set, nothing but a human moves this issue anywhere
     // except needs-human or blocked — see transition().
     halted: null,
@@ -235,13 +239,29 @@ export function isLockStale(ledger, now = new Date()) {
  * Increments on DISPATCH, not on success. An agent that fails to even start still consumed
  * an attempt — otherwise a crash loop is free and runs forever.
  */
-export function bumpAttempt(ledger, stage, { agent = 'system', now = new Date() } = {}) {
+export function bumpAttempt(ledger, stage, { agent = 'system', now = new Date(), runId = null } = {}) {
   if (!STAGES.includes(stage)) return { ok: false, reason: `unknown stage "${stage}"` };
-  const next = { ...ledger.attempts, [stage]: (ledger.attempts[stage] ?? 0) + 1 };
+  const next = { ...ledger.attempts, [stage]: (ledger.attempts?.[stage] ?? 0) + 1 };
+  const attempt_run = { counter: stage, n: next[stage], run: runId ? String(runId) : null };
   return {
     ok: true,
-    ledger: stamp({ ...ledger, attempts: next }, now, agent, `${stage} attempt ${next[stage]}`),
+    ledger: stamp({ ...ledger, attempts: next, attempt_run }, now, agent, `${stage} attempt ${next[stage]}`),
   };
+}
+
+/**
+ * Which attempt of `counter` a failure of run `runId` was.
+ *
+ * Every counted stage spends its attempt as its first step, so a run that failed after that is
+ * already on the counter: it IS attempt n, not n + 1. Counting it again recorded a first plan
+ * failure as "plan attempt 2", and the triage read that as a repeat and escalated it. Only a run
+ * that never spent one — it died before its attempt step, or it is the gate, which spends none —
+ * is the one after the counter.
+ */
+export function failedAttempt(ledger, counter, runId) {
+  const spent = ledger?.attempt_run;
+  if (spent && runId && spent.counter === counter && String(spent.run) === String(runId)) return spent.n;
+  return (ledger?.attempts?.[counter] ?? 0) + 1;
 }
 
 /**

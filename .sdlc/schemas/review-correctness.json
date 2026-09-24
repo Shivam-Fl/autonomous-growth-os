@@ -10,7 +10,6 @@
   "properties": {
     "findings": {
       "type": "array",
-      "maxItems": 50,
       "items": {
         "type": "object",
         "required": [
@@ -30,28 +29,23 @@
           },
           "claim": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 1000
+            "minLength": 1
           },
           "file": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "line": {
             "type": "integer",
             "minimum": 1
           },
           "evidence": {
-            "type": "string",
-            "maxLength": 4000
+            "type": "string"
           },
           "fix": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "string"
           },
           "ac": {
             "type": "string",
-            "maxLength": 40,
             "description": "The acceptance criterion this breaks, as AC-n, when there is one. A criterion rejected two rounds running sends the work order to root-cause, and this is how the pipeline tells."
           }
         }
@@ -59,10 +53,8 @@
     },
     "callers_verified": {
       "type": "array",
-      "maxItems": 200,
       "items": {
-        "type": "string",
-        "maxLength": 300
+        "type": "string"
       }
     },
     "tests_would_fail_before_fix": {

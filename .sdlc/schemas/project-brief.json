@@ -26,7 +26,6 @@
     },
     "coverage": {
       "type": "array",
-      "maxItems": 400,
       "items": {
         "type": "object",
         "required": [
@@ -52,16 +51,13 @@
           },
           "refs": {
             "type": "array",
-            "maxItems": 20,
             "items": {
-              "type": "string",
-              "maxLength": 40
+              "type": "string"
             },
             "description": "The TR- ids (or scope items) that carry this section. Empty only for a non-goal or a deferral."
           },
           "why": {
             "type": "string",
-            "maxLength": 500,
             "description": "For a non-goal or a deferral: why, in a sentence the owner can disagree with."
           }
         }
@@ -71,7 +67,6 @@
     "product": {
       "type": "string",
       "minLength": 20,
-      "maxLength": 2000,
       "description": "What this is, in a paragraph a new contributor could act on. Not the ticket restated."
     },
     "stack": {
@@ -85,18 +80,15 @@
         "choice": {
           "type": "string",
           "minLength": 3,
-          "maxLength": 500,
           "description": "Languages, runtime, framework, data store. Named versions where they matter."
         },
         "why": {
           "type": "string",
           "minLength": 20,
-          "maxLength": 2000,
           "description": "The reasoning, including what was rejected. This is the most expensive class of decision to reverse in the whole pipeline."
         },
         "rejected": {
           "type": "array",
-          "maxItems": 6,
           "items": {
             "type": "object",
             "required": [
@@ -106,12 +98,10 @@
             "additionalProperties": false,
             "properties": {
               "option": {
-                "type": "string",
-                "maxLength": 200
+                "type": "string"
               },
               "because": {
-                "type": "string",
-                "maxLength": 600
+                "type": "string"
               }
             }
           }
@@ -129,13 +119,11 @@
         "shape": {
           "type": "string",
           "minLength": 20,
-          "maxLength": 2000,
           "description": "How the pieces fit: what talks to what, and across which boundary."
         },
         "modules": {
           "type": "array",
           "minItems": 2,
-          "maxItems": 20,
           "items": {
             "type": "object",
             "required": [
@@ -146,13 +134,11 @@
             "properties": {
               "path": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 200
+                "minLength": 1
               },
               "holds": {
                 "type": "string",
-                "minLength": 5,
-                "maxLength": 500
+                "minLength": 5
               }
             }
           }
@@ -162,21 +148,17 @@
     "invariants": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 20,
       "items": {
         "type": "string",
-        "minLength": 10,
-        "maxLength": 500
+        "minLength": 10
       },
       "description": "Domain rules the whole product must respect, whatever the ticket. \"Money is integer minor units, never a float\" is the shape: a rule that is cheap to state now and expensive to retrofit after four features have assumed otherwise."
     },
     "conventions": {
       "type": "array",
-      "maxItems": 20,
       "items": {
         "type": "string",
-        "minLength": 10,
-        "maxLength": 400
+        "minLength": 10
       },
       "description": "How code in THIS stack is written here: layout, naming, errors, tests, dependencies. Becomes .sdlc/memory/conventions.md, which the implementer follows and the reviewer checks drift against."
     },
@@ -191,28 +173,22 @@
       "properties": {
         "verify": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 300
+          "minLength": 1
         },
         "serve": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 300
+          "minLength": 1
         },
         "seed": {
-          "type": "string",
-          "maxLength": 300
+          "type": "string"
         },
         "ready": {
-          "type": "string",
-          "maxLength": 300
+          "type": "string"
         },
         "stubbed": {
           "type": "array",
-          "maxItems": 4,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "Which verbs are placeholders, and what has to exist before each can be real."
         }
@@ -221,13 +197,11 @@
     "deploy": {
       "type": "string",
       "minLength": 10,
-      "maxLength": 1000,
       "description": "Where this runs, and how a preview of a pull request is produced. QA drives that preview, so \"nowhere yet\" is an answer with consequences — say so."
     },
     "decisions": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 10,
       "items": {
         "type": "object",
         "required": [
@@ -239,22 +213,18 @@
         "properties": {
           "title": {
             "type": "string",
-            "minLength": 5,
-            "maxLength": 200
+            "minLength": 5
           },
           "decision": {
             "type": "string",
-            "minLength": 10,
-            "maxLength": 1000
+            "minLength": 10
           },
           "because": {
             "type": "string",
-            "minLength": 20,
-            "maxLength": 2000
+            "minLength": 20
           },
           "consequences": {
             "type": "string",
-            "maxLength": 1000,
             "description": "What this makes easy and what it makes hard. An ADR without this is an announcement."
           }
         }
@@ -262,10 +232,8 @@
     },
     "open_questions": {
       "type": "array",
-      "maxItems": 10,
       "items": {
-        "type": "string",
-        "maxLength": 500
+        "type": "string"
       },
       "description": "What could not be decided from the brief, and what would settle it. The human reading this gate is the person who can answer them."
     },
@@ -285,16 +253,13 @@
       "properties": {
         "questions": {
           "type": "array",
-          "maxItems": 12,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "What had to be true for this plan to be right, that the repo could not answer."
         },
         "findings": {
           "type": "array",
-          "maxItems": 25,
           "items": {
             "type": "object",
             "required": [
@@ -306,17 +271,14 @@
             "properties": {
               "claim": {
                 "type": "string",
-                "maxLength": 2000,
                 "description": "What was learned, stated so it could be wrong."
               },
               "evidence": {
                 "type": "string",
-                "maxLength": 1200,
                 "description": "What the source actually says. Not a paraphrase of the claim."
               },
               "source": {
                 "type": "string",
-                "maxLength": 500,
                 "description": "URL, or \"first-party: <where>\" when it came from the repo or the issue."
               },
               "confidence": {
@@ -326,7 +288,6 @@
               },
               "affects": {
                 "type": "string",
-                "maxLength": 300,
                 "description": "Which decision below this changed. A finding that changed nothing is noise."
               }
             }
@@ -335,10 +296,8 @@
         },
         "rejected_sources": {
           "type": "array",
-          "maxItems": 10,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "Sources looked at and not trusted, with why. Cheap to write, stops the next agent re-reading them."
         }
@@ -346,7 +305,6 @@
     },
     "assumptions": {
       "type": "array",
-      "maxItems": 15,
       "items": {
         "type": "object",
         "required": [
@@ -357,22 +315,18 @@
         "properties": {
           "assumption": {
             "type": "string",
-            "maxLength": 400,
             "description": "Stated as a fact someone could check."
           },
           "basis": {
             "type": "string",
-            "maxLength": 400,
             "description": "Why it is believed — evidence, convention, or nothing."
           },
           "if_wrong": {
             "type": "string",
-            "maxLength": 500,
             "description": "What breaks and how expensive it is to discover late."
           },
           "validate_by": {
             "type": "string",
-            "maxLength": 300,
             "description": "The cheapest thing that would settle it."
           }
         }
@@ -394,12 +348,10 @@
       "properties": {
         "problem": {
           "type": "string",
-          "maxLength": 1500,
           "description": "The problem in the world, not the feature list."
         },
         "users": {
           "type": "array",
-          "maxItems": 8,
           "items": {
             "type": "object",
             "required": [
@@ -410,55 +362,44 @@
             "additionalProperties": false,
             "properties": {
               "who": {
-                "type": "string",
-                "maxLength": 200
+                "type": "string"
               },
               "context": {
                 "type": "string",
-                "maxLength": 400,
                 "description": "When and where they hit this."
               },
               "pain": {
-                "type": "string",
-                "maxLength": 500
+                "type": "string"
               },
               "sophistication": {
-                "type": "string",
-                "maxLength": 200
+                "type": "string"
               }
             }
           }
         },
         "jobs": {
           "type": "array",
-          "maxItems": 15,
           "items": {
-            "type": "string",
-            "maxLength": 400
+            "type": "string"
           },
           "description": "Jobs to be done, as outcomes the user wants, not features."
         },
         "scope": {
           "type": "array",
-          "maxItems": 60,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "In scope for v1."
         },
         "non_goals": {
           "type": "array",
-          "maxItems": 20,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "Deliberately not doing, with the reason. The most useful section here."
         },
         "success": {
           "type": "array",
-          "maxItems": 10,
           "items": {
             "type": "object",
             "required": [
@@ -468,16 +409,13 @@
             "additionalProperties": false,
             "properties": {
               "metric": {
-                "type": "string",
-                "maxLength": 300
+                "type": "string"
               },
               "target": {
-                "type": "string",
-                "maxLength": 200
+                "type": "string"
               },
               "how_measured": {
-                "type": "string",
-                "maxLength": 400
+                "type": "string"
               }
             }
           },
@@ -485,10 +423,8 @@
         },
         "constraints": {
           "type": "array",
-          "maxItems": 12,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "Budget, deadline, compliance, existing systems."
         }
@@ -504,7 +440,6 @@
       "properties": {
         "requirements": {
           "type": "array",
-          "maxItems": 150,
           "items": {
             "type": "object",
             "required": [
@@ -516,17 +451,14 @@
             "properties": {
               "id": {
                 "type": "string",
-                "maxLength": 20,
                 "description": "TR-1, TR-2 …"
               },
               "requirement": {
                 "type": "string",
-                "maxLength": 600,
                 "description": "Testable. \"Fast\" is not; \"p95 under 400ms at 50 rps\" is."
               },
               "rationale": {
-                "type": "string",
-                "maxLength": 500
+                "type": "string"
               },
               "priority": {
                 "type": "string",
@@ -538,12 +470,10 @@
               },
               "verified_by": {
                 "type": "string",
-                "maxLength": 300,
                 "description": "The check that proves it — a test, a load run, a QA step."
               },
               "sources": {
                 "type": "array",
-                "maxItems": 10,
                 "items": {
                   "type": "string",
                   "pattern": "^S-[0-9]+$"
@@ -555,7 +485,6 @@
         },
         "data_model": {
           "type": "array",
-          "maxItems": 30,
           "items": {
             "type": "object",
             "required": [
@@ -565,20 +494,16 @@
             "additionalProperties": false,
             "properties": {
               "entity": {
-                "type": "string",
-                "maxLength": 120
+                "type": "string"
               },
               "holds": {
-                "type": "string",
-                "maxLength": 500
+                "type": "string"
               },
               "keys": {
-                "type": "string",
-                "maxLength": 300
+                "type": "string"
               },
               "notes": {
-                "type": "string",
-                "maxLength": 400
+                "type": "string"
               }
             }
           },
@@ -586,7 +511,6 @@
         },
         "interfaces": {
           "type": "array",
-          "maxItems": 30,
           "items": {
             "type": "object",
             "required": [
@@ -597,31 +521,25 @@
             "properties": {
               "name": {
                 "type": "string",
-                "maxLength": 200,
                 "description": "Endpoint, queue, or module boundary."
               },
               "shape": {
-                "type": "string",
-                "maxLength": 800
+                "type": "string"
               },
               "errors": {
                 "type": "string",
-                "maxLength": 500,
                 "description": "What the caller sees when it fails."
               },
               "idempotency": {
-                "type": "string",
-                "maxLength": 300
+                "type": "string"
               }
             }
           }
         },
         "nfrs": {
           "type": "array",
-          "maxItems": 15,
           "items": {
-            "type": "string",
-            "maxLength": 400
+            "type": "string"
           },
           "description": "Performance, availability, security, privacy, cost — each with a number."
         }
@@ -638,7 +556,6 @@
           "properties": {
             "tokens": {
               "type": "array",
-              "maxItems": 40,
               "items": {
                 "type": "object",
                 "required": [
@@ -650,16 +567,13 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "maxLength": 80,
                     "description": "--color-bg, --space-3, --font-body …"
                   },
                   "value": {
-                    "type": "string",
-                    "maxLength": 200
+                    "type": "string"
                   },
                   "use": {
-                    "type": "string",
-                    "maxLength": 300
+                    "type": "string"
                   }
                 }
               },
@@ -667,26 +581,21 @@
             },
             "dark_mode": {
               "type": "string",
-              "maxLength": 400,
               "description": "How it inverts, or why it does not exist."
             },
             "typography": {
-              "type": "string",
-              "maxLength": 600
+              "type": "string"
             },
             "density": {
-              "type": "string",
-              "maxLength": 300
+              "type": "string"
             },
             "motion": {
-              "type": "string",
-              "maxLength": 300
+              "type": "string"
             }
           }
         },
         "patterns": {
           "type": "array",
-          "maxItems": 25,
           "items": {
             "type": "object",
             "required": [
@@ -697,17 +606,14 @@
             "properties": {
               "pattern": {
                 "type": "string",
-                "maxLength": 150,
                 "description": "Form, table, empty state, destructive action, toast …"
               },
               "rule": {
                 "type": "string",
-                "maxLength": 700,
                 "description": "The decision every ticket follows."
               },
               "example": {
-                "type": "string",
-                "maxLength": 500
+                "type": "string"
               }
             }
           },
@@ -715,7 +621,6 @@
         },
         "layouts": {
           "type": "array",
-          "maxItems": 20,
           "items": {
             "type": "object",
             "required": [
@@ -726,17 +631,14 @@
             "additionalProperties": false,
             "properties": {
               "screen": {
-                "type": "string",
-                "maxLength": 150
+                "type": "string"
               },
               "purpose": {
                 "type": "string",
-                "maxLength": 400,
                 "description": "The one question this screen answers."
               },
               "regions": {
                 "type": "string",
-                "maxLength": 900,
                 "description": "The blocks and where they sit."
               },
               "states": {
@@ -746,34 +648,28 @@
                 "properties": {
                   "ideal": {
                     "type": "string",
-                    "maxLength": 600,
                     "description": "The state the screen is designed for."
                   },
                   "empty": {
                     "type": "string",
-                    "maxLength": 600,
                     "description": "No data yet — what the person sees and what it invites them to do."
                   },
                   "loading": {
                     "type": "string",
-                    "maxLength": 600,
                     "description": "While data is in flight. Skeleton, spinner, or nothing, and why."
                   },
                   "partial": {
                     "type": "string",
-                    "maxLength": 600,
                     "description": "Some data, some still arriving or missing."
                   },
                   "error": {
                     "type": "string",
-                    "maxLength": 600,
                     "description": "It failed. What is said, and what the person can do next."
                   }
                 }
               },
               "responsive": {
                 "type": "string",
-                "maxLength": 400,
                 "description": "What changes at narrow width."
               }
             }
@@ -781,10 +677,8 @@
         },
         "accessibility": {
           "type": "array",
-          "maxItems": 12,
           "items": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "description": "Contrast, focus order, keyboard paths, labels — the ones QA will check."
         }

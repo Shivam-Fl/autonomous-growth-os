@@ -298,18 +298,18 @@ export function unresolvedFindings(reviews = []) {
   return asFollowUps(raw);
 }
 
-// Repair the cosmetic, refuse the false: an over-long title is trimmed, an entry with no title
-// at all is dropped. A ticket called "undefined" is worse than no ticket, because somebody has
-// to open it to find that out.
+// Refuse the false: an entry with no title at all is dropped. A ticket called "undefined" is
+// worse than no ticket, because somebody has to open it to find that out. Length is not cut
+// here; gh() meets GitHub's limit on the issue body these are filed into.
 const asFollowUps = (raw) => raw
   .map((f) => ({
-    title: String(f?.title ?? '').trim().slice(0, 120),
-    detail: String(f?.detail ?? f?.fix ?? '').trim().slice(0, 4000),
+    title: String(f?.title ?? '').trim(),
+    detail: String(f?.detail ?? f?.fix ?? '').trim(),
   }))
-  .filter((f) => f.title)
-  // Capped. A reviewer that decides to emit forty of these is a reviewer misusing the field,
-  // and forty new issues is worse than none — it buries the backlog it is meant to protect.
-  .slice(0, 10);
+  // Every one is kept. This was cut to the first ten, against forty separate issues burying the
+  // backlog — but they are filed as ONE follow-up issue now, so a cap only dropped findings the
+  // reviewer made, in silence.
+  .filter((f) => f.title);
 
 /**
  * What one blocking entry is about, as the keys a repeat is counted on.

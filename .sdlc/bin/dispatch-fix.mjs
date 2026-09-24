@@ -29,7 +29,7 @@ import {
 } from './lib/failure.js';
 import { validate, formatErrors } from './lib/validate.js';
 import { readLedger, updateLedger } from './lib/state-io.js';
-import { checkBudget } from './lib/ledger.js';
+import { checkBudget, failedAttempt } from './lib/ledger.js';
 import { resolveStage, retryHint } from './lib/flow-graph.js';
 import { readWorkOrder } from './lib/work-order.js';
 
@@ -323,7 +323,7 @@ if (!raw) {
     stage,
     error_signature: signatureOf(`indescribable:${stage}:${process.env.RUN_ID ?? Date.now()}`),
     error_type: 'unknown',
-    attempt: (l.attempts?.[counter] ?? 0) + 1,
+    attempt: failedAttempt(l, counter, thisRun),
     at: new Date().toISOString(),
     digest: `the ${stage} stage failed and no log could be retrieved`,
   }) : null)).catch(() => {});
@@ -360,7 +360,8 @@ const entry = {
   stage,
   error_signature: signature,
   error_type: errorType,
-  attempt: (before?.attempts?.[counter] ?? 0) + 1,
+  // The attempt this run spent as it started, not one more than the counter: see failedAttempt.
+  attempt: failedAttempt(before, counter, thisRun),
   at: new Date().toISOString(),
   digest: summary.slice(0, 300),
 };
@@ -462,7 +463,8 @@ const packet = {
       ? { failed_checks: process.env.FAILED_CHECKS.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 30) }
       : {}),
     ...(runUrl ? { run_url: runUrl.slice(0, 500) } : {}),
-    prior_signatures: history.slice(-20).map((h) => `${h.stage}:${h.error_type}:${h.error_signature}`),
+    // Before this one: the triage read its own signature here as a repeat of itself.
+    prior_signatures: history.slice(0, -1).slice(-20).map((h) => `${h.stage}:${h.error_type}:${h.error_signature}`),
   },
 };
 

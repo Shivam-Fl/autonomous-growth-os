@@ -11,7 +11,6 @@
   "properties": {
     "findings": {
       "type": "array",
-      "maxItems": 50,
       "items": {
         "type": "object",
         "required": [
@@ -30,35 +29,29 @@
           },
           "claim": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 1000
+            "minLength": 1
           },
           "file": {
-            "type": "string",
-            "maxLength": 300
+            "type": "string"
           },
           "line": {
             "type": "integer",
             "minimum": 1
           },
           "evidence": {
-            "type": "string",
-            "maxLength": 4000
+            "type": "string"
           },
           "fix": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "string"
           },
           "ac": {
-            "type": "string",
-            "maxLength": 40
+            "type": "string"
           }
         }
       }
     },
     "verification_of_a": {
       "type": "array",
-      "maxItems": 50,
       "items": {
         "type": "object",
         "required": [
@@ -82,8 +75,7 @@
           },
           "reasoning": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
+            "minLength": 1
           }
         }
       }

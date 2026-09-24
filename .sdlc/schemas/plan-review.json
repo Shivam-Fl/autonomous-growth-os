@@ -35,7 +35,6 @@
     },
     "blocking": {
       "type": "array",
-      "maxItems": 20,
       "items": {
         "type": "object",
         "required": [
@@ -45,26 +44,21 @@
         "additionalProperties": false,
         "properties": {
           "claim": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           },
           "evidence": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "string"
           },
           "required_change": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           }
         }
       }
     },
     "notes": {
       "type": "array",
-      "maxItems": 20,
       "items": {
-        "type": "string",
-        "maxLength": 1000
+        "type": "string"
       }
     },
     "route_request": {
@@ -99,8 +93,7 @@
         },
         "reason": {
           "type": "string",
-          "minLength": 10,
-          "maxLength": 500
+          "minLength": 10
         }
       }
     }

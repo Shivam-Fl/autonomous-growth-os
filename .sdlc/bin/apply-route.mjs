@@ -177,6 +177,15 @@ await updateLedger(repo, issue, (l) => {
   };
 }).catch((e) => process.stdout.write(`::warning::could not record the route on the ledger: ${e.message}\n`));
 
+// The maintainer splits epics and nothing else, and an epic is known by its label: isEpic,
+// finishedEpics and wake-dependents read it, and the planner refuses a labelled issue. A route to
+// the maintainer that a rule or the model inferred — a greenfield issue pointing at the spec —
+// carried none, so until the split labelled it the issue was tracked as an ordinary one.
+if (plan.route.includes('maintainer')) {
+  await gh(['issue', 'edit', String(issue), '--add-label', 'sdlc:epic']).catch((e) =>
+    process.stdout.write(`::warning::could not label #${issue} sdlc:epic: ${String(e.message).split('\n')[0]}\n`));
+}
+
 const skipped = ['plan', 'debug', 'implement', 'review', 'qa'].filter((s) => !plan.route.includes(s));
 const body = [
   `## Route — ${plan.kind}`,

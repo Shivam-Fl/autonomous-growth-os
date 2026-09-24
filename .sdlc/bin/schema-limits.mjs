@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 // Render a schema's constraints as something an agent can actually follow.
 //
-// A plan council spent twenty minutes producing a work order and the pipeline discarded it
-// because one string was 513 characters against a limit of 500. The agent was never told the
-// limit existed. Nothing in the pack, nothing in the prompt — the constraint lived only in the
-// validator that rejected the result.
-//
-// A limit nobody is told about is not a constraint, it is a trap. This prints the caps and
-// allowed values straight from the schema, so the prompt carries them and they cannot drift
-// from what is enforced.
+// A constraint that lives only in the validator that rejects the result is not a constraint,
+// it is a trap. This prints the types, allowed values, patterns and entry shapes straight from
+// the schema, so the prompt carries them and they cannot drift from what is enforced. There
+// are no length or count caps to print: the schemas carry none.
 
 import { readFileSync } from 'node:fs';
 import { setOutput, die } from './lib/actions.js';
@@ -45,10 +41,8 @@ const describe = (sch, path) => {
     caps.push(`a JSON ${unquoted}`);
   }
 
-  if (typeof sch.maxLength === 'number') caps.push(`at most ${sch.maxLength} characters`);
   if (typeof sch.minLength === 'number' && sch.minLength > 1) caps.push(`at least ${sch.minLength} characters`);
   const entries = (n) => `${n} ${n === 1 ? 'entry' : 'entries'}`;
-  if (typeof sch.maxItems === 'number') caps.push(`at most ${entries(sch.maxItems)}`);
   if (typeof sch.minItems === 'number' && sch.minItems > 0) caps.push(`at least ${entries(sch.minItems)}`);
   if (Array.isArray(sch.enum)) caps.push(`one of: ${sch.enum.join(' | ')}`);
   if (sch.pattern) caps.push(`matching ${sch.pattern}`);

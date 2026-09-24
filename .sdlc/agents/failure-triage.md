@@ -33,7 +33,9 @@ So your job is two questions, in this order:
   log does not exist yet. You are dispatched afterwards, so you can read the whole thing.
   The real error is in here. Find it before you theorise.
 - `failure-packet.json` — what the script could tell from inside: error type, signature, and
-  `prior_signatures`, which is what else has failed on this issue.
+  `prior_signatures`, which is what failed on this issue *before* this failure. `attempt` is
+  the attempt the failed run itself spent — 1 is the stage's first try — and `occurrences`
+  counts this failure, so 1 means it has not happened before. A first failure is not a repeat.
 - `previous-work-order.json`, when the stage was working from a plan.
 - The repository, at the commit that failed. Read the code that threw.
 

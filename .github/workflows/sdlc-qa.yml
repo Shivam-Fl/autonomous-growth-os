@@ -488,8 +488,7 @@ jobs:
             failed acceptance criterion, or a failing test with no bug filed, is rejected.
 
             The validator applies these limits. Write within them the first time — a run should
-            not be spent discovering them, and anything over a cap is trimmed rather than
-            rejected, which loses YOUR words, not the schema's:
+            not be spent discovering them:
 
             ${{ steps.limits.outputs.limits }}
 

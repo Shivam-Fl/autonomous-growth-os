@@ -32,7 +32,6 @@
     "reasoning": {
       "type": "string",
       "minLength": 10,
-      "maxLength": 800,
       "description": "One to three sentences: why this kind and why this route. What a human reads when they disagree with it."
     },
     "risk": {
@@ -43,7 +42,6 @@
     },
     "route": {
       "type": "array",
-      "maxItems": 8,
       "items": {
         "type": "string",
         "enum": [
@@ -108,7 +106,6 @@
     },
     "matched_rule": {
       "type": "string",
-      "maxLength": 200,
       "description": "Set when a deterministic rule decided this and no model ran. 'Matched by script' has to be visible, not silent."
     },
     "route_request": {
@@ -143,8 +140,7 @@
         },
         "reason": {
           "type": "string",
-          "minLength": 10,
-          "maxLength": 500
+          "minLength": 10
         }
       }
     }

@@ -40,12 +40,10 @@
       "additionalProperties": false,
       "properties": {
         "url": {
-          "type": "string",
-          "maxLength": 500
+          "type": "string"
         },
         "browser": {
-          "type": "string",
-          "maxLength": 100
+          "type": "string"
         },
         "mode": {
           "type": "string",
@@ -55,15 +53,13 @@
           ]
         },
         "commit": {
-          "type": "string",
-          "maxLength": 64
+          "type": "string"
         }
       }
     },
     "fixtures": {
       "description": "Accounts, orgs, seed records the agent provisioned. Recorded so reruns are reproducible and so teardown can be verified.",
       "type": "array",
-      "maxItems": 40,
       "items": {
         "type": "object",
         "required": [
@@ -84,16 +80,13 @@
           },
           "ref": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 300
+            "minLength": 1
           },
           "role": {
-            "type": "string",
-            "maxLength": 100
+            "type": "string"
           },
           "note": {
-            "type": "string",
-            "maxLength": 500
+            "type": "string"
           },
           "cleaned_up": {
             "type": "boolean"
@@ -105,7 +98,6 @@
       "description": "The matrix AND its results in one array — a case carries its own outcome, so they cannot drift apart.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 200,
       "items": {
         "type": "object",
         "required": [
@@ -124,12 +116,10 @@
           },
           "title": {
             "type": "string",
-            "minLength": 3,
-            "maxLength": 300
+            "minLength": 3
           },
           "area": {
-            "type": "string",
-            "maxLength": 120
+            "type": "string"
           },
           "type": {
             "type": "string",
@@ -168,23 +158,19 @@
           },
           "covers_ac": {
             "description": "The acceptance criterion or criteria this case exercises: one id, or a list of them. Informational — acceptance_rollup is what is judged.",
-            "maxItems": 20,
             "items": {
-              "type": "string",
-              "maxLength": 50
+              "type": "string"
             }
           },
           "steps": {
             "type": "array",
-            "maxItems": 40,
             "items": {
               "type": "string",
               "minLength": 2
             }
           },
           "expected": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -196,19 +182,15 @@
             ]
           },
           "actual": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "string"
           },
           "blocked_reason": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           },
           "evidence": {
             "type": "array",
-            "maxItems": 20,
             "items": {
-              "type": "string",
-              "maxLength": 500
+              "type": "string"
             }
           },
           "bug_id": {
@@ -225,7 +207,6 @@
     "bugs": {
       "description": "First-class defect records. A failing test is an observation; a bug is a claim about the product, and it must stand on its own for a developer who never saw the test run.",
       "type": "array",
-      "maxItems": 60,
       "items": {
         "type": "object",
         "required": [
@@ -254,27 +235,22 @@
           },
           "title": {
             "type": "string",
-            "minLength": 5,
-            "maxLength": 300
+            "minLength": 5
           },
           "area": {
-            "type": "string",
-            "maxLength": 120
+            "type": "string"
           },
           "expected": {
             "type": "string",
-            "minLength": 3,
-            "maxLength": 1000
+            "minLength": 3
           },
           "actual": {
             "type": "string",
-            "minLength": 3,
-            "maxLength": 1000
+            "minLength": 3
           },
           "repro": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 40,
             "items": {
               "type": "string",
               "minLength": 2
@@ -282,15 +258,12 @@
           },
           "evidence": {
             "type": "array",
-            "maxItems": 20,
             "items": {
-              "type": "string",
-              "maxLength": 500
+              "type": "string"
             }
           },
           "suspected_cause": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           },
           "introduced_by_pr": {
             "description": "true = this PR caused it, so it is fixed on this PR and does NOT merge — no severity gets a pass. false = pre-existing, found in passing, filed as its own issue. Required: a bug that says neither is neither blocked nor filed.",
@@ -310,7 +283,6 @@
     "retest": {
       "description": "One entry for every bug the previous QA round filed as introduced by this PR (the prompt lists them). A bug that is not mentioned again reads as fixed, so each one says what happened to it.",
       "type": "array",
-      "maxItems": 60,
       "items": {
         "type": "object",
         "required": [
@@ -336,8 +308,7 @@
             ]
           },
           "note": {
-            "type": "string",
-            "maxLength": 1000
+            "type": "string"
           }
         }
       }
@@ -346,7 +317,6 @@
       "description": "Per-AC verdict the state machine branches on, independent of how many exploratory cases ran.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 80,
       "items": {
         "type": "object",
         "required": [
@@ -370,7 +340,6 @@
           },
           "test_ids": {
             "type": "array",
-            "maxItems": 20,
             "items": {
               "type": "string",
               "pattern": "^(T-[0-9]+|ci)$"
@@ -383,7 +352,6 @@
     "coverage_gaps": {
       "description": "Surfaces the agent judged at risk but could not test, and why. Honest gaps beat silent ones.",
       "type": "array",
-      "maxItems": 30,
       "items": {
         "type": "object",
         "required": [
@@ -393,27 +361,22 @@
         "additionalProperties": false,
         "properties": {
           "area": {
-            "type": "string",
-            "maxLength": 500
+            "type": "string"
           },
           "reason": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "string"
           }
         }
       }
     },
     "console_errors": {
       "type": "array",
-      "maxItems": 50,
       "items": {
-        "type": "string",
-        "maxLength": 1000
+        "type": "string"
       }
     },
     "network_failures": {
       "type": "array",
-      "maxItems": 50,
       "items": {
         "type": "object",
         "required": [
@@ -423,8 +386,7 @@
         "additionalProperties": false,
         "properties": {
           "url": {
-            "type": "string",
-            "maxLength": 500
+            "type": "string"
           },
           "status": {
             "type": "integer",
@@ -433,8 +395,7 @@
             "description": "The HTTP status, or 0 when there was no response at all (CORS, refused, reset)."
           },
           "method": {
-            "type": "string",
-            "maxLength": 10
+            "type": "string"
           }
         }
       }
@@ -449,8 +410,7 @@
       ]
     },
     "hint": {
-      "type": "string",
-      "maxLength": 2000
+      "type": "string"
     },
     "route_request": {
       "type": "object",
@@ -484,8 +444,7 @@
         },
         "reason": {
           "type": "string",
-          "minLength": 10,
-          "maxLength": 500
+          "minLength": 10
         }
       }
     }

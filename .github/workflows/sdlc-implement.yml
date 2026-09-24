@@ -555,7 +555,7 @@ jobs:
           { echo "## The implementer stopped"; echo;
             sed 's/^/> /' _out/implementer-note.md; echo;
             echo '`/sdlc approve` runs the implementer again once the work order is right; `/sdlc replan "<why>"` revises it.'
-          } | gh issue comment "$ISSUE" --body-file -
+          } | node .sdlc/bin/post-comment.mjs issue "$ISSUE"
           node .sdlc/bin/sdlc-ctl.mjs advance --issue "$ISSUE" --to needs-human --agent implementer
           node --input-type=module -e 'import { markResume } from "./.sdlc/bin/lib/route-io.js"; await markResume(process.env.GITHUB_REPOSITORY, process.env.ISSUE, "implement", "retry")'
           echo "yes=true" >> "$GITHUB_OUTPUT"
@@ -593,7 +593,7 @@ jobs:
         if: steps.pr.outputs.pr != '' && hashFiles('_out/implementer-reply.md') != ''
         run: |
           { echo "## The implementer's answer"; echo; sed 's/^/> /' _out/implementer-reply.md; } \
-            | gh pr comment "${{ steps.pr.outputs.pr }}" --body-file -
+            | node .sdlc/bin/post-comment.mjs pr "${{ steps.pr.outputs.pr }}"
 
       # The gate does not start itself here. GitHub will not trigger a workflow from an event
       # its own token caused, so the `pull_request` opened/synchronize event that is supposed
