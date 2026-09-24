@@ -1,5 +1,5 @@
 {
-  "source_sha": "f64c9e6610c3a359e2044d7f5cbaa98ffced4a6f",
+  "source_sha": "683decdf901478e502e657480d9bda8becd9cb8d",
   "files": {
     ".github/workflows/ci-verify.yml": "00dd3ad84c994ae51df62e54289bd3c5bbd960c80c9df56ad6720f27a54940a0",
     ".github/workflows/sdlc-gate.yml": "d142df3a2414cd71ef020b78ce4ba1b5714dab2bdc164148a08e6d4552eaa227",
@@ -9,7 +9,7 @@
     ".github/workflows/sdlc-loop.yml": "4524cba941b71d2961f0717c7bef1a1414d30df5b465f026c7a57c2db923afd7",
     ".github/workflows/sdlc-maintainer.yml": "9295f82699d51cb4c5dfae76301d7e285cf004e4f5319f92d7c09f4da375fa7b",
     ".github/workflows/sdlc-plan.yml": "35f3f40889034f1392d43b0a368670b97b47d5a043059e493b1419c5a9a166fb",
-    ".github/workflows/sdlc-probe.yml": "97ac0c837cd72bf6349d46edbd0c01e7faa5b211279d4a5ba1e5c9292a47c406",
+    ".github/workflows/sdlc-probe.yml": "ea79aa1e4a2acf23bc9ef2a80d93b44d825aed4a74edf68d4b5ef6108b04b71a",
     ".github/workflows/sdlc-project.yml": "375b9e1d84034f94eab2c94f1b1a70b065a79c29134e6819b798b7f63e5f3564",
     ".github/workflows/sdlc-qa.yml": "21e62c1da4f152d206bfbff69c82b9688b796e3c5edec8a0c5359805efa2e1a0",
     ".github/workflows/sdlc-release.yml": "e34c0d59e381af063012454390038ec144c5f428d1a8a98f987583c73d7a364f",
@@ -55,6 +55,7 @@
     ".sdlc/templates/memory/conventions.md": "7246a59163c69e9c87562ef70e66db53000bd433f790db4b9772d94c1ead7623",
     ".sdlc/templates/memory/qa/environment.md": "ed9b09ed942cca34fcdf2031d36bbf9fb27bbc5c889864d862be7dd1b9a99740",
     ".sdlc/templates/memory/qa/selectors.md": "b1d20ec1d2f2c37ee5de2bc0000999524d0d6d2e838ab68d333a65c609b69677",
+    ".sdlc/bin/agent-check.mjs": "a15c92722893a07c0d037d181578b6d78c435a98dca8cec7b07db4380203b9f5",
     ".sdlc/bin/already-implemented.mjs": "ef849dac1f6ce2365daddea6eff9c9dc0a847ee7a794d2ab16d6e104b91cca55",
     ".sdlc/bin/apply-plan-review.mjs": "9d5bf3839879b87fb034a27ad6cb937be65ef7df110846e2940b366a1e7c2b1c",
     ".sdlc/bin/apply-project-brief.mjs": "d62e11475e6afc98b04a2463fb14c85eda9aab56fec2cff2216463b549db2e41",
@@ -158,6 +159,6 @@
     ".sdlc/bin/wake-dependents.mjs": "214d3afb8307d46d58f7c2bb0e535c66d7854f1ea5c2faf4b8279b9a2da5c851",
     ".sdlc/bin/watchdog-report.mjs": "28c36e3a877cd02f18e52425267f9d88de7ef33f83bf003936dc61f1902b0adf",
     ".sdlc/flow-graph.json": "bb0ce998b904bf37b8065d8cf5a542bbb995fd86ad39c6fbb4ac4a2d86ad9570",
-    "bin/sdlc": "a56929eed37829470bded1eca3d88b5f25d5fef00b79f720951e5e39c3d6b832"
+    "bin/sdlc": "48c8b0b15ab69921b117191d32513fcf00fe5b27e2868abea77aa484c58b5451"
   }
 }

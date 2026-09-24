@@ -11,6 +11,9 @@ on:
       # Models the gateway serves only on the OpenAI API, probed through a local LiteLLM translator
       # (`sdlc doctor --live --bridge a,b`) — the same path an agent job would take to run one.
       bridge: { required: false, type: string, default: '' }
+      # 'true' also runs a real Claude Code session on each bridged model (write a file, read it
+      # back): streaming and multi-turn tool results, which a ping cannot exercise.
+      agent_check: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -59,10 +62,21 @@ jobs:
           # The translator's own view of each request. Printed, never uploaded: this is a public
           # repo's job log, where GitHub masks the key; an artifact would not be masked.
           tail -60 /tmp/litellm.log || true
+      - name: A real Claude Code session per bridged model
+        if: inputs.bridge != '' && inputs.agent_check == 'true'
+        env:
+          ANTHROPIC_BASE_URL: http://127.0.0.1:4000
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODELS: ${{ inputs.bridge }}
+        run: |
+          npm install -g --no-audit --no-fund @anthropic-ai/claude-code >/dev/null
+          node .sdlc/bin/agent-check.mjs agent.json
+          tail -40 /tmp/litellm.log || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: sdlc-probe
           path: |
             probe.json
             bridge.json
+            agent.json
           if-no-files-found: warn

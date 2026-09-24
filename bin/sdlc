@@ -612,7 +612,8 @@ async function liveProbe() {
   const models = at > 0 ? String(process.argv[at + 1] ?? '') : '';
   const bt = process.argv.indexOf('--bridge');
   const bridge = bt > 0 ? String(process.argv[bt + 1] ?? '') : '';
-  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : []), ...(bridge ? ['-f', `bridge=${bridge}`] : [])]); } catch (e) {
+  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : []), ...(bridge ? ['-f', `bridge=${bridge}`] : []),
+    ...(bridge && process.argv.includes('--agent') ? ['-f', 'agent_check=true'] : [])]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -636,6 +637,12 @@ async function liveProbe() {
       ? JSON.parse(readFileSync(join(dir, 'bridge.json'), 'utf8')).filter((r) => r.role !== 'catalog')
         .map((r) => ({ ...r, model: `${r.model} (via translator)` }))
       : [];
+    if (existsSync(join(dir, 'agent.json'))) {
+      for (const a of JSON.parse(readFileSync(join(dir, 'agent.json'), 'utf8'))) {
+        (a.ok ? pass : warn)(`Claude Code on ${a.model} (via translator) ${a.ok ? 'finished the task' : 'did not finish the task'}`,
+          `${a.secs}s, ${a.turns ?? '?'} turns${a.error ? ` — ${a.error}` : ''}`);
+      }
+    }
     if (bridge && !bridged.length) fail('the translator probe produced nothing', `read the "Start the translator" step of run ${id}`);
     for (const r of [...JSON.parse(readFileSync(join(dir, 'probe.json'), 'utf8')), ...bridged]) {
       const timing = r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s ping${r.tool_ms ? `, ${(r.tool_ms / 1000).toFixed(1)}s tool call` : ''}` : '';
