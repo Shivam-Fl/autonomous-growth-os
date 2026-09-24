@@ -1,5 +1,5 @@
 {
-  "source_sha": "43a600cae5c319e9a76135e70577f47660a533b3",
+  "source_sha": "d5d394b276abb5af0c3a7aae0d9a597f2623a9ca",
   "files": {
     ".github/workflows/ci-verify.yml": "00dd3ad84c994ae51df62e54289bd3c5bbd960c80c9df56ad6720f27a54940a0",
     ".github/workflows/sdlc-gate.yml": "d142df3a2414cd71ef020b78ce4ba1b5714dab2bdc164148a08e6d4552eaa227",
@@ -67,7 +67,7 @@
     ".sdlc/bin/check-split-criteria.mjs": "dbe54c1bf96573cd0b41bc486c35dee78052d5f96034920e746504d82ab51959",
     ".sdlc/bin/check-split.mjs": "adc178c1e2848fabe6b2cdbae4408d4308fa1fc541448b380188e82755dd7248",
     ".sdlc/bin/check-url.mjs": "a7ed71906edc91fae6a6a530740720dc15825fdf738e1b6846c33eb159bc5e69",
-    ".sdlc/bin/claude-args.mjs": "4c61625eac8a814bbd3fb6a83f47fb0cd24b8df8665df5c504c18296b99e7d2c",
+    ".sdlc/bin/claude-args.mjs": "414ecda727c39642f1991b7d3694b0575305d9d169d4bcbcf7f375cdf5853a87",
     ".sdlc/bin/dispatch-fix.mjs": "7c1444b155431033726a2617278c5402e095e0172e8db2ba12b369aabd6e392c",
     ".sdlc/bin/dispatch.mjs": "2af240f8eb68b04340e37fae68ba15e82ad29f2cca891b9946cc50529cfab9f5",
     ".sdlc/bin/ensure-ci.mjs": "b9d1c405fca7439563d8605e8a02ecc7ddf6e0952a24cb849530777377bedfb8",

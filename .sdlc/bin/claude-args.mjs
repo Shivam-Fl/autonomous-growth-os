@@ -186,12 +186,16 @@ export async function probe(cfg, env = process.env) {
   const toolCheck = async (model) => {
     try {
       const t0 = Date.now();
-      const res = await post({ model, max_tokens: 256, tools: [TOOL], tool_choice: { type: 'tool', name: 'record' },
-        messages: [{ role: 'user', content: 'Call the record tool with value "ok".' }] }, 120_000);
+      // Automatic tool choice, as Claude Code sends it. A FORCED tool_choice ({type: 'tool'}) is
+      // refused with a bare 400 by this gateway's translation for qwen3.7-plus and
+      // deepseek-v4.1-flash — models that ran a whole project under Claude Code — so forcing it
+      // reported working models as unusable.
+      const res = await post({ model, max_tokens: 512, tools: [TOOL],
+        messages: [{ role: 'user', content: 'Call the record tool with value "ok". Do not answer in text.' }] }, 120_000);
       const text = await res.text();
       let used = false;
       try { used = (JSON.parse(text).content ?? []).some((b) => b.type === 'tool_use' && b.name === 'record'); } catch { /* not JSON */ }
-      return { tools: used ? 'ok' : `no tool_use (HTTP ${res.status}: ${text.replace(/\s+/g, ' ').slice(0, 200)})`, tool_ms: Date.now() - t0 };
+      return { tools: used ? 'ok' : res.ok ? `answered in text instead of calling the tool: ${text.replace(/\s+/g, ' ').slice(0, 200)}` : `no tool_use (HTTP ${res.status}: ${text.replace(/\s+/g, ' ').slice(0, 200)})`, tool_ms: Date.now() - t0 };
     } catch (e) { return { tools: `tool request failed: ${e.message}` }; }
   };
   for (const [model, roles] of byModel) {
