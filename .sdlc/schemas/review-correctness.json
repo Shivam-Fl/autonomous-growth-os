@@ -1,0 +1,80 @@
+{
+  "$id": "review-correctness",
+  "title": "Review council — correctness",
+  "description": "Reviewer A's findings, written to review/correctness.json and checked by reviewer B before any of them reach the PR. Read by post-review.mjs, which refuses a file that is missing or does not validate: an empty review is not a clean one.",
+  "type": "object",
+  "required": [
+    "findings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": [
+          "severity",
+          "claim"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocking",
+              "major",
+              "minor"
+            ],
+            "description": "blocking holds the merge. major and minor do not, and any left unfixed become one follow-up issue."
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "file": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "fix": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "ac": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "The acceptance criterion this breaks, as AC-n, when there is one. A criterion rejected two rounds running sends the work order to root-cause, and this is how the pipeline tells."
+          }
+        }
+      }
+    },
+    "callers_verified": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "string",
+        "maxLength": 300
+      }
+    },
+    "tests_would_fail_before_fix": {
+      "type": "boolean"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "request-changes"
+      ],
+      "description": "Informational. The merged verdict is computed from the findings that survive verification, not taken from here."
+    }
+  }
+}

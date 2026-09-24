@@ -1,0 +1,186 @@
+# The orchestrator. Parses reports and privileged commands, advances the state machine.
+# This is the only workflow that acts on a human comment.
+name: sdlc-loop
+
+on:
+  issue_comment:
+    types: [created]
+  # A person closing an issue, or closing the pipeline's PR without merging it, is a decision
+  # the pipeline has to hear. Neither was listened for: the chain carried on, the next implement
+  # reopened the rejected branch, and the issue held its slot forever.
+  issues:
+    types: [closed]
+  pull_request:
+    types: [closed]
+
+# Concurrency is per JOB, and only jobs that act enter a group.
+#
+# It was one workflow-level group per issue number, and GitHub keeps one PENDING run per group:
+# a newer one replaces it. So any comment at all — an outsider's "+1" on a public repo — queued
+# behind a running command and displaced the maintainer's `/sdlc approve` waiting there, or the
+# merged handler for the brief PR. A skipped job never enters its group.
+
+permissions:
+  # `statusCheckRollup` is a GraphQL field over check runs AND legacy commit statuses, and it
+  # needs a grant for each. Without both, `gh pr view --json statusCheckRollup` fails with
+  # "Resource not accessible by integration" — which reads as an auth problem rather than as a
+  # missing permission, and is why this was learned once in sdlc-gate and nowhere else.
+  checks: read
+  statuses: read
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write          # required to dispatch the next stage with `gh workflow run`
+
+jobs:
+  command:
+    # Only a comment from someone with write access enters the group. Any `/sdlc` comment did,
+    # and the group keeps one pending run: an outsider's "what does /sdlc approve do?" replaced
+    # a maintainer's queued approve, and `/sdlc status` dumped the ledger for anyone. The
+    # allowlist is still parseCommand's to check inside; this decides who may queue at all.
+    if: >-
+      github.event_name == 'issue_comment' && contains(github.event.comment.body, '/sdlc')
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    concurrency:
+      group: sdlc-cmd-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+      # The framework's own dependency is vendored, so this only checks it loads. There is no
+      # product install here, deliberately: `npm ci` in the root runs every install script of
+      # every dependency merged into main, and this job holds contents, issues, pull-requests
+      # and actions write.
+      - name: Bootstrap
+        run: node .sdlc/bin/ensure-deps.mjs
+
+      # Authority comes from the comment AUTHOR and their repo association — never from the
+      # comment body. No text in a comment can grant itself permission.
+      - name: Parse the command
+        id: cmd
+        run: |
+          node .sdlc/bin/sdlc-ctl.mjs command \
+            --body "$COMMENT_BODY" \
+            --author "${{ github.event.comment.user.login }}" \
+            --association "${{ github.event.comment.author_association }}"
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+
+      # A command nobody can run should say so. The refusal itself is silent by design — on a
+      # public repository, telling a stranger which names are privileged is an invitation to
+      # probe — but an unfinished allowlist is a misconfiguration, not an intrusion, and the
+      # person who needs to hear about it is the one who typed the command.
+      - name: Say when no allowlist has been configured
+        if: steps.cmd.outputs.unconfigured == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$ISSUE" --body-file - <<'MSG'
+          ## That command was read and could not be run
+
+          `allowlist` in `.sdlc/config.yml` is still `REPLACE_ME`, so no account is authorised to
+          issue `/sdlc` commands here — including the owner. `sdlc install` cannot know who owns a
+          repository, so it writes the placeholder and says so in its output.
+
+          Replace it with the accounts that may drive this pipeline:
+
+          ```yaml
+          allowlist:
+            - "your-github-username"
+          ```
+
+          Everyone else's comments stay data rather than instructions, which is the point of the
+          list — it just has to name somebody first.
+          MSG
+
+      # An owner's typo — `/sdlc aprove` — was refused into a log nobody opens, which looks
+      # exactly like being ignored. Only someone who may issue commands is told; a stranger's
+      # unknown command stays silent like every other refusal.
+      - name: Say when an authorised person typed an unknown command
+        if: steps.cmd.outputs.usage == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          REASON: ${{ steps.cmd.outputs.reason }}
+        run: |
+          gh issue comment "$ISSUE" --body "Nothing was done: $REASON."
+
+      - name: Act on it
+        if: steps.cmd.outputs.command != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMAND: ${{ steps.cmd.outputs.command }}
+          # `payload`, not `args`: an answer or a replan note keeps every line it was written with.
+          ARGS: ${{ steps.cmd.outputs.payload }}
+          # Who decided it. An answer that outlives the thread has to say whose it was.
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          ISSUE: ${{ github.event.issue.number }}
+          # On a pull request that number is the PR's. run-command resolves the issue it
+          # belongs to, and refuses rather than acting on the PR as if it were one.
+          IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+        run: node .sdlc/bin/run-command.mjs
+
+  merged:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    concurrency:
+      group: sdlc-merge-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      # Vendored dependency check only — no product install with this job's write token.
+      - name: Bootstrap
+        run: node .sdlc/bin/ensure-deps.mjs
+      - name: Advance to merged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node .sdlc/bin/on-merge.mjs
+
+  # A person closed the issue, or closed the pipeline's PR without merging it. Either way they
+  # said no, and on-close.mjs makes every stage still running stop at its next ledger write.
+  # The pipeline's own closes use GITHUB_TOKEN and fire no event; the actor check is the second
+  # lock on that door.
+  closed:
+    if: >-
+      github.actor != 'github-actions[bot]' && (github.event_name == 'issues'
+      || (github.event_name == 'pull_request' && github.event.pull_request.merged == false))
+    concurrency:
+      group: sdlc-merge-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The default branch's scripts, never the closed PR's merge ref: this job holds write
+      # tokens, and the code on that ref is exactly what a person just declined.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+      - name: Bootstrap
+        run: node .sdlc/bin/ensure-deps.mjs
+      - name: Stop what the close declined
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.event.sender.login }}
+          ISSUE: ${{ github.event.issue.number }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node .sdlc/bin/on-close.mjs

@@ -1,0 +1,188 @@
+{
+  "$id": "breakdown",
+  "title": "Epic breakdown",
+  "description": "How the maintainer splits an epic into independently shippable issues. A script creates one issue per piece from this file, so it is the whole of what each issue says.",
+  "type": "object",
+  "required": [
+    "epic",
+    "pieces"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "epic": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "understanding": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 4000,
+      "description": "How you read the epic, and the clubbing test's answer for every adjacent pair of pieces. Posted on the epic with the list of issues."
+    },
+    "pieces": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "why",
+          "acceptance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 200
+          },
+          "why": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000,
+            "description": "What a user can do once this lands that they could not before."
+          },
+          "context": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "What the planner of this piece needs from the epic that the acceptance lines do not say: the screens, the data, the constraints. Copied into the issue body as written."
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 500
+            }
+          },
+          "covers": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z]+-[0-9]+$",
+              "maxLength": 40
+            },
+            "description": "The TR- ids (and S- sections) this piece delivers. Written on the issue as its Covers: line; the epic does not close until everything its pieces cover was built by a completed piece or deferred."
+          },
+          "depends_on": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "1-based indexes of other pieces that must land first."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "bug",
+              "chore"
+            ]
+          },
+          "risk": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Named when the piece touches money, auth, migrations or infra."
+          },
+          "out_of_scope": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          "issue": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Re-split only: the existing issue this piece is. Its title and body are rewritten from the piece. Ignored on a first split."
+          },
+          "absorbs": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Re-split only: existing issues folded into this piece. Give this piece their acceptance lines; each is closed with a comment naming this piece's issue."
+          }
+        }
+      }
+    },
+    "deferred": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "what"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "what": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "The part of the epic not split out yet."
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Why it waits."
+          },
+          "covers": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z]+-[0-9]+$",
+              "maxLength": 40
+            },
+            "description": "The TR- ids (and S- sections) left to this deferral, so the epic can close without them honestly."
+          }
+        }
+      },
+      "description": "Parts of the epic deliberately not split out yet. Each is filed as its own issue labelled sdlc:deferred, so it is tracked rather than forgotten."
+    },
+    "epic_links": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "epic",
+          "depends_on"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "epic": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The open epic that waits."
+          },
+          "depends_on": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The open epic it cannot be built before."
+          }
+        }
+      },
+      "description": "Epics whose product genuinely cannot be built before another's. A script adds `Depends on #<depends_on>` to each `epic`; both must be open issues labelled sdlc:epic."
+    },
+    "created": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "Ignored. The pipeline creates the issues from pieces[] and records their numbers itself."
+    }
+  }
+}

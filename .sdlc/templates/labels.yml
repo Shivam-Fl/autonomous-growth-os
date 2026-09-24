@@ -1,0 +1,39 @@
+# Applied by `sdlc init`. Labels ARE the state machine — keep names in sync with
+# STATES in .sdlc/bin/lib/ledger.js.
+- { name: "sdlc:triage",          color: "ededed", description: "New, awaiting intake" }
+- { name: "sdlc:planning",        color: "0e8a16", description: "Planner is writing the work order" }
+- { name: "sdlc:plan-review",     color: "fbca04", description: "Work order awaiting human approval" }
+- { name: "sdlc:implementing",    color: "1d76db", description: "Implementer is applying the work order" }
+- { name: "sdlc:ci-red",          color: "b60205", description: "Deterministic CI failed" }
+- { name: "sdlc:ci-green",        color: "0e8a16", description: "Deterministic CI passed" }
+- { name: "sdlc:review",          color: "5319e7", description: "Reviewer is reading the diff" }
+- { name: "sdlc:qa",              color: "006b75", description: "QA is testing against a live preview" }
+- { name: "sdlc:qa-pass",         color: "0e8a16", description: "QA passed" }
+- { name: "sdlc:qa-fail",         color: "b60205", description: "QA found blocking defects" }
+- { name: "sdlc:merged",          color: "6f42c1", description: "Merged, release agent running" }
+- { name: "sdlc:done",            color: "0e8a16", description: "Complete" }
+- { name: "sdlc:blocked",         color: "d93f0b", description: "Blocked on something external" }
+- { name: "sdlc:needs-human",     color: "e99695", description: "Stopped — a human must decide" }
+- { name: "sdlc:budget-exceeded", color: "b60205", description: "Spent a stage's attempt budget; /sdlc retry <stage> refills it" }
+
+# NOT a state — it says what KIND of issue this is, and it is the only label a human applies
+# by hand. Seven places read it: the maintainer workflow triggers on it, sdlc-plan refuses
+# anything carrying it, and the Router sends it straight to be split.
+#
+# It was missing from this file for as long as epics have existed, so `sdlc init` never
+# created it and the first epic on a fresh repo could not be labelled at all without someone
+# creating the label first. Nothing failed loudly: the label simply did not exist, and an
+# epic opened without it looked like an ordinary feature and was planned as one.
+- { name: "sdlc:epic",            color: "c5def5", description: "Too large for one work order — the maintainer splits it" }
+
+# NOT states either: they say an open issue is deliberately not the pipeline's to start. The
+# wake pass offers every open issue with no state label, so without these an owner could not
+# file a note, a question or a "not yet" issue without it being planned within fifteen minutes.
+- { name: "sdlc:ignore",          color: "ffffff", description: "Not for the pipeline — nothing starts it" }
+- { name: "sdlc:deferred",        color: "d4c5f9", description: "Split out of an epic and deliberately left for later" }
+- { name: "sdlc:coverage",        color: "c2e0c6", description: "The pipeline's spec-coverage tracker — a report, not work" }
+
+# Kinds a person marks on purpose. The Router's free rules take an audit only from this label or
+# an `Audit:` title: a keyword anywhere in the title closed features unbuilt as audits.
+- { name: "sdlc:audit",           color: "bfdadc", description: "Sweep what exists and file findings — nothing is built" }
+- { name: "sdlc:trivial",         color: "fef2c0", description: "A wording-sized change — one planning pass, no review stage" }

@@ -1,0 +1,152 @@
+{
+  "$id": "flow-plan",
+  "title": "Flow plan",
+  "description": "Which stages this one ticket actually needs. Written by the Router — a script when a deterministic rule matches, a cheap model when none does — and read by every hand-off after it.",
+  "type": "object",
+  "required": [
+    "issue",
+    "kind",
+    "reasoning",
+    "route",
+    "on_complete",
+    "confidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "bug",
+        "feature",
+        "chore",
+        "investigation",
+        "audit",
+        "question",
+        "epic"
+      ]
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 800,
+      "description": "One to three sentences: why this kind and why this route. What a human reads when they disagree with it."
+    },
+    "risk": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "How expensive it would be to get this wrong. High risk routes to a human whatever the rest of this says."
+    },
+    "route": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "enum": [
+          "project",
+          "maintainer",
+          "plan",
+          "debug",
+          "implement",
+          "review",
+          "qa"
+        ]
+      },
+      "description": "Ordered. An empty route means the Router will not decide this one, which sends it to a human rather than guessing."
+    },
+    "councils": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "type": "string",
+          "enum": [
+            "single",
+            "council"
+          ]
+        },
+        "review": {
+          "type": "string",
+          "enum": [
+            "single",
+            "council"
+          ]
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ADDITIVE ONLY. A gate the config has on stays on whatever this says; the Router may ask for a gate the config does not require, never waive one it does. Routing around a human gate is the one thing a routing decision must not be able to do.",
+      "properties": {
+        "plan_approval": {
+          "type": "boolean"
+        },
+        "merge_approval": {
+          "type": "boolean"
+        }
+      }
+    },
+    "on_complete": {
+      "type": "string",
+      "enum": [
+        "merge",
+        "file-issue-only",
+        "comment-only"
+      ],
+      "description": "merge: the ordinary end. file-issue-only: an audit, which has no PR and turns every finding into its own issue. comment-only: a question or a spike, answered in writing and deliberately not built."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "How sure the Router is of this route. Below gates.min_route_confidence the issue goes to a human, and an absent score counts as below."
+    },
+    "matched_rule": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Set when a deterministic rule decided this and no model ran. 'Matched by script' has to be visible, not silent."
+    },
+    "route_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "stage",
+        "reason"
+      ],
+      "description": "A later stage asking the Router to change the route mid-flight. Only the Router may grant it, and only against the graph.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "insert_stage",
+            "needs_earlier_stage",
+            "scope_changed"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "project",
+            "maintainer",
+            "plan",
+            "debug",
+            "implement",
+            "review",
+            "qa"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

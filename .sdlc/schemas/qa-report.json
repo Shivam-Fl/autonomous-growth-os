@@ -1,0 +1,493 @@
+{
+  "$id": "qa-report",
+  "title": "QA Report",
+  "description": "Output of the adversarial QA agent. The agent designs its own test matrix from the diff, provisions its own fixtures, executes live, and files bugs. next_action is the only field the orchestrator branches on.",
+  "type": "object",
+  "required": [
+    "verdict",
+    "issue",
+    "attempt",
+    "tests",
+    "acceptance_rollup",
+    "next_action"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "blocked"
+      ]
+    },
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pr": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Absent only on an audit — a route with no PR, testing what is already deployed. next_action must then be report-only, and the consistency check enforces both directions."
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "browser": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "compose"
+          ]
+        },
+        "commit": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "fixtures": {
+      "description": "Accounts, orgs, seed records the agent provisioned. Recorded so reruns are reproducible and so teardown can be verified.",
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "account",
+              "org",
+              "record",
+              "file",
+              "token"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "cleaned_up": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "tests": {
+      "description": "The matrix AND its results in one array — a case carries its own outcome, so they cannot drift apart.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "type",
+          "priority",
+          "source",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^T-[0-9]+$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "functional",
+              "regression",
+              "edge",
+              "negative",
+              "boundary",
+              "permission",
+              "concurrency",
+              "a11y",
+              "performance",
+              "security",
+              "exploratory"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "p0",
+              "p1",
+              "p2",
+              "p3"
+            ]
+          },
+          "source": {
+            "description": "Why this case exists. 'ac' = from acceptance criteria; 'diff' = derived from what the PR actually touched; 'memory' = a past bug pattern in .sdlc/memory; 'exploratory' = the agent went looking for trouble.",
+            "type": "string",
+            "enum": [
+              "ac",
+              "diff",
+              "memory",
+              "exploratory"
+            ]
+          },
+          "covers_ac": {
+            "description": "The acceptance criterion or criteria this case exercises: one id, or a list of them. Informational — acceptance_rollup is what is judged.",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 50
+            }
+          },
+          "steps": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+              "type": "string",
+              "minLength": 2
+            }
+          },
+          "expected": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "blocked",
+              "skipped"
+            ]
+          },
+          "actual": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "blocked_reason": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "evidence": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          },
+          "bug_id": {
+            "type": "string",
+            "pattern": "^BUG-[0-9]+$"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "bugs": {
+      "description": "First-class defect records. A failing test is an observation; a bug is a claim about the product, and it must stand on its own for a developer who never saw the test run.",
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "severity",
+          "title",
+          "expected",
+          "actual",
+          "repro",
+          "introduced_by_pr"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^BUG-[0-9]+$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "major",
+              "minor",
+              "trivial"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 300
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "expected": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1000
+          },
+          "actual": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1000
+          },
+          "repro": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 40,
+            "items": {
+              "type": "string",
+              "minLength": 2
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          },
+          "suspected_cause": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "introduced_by_pr": {
+            "description": "true = this PR caused it, so it is fixed on this PR and does NOT merge — no severity gets a pass. false = pre-existing, found in passing, filed as its own issue. Required: a bug that says neither is neither blocked nor filed.",
+            "type": "boolean"
+          },
+          "reproducible": {
+            "type": "string",
+            "enum": [
+              "always",
+              "intermittent",
+              "once"
+            ]
+          }
+        }
+      }
+    },
+    "retest": {
+      "description": "One entry for every bug the previous QA round filed as introduced by this PR (the prompt lists them). A bug that is not mentioned again reads as fixed, so each one says what happened to it.",
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "required": [
+          "bug_id",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "bug_id": {
+            "type": "string",
+            "pattern": "^BUG-[0-9]+$"
+          },
+          "test_id": {
+            "type": "string",
+            "pattern": "^T-[0-9]+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "fixed",
+              "still_present",
+              "dropped"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "acceptance_rollup": {
+      "description": "Per-AC verdict the state machine branches on, independent of how many exploratory cases ran.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 80,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "blocked",
+              "not_covered"
+            ]
+          },
+          "test_ids": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^(T-[0-9]+|ci)$"
+            },
+            "description": "The cases that prove this criterion. \"ci\" means CI proves it, and only a criterion the work order marks verify: \"test\" may cite it."
+          }
+        }
+      }
+    },
+    "coverage_gaps": {
+      "description": "Surfaces the agent judged at risk but could not test, and why. Honest gaps beat silent ones.",
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "required": [
+          "area",
+          "reason"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "area": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      }
+    },
+    "console_errors": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    },
+    "network_failures": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": [
+          "url",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 599,
+            "description": "The HTTP status, or 0 when there was no response at all (CORS, refused, reset)."
+          },
+          "method": {
+            "type": "string",
+            "maxLength": 10
+          }
+        }
+      }
+    },
+    "next_action": {
+      "type": "string",
+      "enum": [
+        "merge",
+        "revise",
+        "escalate",
+        "report-only"
+      ]
+    },
+    "hint": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "route_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "stage",
+        "reason"
+      ],
+      "description": "Optional. This agent asking the Router for a detour: a stage the route did not include, because the route was decided before anyone had read the code. Asking is all it does — only the Router grants one, deterministically, against the graph and the same attempt budget as everything else.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "insert_stage",
+            "needs_earlier_stage",
+            "scope_changed"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "project",
+            "maintainer",
+            "plan",
+            "debug",
+            "implement",
+            "review",
+            "qa"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}
