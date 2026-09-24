@@ -213,7 +213,7 @@
         ],
         "title": "Connect Meta read with fake provider and live campaign dashboard",
         "why": "An operator sees real-shaped Meta campaigns, spend and insights in the dashboard with no write credentials anywhere in the path.",
-        "issue": null
+        "issue": 18
       },
       {
         "acceptance": [
@@ -347,6 +347,7 @@
   },
   "children": [
     16,
-    17
+    17,
+    18
   ]
 }
