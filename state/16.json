@@ -432,6 +432,16 @@
       "prior_signatures": [
         "implement:unknown:3ed18acf24906ff0"
       ]
+    },
+    "triage": {
+      "verdict": "escalate",
+      "diagnosis": "The build job died in the 'How the app boots' step before the implement agent ever ran: `node .sdlc/bin/read-config.mjs env.boot` prints the value with no trailing newline, so the GITHUB_OUTPUT heredoc became `npm run sdlc:serveSDLC_EOF` on one line and the runner found no closing delimiter. Framework bug, not a code or plan failure; nothing survived.",
+      "evidence": "failed-run.log:487-488 `##[error]Invalid value. Matching delimiter not found 'SDLC_EOF'`; reproduced locally: `node .sdlc/bin/read-config.mjs env.boot` emits 18 bytes with no trailing newline and `{ echo 'boot<<SDLC_EOF'; node .sdlc/bin/read-config.mjs env.boot; echo 'SDLC_EOF'; }` yields `npm run sdlc:serveSDLC_EOF$` (cat -A). No sdlc/issue-16 branch on remote; bundle step uploaded only a 50-byte status file.",
+      "framework_defect": {
+        "file": ".github/workflows/sdlc-implement.yml",
+        "fix": "Emit a newline after the value before the closing delimiter, e.g. `{ echo 'boot<<SDLC_EOF'; node .sdlc/bin/read-config.mjs env.boot; echo; echo 'SDLC_EOF'; } >> \"$GITHUB_OUTPUT\"` (or make read-config.mjs always end its output with a newline). Same one-line fix is needed for the identical line in .github/workflows/sdlc-plan.yml.",
+        "what": "Line 264 builds a multiline GITHUB_OUTPUT value as `{ echo 'boot<<SDLC_EOF'; node .sdlc/bin/read-config.mjs env.boot; echo 'SDLC_EOF'; }`, which assumes the value ends with a newline. read-config.mjs uses `process.stdout.write(String(value))` with no trailing newline, so the closing delimiter lands on the value's line (`npm run sdlc:serveSDLC_EOF`) and the runner rejects it with `Matching delimiter not found 'SDLC_EOF'`. The step sits before checkout and the agent, so the whole implement stage is unreachable on any repo whose env.boot is a plain single-line string."
+      }
     }
   },
   "triage_history": [
@@ -442,6 +452,14 @@
       "confidence": 95,
       "diagnosis": "The implement build job failed in the 'How the app boots' step before the implementer agent ever ran: `node .sdlc/bin/read-config.mjs env.boot` prints `npm run sdlc:serve` with no trailing newline, so the `{ echo 'boot<<SDLC_EOF'; node ...; echo 'SDLC_EOF'; }` heredoc block writes `npm run sdlc:serveSDLC_EOF` on a single line and GitHub reports 'Matching delimiter not found SDLC_EOF'. Deterministic framework bug triggered by env.boot being set (when boot was absent the empty value happened to wo",
       "run": "36046021369"
+    },
+    {
+      "at": "2026-09-24T19:19:56.200Z",
+      "stage": "implement",
+      "verdict": "escalate",
+      "confidence": 95,
+      "diagnosis": "The build job died in the 'How the app boots' step before the implement agent ever ran: `node .sdlc/bin/read-config.mjs env.boot` prints the value with no trailing newline, so the GITHUB_OUTPUT heredoc became `npm run sdlc:serveSDLC_EOF` on one line and the runner found no closing delimiter. Framework bug, not a code or plan failure; nothing survived.",
+      "run": "36046862382"
     }
   ]
 }
