@@ -1,0 +1,30 @@
+{
+  "issue": 20,
+  "pr": null,
+  "state": "blocked",
+  "owner": null,
+  "lock_expires": null,
+  "lock_run": null,
+  "attempts": {
+    "plan": 0,
+    "ci": 0,
+    "review": 0,
+    "qa": 0
+  },
+  "attempt_run": null,
+  "halted": null,
+  "pending": null,
+  "work_order": null,
+  "touch_paths": [],
+  "acceptance": [],
+  "planned_route": [],
+  "on_complete": null,
+  "artifacts": {},
+  "failure_history": [],
+  "review_history": [],
+  "review_root_caused": [],
+  "created_at": "2026-09-24T18:56:45.892Z",
+  "updated_at": "2026-09-24T18:56:45.892Z",
+  "history": [],
+  "epic": 14
+}
