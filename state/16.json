@@ -305,5 +305,241 @@
   },
   "validated_from": "plan",
   "validated_at": "2026-09-24T19:03:21.257Z",
-  "validated_ac_changes": []
+  "validated_ac_changes": [],
+  "approved_work_order": {
+    "acceptance": [
+      {
+        "check": "On a clean runner with zero external services, `npm run sdlc:serve` boots and GET /health returns 200 with {\"status\":\"ok\"} within seconds",
+        "how_to_verify": "boot with npm run sdlc:serve, then curl -fsS http://localhost:3000/health",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "api"
+      },
+      {
+        "check": "Dashboard (/) on a fresh database shows the empty-state sentence, the connect-Meta plus install-pixel checklist with expected time per step, and the light-theme tokens applied",
+        "how_to_verify": "open http://localhost:3000/ in a browser on a fresh DB",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "Journal, opportunities, experiments and approvals pages each render their own empty state (journal links to start the first replay; opportunities triggers the research prompt; approvals shows autonomy posture per action class)",
+        "how_to_verify": "open /journal, /opportunities, /experiments, /approvals in a browser on a fresh DB",
+        "id": "AC-3",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "Every page exhibits loading (skeleton, no layout shift), partial (stale banner / maturity bars) and error (named failure plus retry) shells via the documented ?state= override, with aria-live announcements and keyboard-operable controls",
+        "how_to_verify": "open each page with ?state=loading, ?state=partial and ?state=error in a browser",
+        "id": "AC-4",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "Money is integer micros end to end: the suite proves integer-only construction, float rejection at the boundary, and the computed split of 10000 paise across 3 members yielding 3334/3333/3333 which sums to the input exactly",
+        "how_to_verify": "CI runs test/domain/money.test.js via npm run sdlc:verify",
+        "id": "AC-5",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "No UPDATE or DELETE path exists on raw_events or audit_events tables, and replaying raw events rebuilds the derived values identically",
+        "how_to_verify": "CI runs test/data/append-only.test.js via npm run sdlc:verify",
+        "id": "AC-6",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "`npm run sdlc:verify` runs the full node:test suite green on a clean runner",
+        "how_to_verify": "CI runs npm run sdlc:verify (npm ci --no-audit --no-fund && node --test test/)",
+        "id": "AC-7",
+        "source": "IAC-5",
+        "verify": "test"
+      },
+      {
+        "check": "`npm run sdlc:seed` writes a demo tenant through the app repository layer, after which the dashboard header names the demo tenant instead of showing the empty state",
+        "how_to_verify": "run npm run sdlc:seed, then open http://localhost:3000/ in a browser",
+        "id": "AC-8",
+        "source": "IAC-5",
+        "verify": "browser"
+      },
+      {
+        "check": "Two tenants sharing one database never see each other's rows on any repository query path",
+        "how_to_verify": "CI runs test/data/tenant-isolation.test.js via npm run sdlc:verify",
+        "id": "AC-9",
+        "source": "TR-26",
+        "verify": "test"
+      },
+      {
+        "check": "Delivering the same event_id twice applies its effect once, and a mid-saga crash resumes to exactly-once effects on restart",
+        "how_to_verify": "CI runs test/workflows/scheduler.test.js via npm run sdlc:verify",
+        "id": "AC-10",
+        "source": "TR-22",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Build POST /v1/events HTTP ingest now so the event envelope is exercised over the wire",
+        "rejected_because": "the ticket explicitly puts event ingest and funnels out of scope; the envelope plus idempotency helper ships now, the HTTP route ships with the measurement slice"
+      },
+      {
+        "approach": "Client-rendered pages fetching JSON status endpoints for each UI state",
+        "rejected_because": "the approved stack is server-rendered HTML with no build step; SSR variant rendering plus a deterministic ?state= preview override covers all five shells with no extra API surface"
+      }
+    ],
+    "approach": "Scaffold the smallest vertical slice that satisfies all five IACs on a greenfield repo. (1) package.json: replace the four stub sdlc:* scripts with the real commands from project.md targets (verify: npm ci --no-audit --no-fund && node --test test/; serve: node src/index.js; seed: node scripts/seed.js; ready: curl -fsS http://localhost:3000/health) and add express@5 as the only runtime dependency, which the approved stack already names. (2) Contract face: src/domain/money.js integer-micros helpers that throw {code:'INVALID_MONEY'} on any float input; src/domain/events.js event-envelope validator (event_id, event_type, occurred_at UTC ISO-8601, tenant_id, schema_version, payload) plus dedupe on event_id; src/data/db.js node:sqlite DatabaseSync bootstrap with a migrations table and tables tenants, raw_events, audit_events, idempotency_keys, derived_metrics where every row carries tenant_id and UTC timestamps; src/data/repositories.js interfaces plus SQLite implementations with tenant_id on every query, no update/delete exports for raw_events and audit_events, and a replay(raw)->derived rebuild function; src/workflows/scheduler.js in-process workflow abstraction (register, schedule/delay, idempotent handler wrapper on event_id, saga runner with compensating actions). (3) Interface face: src/web/pages.js server-rendered layout plus the five pages (/, /journal, /opportunities, /experiments, /approvals) each with ideal, empty, loading, partial and error variants selected from store state, with a documented ?state= preview override so QA can drive non-empty shells on a fresh DB; src/web/styles.css theme tokens verbatim from docs/ui.md; src/web/client.js tiny vanilla JS for aria-live state announcements and error-panel retry; src/index.js entrypoint wiring Express, static assets, pages, GET /health and $PORT default 3000. (4) scripts/seed.js writes one demo tenant with sample spend/decision rows through the repository layer only. Follow the owner decision in plan/brief.md: Meta Ads is the first platform slice, so spec section 37 (Google-first wedge) and the Google-first ordering in section 36 are stale for sequencing; this slice builds no platform code either way.",
+    "assumptions": [
+      "A clean CI runner provides Node.js 22 with the built-in node:sqlite module and npm registry access for the one-time express install",
+      "No login is required anywhere in v1, so QA drives all pages unauthenticated per TR-21",
+      "SQLite file defaults to ./data/app.db with DB_PATH override for tests"
+    ],
+    "confidence": 78,
+    "confidence_rationale": "Greenfield scaffold on a fully specified stack with verbatim targets in project.md and exact UI tokens in docs/ui.md; risk is concentrated in the money/audit/migration invariants, which get dedicated unit coverage and review attention rather than novel design.",
+    "files": [
+      {
+        "action": "edit",
+        "change": "replace the four stub sdlc:* scripts with the real commands from .sdlc/memory/project.md targets and add express@5 (the approved stack's only runtime dependency)",
+        "path": "package.json",
+        "why": "stubs must become real the moment a branch carries code, or ci-verify passes without running anything"
+      },
+      {
+        "action": "create",
+        "change": "process entrypoint: load config ($PORT default 3000, DB_PATH), open the database, run migrations, mount static assets, page routes and GET /health, listen",
+        "path": "src/index.js"
+      },
+      {
+        "action": "create",
+        "change": "integer-micros money module: fromMicros/toMicros/add/subtract/allocate-remainder-one-paise-at-a-time; throws {code:'INVALID_MONEY'} on any float, NaN or non-integer input; ISO currency validated",
+        "path": "src/domain/money.js"
+      },
+      {
+        "action": "create",
+        "change": "event-envelope validator for {event_id, event_type, occurred_at UTC ISO-8601, tenant_id, schema_version, payload} returning {code,message} errors, plus an idempotency-key helper that dedupes on event_id",
+        "path": "src/domain/events.js"
+      },
+      {
+        "action": "create",
+        "change": "node:sqlite DatabaseSync bootstrap with migrations table; creates tenants, raw_events, audit_events, idempotency_keys, derived_metrics tables, all rows carrying tenant_id and UTC ISO-8601 timestamps",
+        "path": "src/data/db.js"
+      },
+      {
+        "action": "create",
+        "change": "repository interfaces plus SQLite implementations with tenant_id bound on every query; exposes no update/delete for raw_events and audit_events; exports replayRawToDerived() that rebuilds derived_metrics from raw_events",
+        "path": "src/data/repositories.js"
+      },
+      {
+        "action": "create",
+        "change": "in-process workflow abstraction: register(name, handler), schedule/run with timers, idempotent consumer wrapper keyed on event_id via idempotency_keys, saga runner executing steps with compensating actions on failure",
+        "path": "src/workflows/scheduler.js"
+      },
+      {
+        "action": "create",
+        "change": "Express routes: GET /health returning 200 {status:'ok', version} plus mounting for the five pages and static assets; unknown API paths return the {code,message} error envelope",
+        "path": "src/api/routes.js"
+      },
+      {
+        "action": "create",
+        "change": "server-rendered layout plus dashboard, journal, opportunities, experiments and approvals pages, each with ideal/empty/loading/partial/error variants, exact copy strings, deterministic ?state= preview override, keyboard-operable controls and aria-live regions",
+        "path": "src/web/pages.js"
+      },
+      {
+        "action": "create",
+        "change": "theme tokens verbatim from docs/ui.md (--color-bg #F7F5F0 through --font-body), 8px spacing scale, skeleton pulse respecting prefers-reduced-motion, single-column layout under 900px",
+        "path": "src/web/styles.css"
+      },
+      {
+        "action": "create",
+        "change": "vanilla JS under 100 lines: announces async state changes via aria-live, wires error-panel retry buttons, no framework and no build step",
+        "path": "src/web/client.js"
+      },
+      {
+        "action": "create",
+        "change": "writes one demo tenant (tenant_demo) with sample spend, decision and learning rows through the repository layer only; idempotent on repeat runs via fixed ids",
+        "path": "scripts/seed.js"
+      }
+    ],
+    "issue": 16,
+    "kind": "feature",
+    "out_of_scope": [
+      "Meta or Google platform calls or adapters (later epics; Meta first per owner decision)",
+      "Event ingest HTTP endpoint and funnels (the measurement slice builds POST /v1/events on this envelope)",
+      "Decisions, shadow mode, execution, approvals logic beyond the page shells",
+      "Temporal Cloud, Postgres/pgvector, auth, dark mode"
+    ],
+    "qa_script": [
+      "npm run sdlc:verify — full node:test suite green",
+      "npm run sdlc:serve, then curl -fsS http://localhost:3000/health — 200 within seconds, zero external services",
+      "open / on a fresh DB — empty state with connect-Meta plus install-pixel checklist and theme tokens",
+      "open /journal /opportunities /experiments /approvals — each shows its specified empty copy",
+      "reopen each page with ?state=loading, ?state=partial, ?state=error — skeleton, stale banner, named-error-plus-retry shells",
+      "npm run sdlc:seed, reload / — header names the demo tenant"
+    ],
+    "risks": [
+      "Touches migrations, money representation and audit immutability: a mistake here corrupts every later slice, so the append-only and micros invariants carry dedicated tests plus review focus",
+      "First code on the repo means sdlc:verify must stop being a stub in the same change or ci-verify fails the branch by design",
+      "The ?state= preview override is a visual aid for shells, not a data path; it must never alter stored state"
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "integer construction and add/subtract stay exact in micros",
+          "float, NaN and non-integer inputs throw INVALID_MONEY at the boundary",
+          "10000 paise across 3 members yields 3334/3333/3333 and sums to the input exactly",
+          "unknown or malformed ISO currency codes are rejected"
+        ],
+        "path": "test/domain/money.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "raw_events and audit_events expose no update or delete function",
+          "attempted direct UPDATE/DELETE against those tables fails",
+          "replayRawToDerived rebuilds derived values identically after derived_metrics is wiped"
+        ],
+        "path": "test/data/append-only.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "two tenants write rows and each query path returns only its own rows",
+          "cross-tenant event_id reuse does not leak effects across tenants"
+        ],
+        "path": "test/data/tenant-isolation.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "valid envelope passes; missing event_id, bad timestamp or missing tenant_id returns stable codes",
+          "duplicate event_id delivery applies the effect exactly once"
+        ],
+        "path": "test/domain/events.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "duplicate delivery of the same event_id to a consumer applies once",
+          "a saga failing mid-run executes compensating actions in reverse",
+          "a saga interrupted mid-run resumes to exactly-once effects"
+        ],
+        "path": "test/workflows/scheduler.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "booted against a temp SQLite file, GET /health returns 200 with status ok",
+          "unknown API path returns the {code,message} envelope, never a stack trace"
+        ],
+        "path": "test/api/health.test.js"
+      }
+    ],
+    "understanding": "The repo is greenfield: no src/, test/ or scripts/ exist and all four sdlc:* verbs in package.json are stubs. Issue #16 is the foundation slice everything later builds on, covering TR-1 (integer micros money), TR-20 (append-only audit, raw/normalized/derived separation, UTC), TR-21 (five server-rendered pages plus GET /health on :3000, no login), TR-22 (event_id idempotency, saga-capable in-process scheduler) and TR-26 (tenant_id on every record). The authenticated owner decision in plan/brief.md makes Meta Ads the first platform slice, which supersedes the Google-first wedge argued in spec section 37 (and the Google-first ordering in section 36) for all sequencing. There is no prior plan rejection to answer.",
+    "unknowns": [
+      "Whether QA prefers the five pages at /journal style paths or another routing scheme — any consistent scheme satisfies the ticket"
+    ],
+    "version": 1
+  },
+  "approved_too_high": false
 }
