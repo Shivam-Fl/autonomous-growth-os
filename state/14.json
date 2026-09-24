@@ -310,7 +310,7 @@
         "risk": "Touches the prompt-injection boundary: untrusted web content must never reach the executor or alter policy.",
         "title": "Research demand and remember it with evidence-scoped learnings",
         "why": "A strategist gets fresh market hypotheses with cited evidence and memory that expires or contradicts honestly, instead of eternal-truth notes.",
-        "issue": null
+        "issue": 21
       },
       {
         "acceptance": [
@@ -350,6 +350,7 @@
     17,
     18,
     19,
-    20
+    20,
+    21
   ]
 }
