@@ -1,0 +1,1227 @@
+{
+  "architecture": {
+    "modules": [
+      {
+        "holds": "Process entrypoint: loads config, opens the database, mounts API and pages, listens on $PORT or 3000.",
+        "path": "src/index.js"
+      },
+      {
+        "holds": "Server-rendered pages and static assets (CSS, tiny vanilla JS); no build step, no SPA framework.",
+        "path": "src/web/"
+      },
+      {
+        "holds": "Versioned REST surface: events ingest, decisions, opportunities, experiments, actions, approvals, health.",
+        "path": "src/api/"
+      },
+      {
+        "holds": "Pure domain logic with no IO: money, objectives/utility, evidence tiers, experiments, opportunity scoring.",
+        "path": "src/domain/"
+      },
+      {
+        "holds": "Deterministic Policy Kernel: evaluates ActionIntents against guardrails and issues signed capabilities.",
+        "path": "src/policy/"
+      },
+      {
+        "holds": "The only holder of ad mutation credentials: validates capabilities and executes typed provider mutations.",
+        "path": "src/executor/"
+      },
+      {
+        "holds": "Versioned Meta Marketing API adapter (pinned Graph version) plus a fake Meta provider for tests and simulation.",
+        "path": "src/integrations/meta_ads/"
+      },
+      {
+        "holds": "First-party event ingest, journey linkage, downstream quality funnel, attribution maturity and lag models.",
+        "path": "src/measurement/"
+      },
+      {
+        "holds": "Evidence-backed learnings with scopes, contradiction and staleness handling, and retrieval assistance.",
+        "path": "src/memory/"
+      },
+      {
+        "holds": "Research Mesh pipeline: planner, source adapters (search/fetch/browser), claim extraction and evidence scoring.",
+        "path": "src/research/"
+      },
+      {
+        "holds": "Director, analysts, hypothesis generator, guardian loops and portfolio optimizer as deterministic services plus scoped model calls.",
+        "path": "src/strategy/"
+      },
+      {
+        "holds": "Durable-workflow abstraction (timers, waits, sagas) with an in-process scheduler now and Temporal later.",
+        "path": "src/workflows/"
+      },
+      {
+        "holds": "SQLite bootstrap, migrations, and repository implementations behind interfaces the domain depends on.",
+        "path": "src/data/"
+      },
+      {
+        "holds": "node:test suites mirroring src/, fixtures, fake providers and frozen replay scenarios.",
+        "path": "test/"
+      },
+      {
+        "holds": "Seed, readiness-probe and maintenance scripts invoked through the sdlc: verbs.",
+        "path": "scripts/"
+      }
+    ],
+    "shape": "A single boring Node monolith: Express serves server-rendered pages and a versioned JSON API from one process on $PORT (default 3000). Pure domain logic sits in src/domain with no IO; src/data repositories abstract persistence (SQLite now, Postgres plus pgvector later) so the domain never imports a driver. All ad mutations cross one hard boundary — strategy code proposes ActionIntents, the deterministic Policy Kernel issues signed capabilities, and only the Executor holds mutation credentials. Platform APIs hide behind versioned adapters with fake implementations for tests. Background loops run through a workflow abstraction with an in-process scheduler; Temporal Cloud replaces the scheduler without touching strategy code."
+  },
+  "assumptions": [
+    {
+      "assumption": "One operator runs one local instance; there is no multi-user auth in v1.",
+      "basis": "qa_auth.mode is none and env.allowlist is localhost-only; the spec's tenancy model arrives with real deployment.",
+      "if_wrong": "Single-operator pages leak tenant data across users; retrofit is an auth layer plus tenant scoping on every repository.",
+      "validate_by": "Owner confirms no second operator or hosted demo is needed before the deployment issue."
+    },
+    {
+      "assumption": "The owner can provide Meta app credentials with ads_management/ads_read when the Meta slice needs real reads.",
+      "basis": "Spec S-26 requires an app plus advertising permissions; nothing in the repo provides them.",
+      "if_wrong": "Meta tickets run against the fake provider only and real-read verification slips a full epic.",
+      "validate_by": "Ask the owner for a test ad account and app id before the first Meta ticket is planned."
+    },
+    {
+      "assumption": "SQLite on a local file handles v1 event volume; Postgres plus BigQuery arrive in Phase 2.",
+      "basis": "Spec S-21 names PostgreSQL as sufficient for Phase 1; SQLite shares its relational shape at v1 scale.",
+      "if_wrong": "Ingest falls over and the repository abstraction earns its keep early by moving to Postgres sooner.",
+      "validate_by": "Seed script inserts 100k synthetic events and measures ingest p95 on a clean runner."
+    },
+    {
+      "assumption": "Meta Graph API v26.0 (June 2026) remains current and stable through the first Meta epic.",
+      "basis": "Web-search excerpts of Meta docs, June 2026; direct docs fetch failed so this is the weakest load-bearing fact.",
+      "if_wrong": "The version pin in the adapter changes by one constant, but field-level drift needs adapter rework.",
+      "validate_by": "First Meta ticket re-checks https://developers.facebook.com/docs/marketing-api/ and records the live version."
+    }
+  ],
+  "commands": {
+    "ready": "curl -fsS http://localhost:3000/health",
+    "seed": "node scripts/seed.js",
+    "serve": "node src/index.js",
+    "stubbed": [
+      "verify is a stub until src/ and test/ exist; the first code ticket makes it real by adding node:test suites.",
+      "serve is a stub until src/index.js listens on $PORT (default 3000) with GET /health; the foundation ticket makes it real.",
+      "seed is a stub until scripts/seed.js writes a demo tenant, fake ad data and sample learnings through the app; the measurement ticket makes it real.",
+      "ready is a stub until /health exists; it becomes real with the same ticket as serve."
+    ],
+    "verify": "npm ci --no-audit --no-fund && node --test test/"
+  },
+  "confidence": 72,
+  "conventions": [
+    "ES modules, plain JavaScript, no TypeScript build step; files mirror their directory: src/domain/money.js is tested by test/domain/money.test.js.",
+    "Errors cross module boundaries as {code, message, details} objects with stable string codes; never throw raw provider payloads.",
+    "Stdlib first: no new runtime dependency without a one-line justification in the PR, and no dependency that requires native compilation on the clean CI runner.",
+    "Repositories own all SQL and live behind interfaces defined by the domain; domain modules never import node:sqlite or any driver.",
+    "Provider specifics stay inside src/integrations/<provider>/; the Graph API version appears exactly once as a pinned constant.",
+    "Tests run with node:test and node:assert/strict only; integration tests boot the app against a temp SQLite file and the fake providers.",
+    "Money, timestamps and identifiers follow the invariants: micros, UTC ISO-8601, prefixed ids (evt_, dec_, cap_, exp_)."
+  ],
+  "coverage": [
+    {
+      "disposition": "scope",
+      "refs": [
+        "PRD scope: autonomous growth OS for paid acquisition"
+      ],
+      "section": "S-1"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-2",
+        "TR-3",
+        "TR-8",
+        "TR-10",
+        "TR-11",
+        "TR-12",
+        "TR-16",
+        "TR-24"
+      ],
+      "section": "S-2"
+    },
+    {
+      "disposition": "scope",
+      "refs": [
+        "PRD scope: autonomous growth OS for paid acquisition"
+      ],
+      "section": "S-3"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-6",
+        "TR-7",
+        "TR-18"
+      ],
+      "section": "S-4"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-8",
+        "TR-9",
+        "TR-18"
+      ],
+      "section": "S-5"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-4",
+        "TR-19"
+      ],
+      "section": "S-6"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-17"
+      ],
+      "section": "S-7"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-17"
+      ],
+      "section": "S-8"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-9",
+        "TR-14"
+      ],
+      "section": "S-9"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-7",
+        "TR-9"
+      ],
+      "section": "S-10"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-7"
+      ],
+      "section": "S-11"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-6",
+        "TR-10",
+        "TR-26"
+      ],
+      "section": "S-12"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-12"
+      ],
+      "section": "S-13"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-3",
+        "TR-6"
+      ],
+      "section": "S-14"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-19"
+      ],
+      "section": "S-15"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-3",
+        "TR-4"
+      ],
+      "section": "S-16"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-16"
+      ],
+      "section": "S-17"
+    },
+    {
+      "disposition": "deferred",
+      "refs": [],
+      "section": "S-18",
+      "why": "Champion/challenger auto-promotion is a Phase 8 concern; the shadow-mode subset that earns it ships earlier under S-36 via TR-15."
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-12"
+      ],
+      "section": "S-19"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-11"
+      ],
+      "section": "S-20"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-22"
+      ],
+      "section": "S-21"
+    },
+    {
+      "disposition": "scope",
+      "refs": [
+        "PRD scope: local-first single-operator app"
+      ],
+      "section": "S-22"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-10",
+        "TR-20"
+      ],
+      "section": "S-23"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-5",
+        "TR-22"
+      ],
+      "section": "S-24"
+    },
+    {
+      "disposition": "deferred",
+      "refs": [],
+      "section": "S-25",
+      "why": "Owner decision on issue #14: Google Ads is a later epic that reuses what the Meta slice establishes; the spec S-39 Google-first argument is overruled."
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-5",
+        "TR-13",
+        "TR-25"
+      ],
+      "section": "S-26"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-25"
+      ],
+      "section": "S-27"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-18"
+      ],
+      "section": "S-28"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-18"
+      ],
+      "section": "S-29"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-19"
+      ],
+      "section": "S-30"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-15",
+        "TR-23"
+      ],
+      "section": "S-31"
+    },
+    {
+      "disposition": "deferred",
+      "refs": [],
+      "section": "S-32",
+      "why": "Illustrative Phase 8 self-healing scenarios; the underlying rule that failures become tests ships now as TR-24."
+    },
+    {
+      "disposition": "deferred",
+      "refs": [],
+      "section": "S-33",
+      "why": "The GitHub self-improvement pipeline is Phase 8; the repo starts with standard PR checks and the zone discipline ships now via TR-16."
+    },
+    {
+      "disposition": "deferred",
+      "refs": [],
+      "section": "S-34",
+      "why": "The GCP plus Temporal production topology lands with the first deployment issue; v1 runs local-first via compose."
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-20"
+      ],
+      "section": "S-35"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-13",
+        "TR-15",
+        "TR-21"
+      ],
+      "section": "S-36"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-2",
+        "TR-3",
+        "TR-5",
+        "TR-6",
+        "TR-10",
+        "TR-11",
+        "TR-13",
+        "TR-16"
+      ],
+      "section": "S-37"
+    },
+    {
+      "disposition": "scope",
+      "refs": [
+        "PRD scope: Meta-first vertical slices"
+      ],
+      "section": "S-38"
+    },
+    {
+      "disposition": "deferred",
+      "refs": [],
+      "section": "S-39",
+      "why": "The Google-Search wedge is overruled by the owner Meta-first decision on issue #14; it returns as the Google Ads epic."
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-21",
+        "TR-23"
+      ],
+      "section": "S-40"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-3",
+        "TR-11"
+      ],
+      "section": "S-41"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-5",
+        "TR-7",
+        "TR-9",
+        "TR-11",
+        "TR-24"
+      ],
+      "section": "S-42"
+    },
+    {
+      "disposition": "requirement",
+      "refs": [
+        "TR-8",
+        "TR-9",
+        "TR-15",
+        "TR-24"
+      ],
+      "section": "S-43"
+    },
+    {
+      "disposition": "scope",
+      "refs": [
+        "PRD scope: autonomous growth OS for paid acquisition"
+      ],
+      "section": "S-44",
+      "why": "Vision and loop stand as written; the build-order sentence is amended by the owner Meta-first decision."
+    },
+    {
+      "disposition": "non_goal",
+      "refs": [],
+      "section": "S-45",
+      "why": "A link list is not behavior; the re-check duty it demands is recorded in research findings and assumptions instead."
+    }
+  ],
+  "decisions": [
+    {
+      "because": "The pipeline drives a real browser against npm run sdlc:serve on a clean runner with only node/npm and python3. A single Node process with zero native dependencies boots in seconds, needs no external services, and serves QA-drivable pages immediately; every heavier option defers the first verifiable slice.",
+      "consequences": "Easy: instant boot, trivial CI, every ticket verifiable end to end. Hard: CPU-heavy later work (MMM, bandits, large replay) will need worker extraction or a second runtime; SQLite caps ingest scale until the Postgres move.",
+      "decision": "Node.js 22 LTS, Express 5, node:sqlite (built-in DatabaseSync), server-rendered HTML with vanilla JS and no build step.",
+      "title": "Boring Node monolith"
+    },
+    {
+      "because": "A TypeScript build step, a Python toolchain, Postgres and Temporal each add a moving part QA would trip over before the first feature exists. The spec itself orders simulator, measurement and shadow before autonomy, and all of those run fine in-process against a file database.",
+      "consequences": "Easy: each deferred piece arrives against a working system with replay data. Hard: the Postgres/pgvector and Temporal migrations are real projects later; the repository and workflow abstractions must be respected or they become expensive.",
+      "decision": "Rejected for v1: TypeScript build, Python service, Postgres server, React/Vite SPA, Temporal Cloud, Kubernetes. Each returns as the phase that needs it.",
+      "title": "Defer everything with a server"
+    },
+    {
+      "because": "Issue #14 carries a recorded owner answer (2026-09-24): the Meta Ads integration end to end ships first and Google Ads reuses it. A human decision about the product outranks the spec, including the S-39 Google-first argument.",
+      "consequences": "Easy: one platform adapter proves the kernel/executor/measurement pattern. Hard: Google-specific primitives (keyword planning, ChangeEvent, native experiments) cannot shape v1 interfaces; the Google epic must generalize, not fork, the Meta adapter shape.",
+      "decision": "Meta Ads is the first platform epic; Google Ads is a later epic reusing the Meta slice. S-25 and S-39 are deferred, not dropped.",
+      "title": "Meta first, Google after"
+    },
+    {
+      "because": "Meta maintains an official Node SDK, but a pinned-version fetch client has no dependency to lag the API, no native code, and exactly one place where the version lives. The first slice is read-heavy, where fetch needs nothing the SDK adds.",
+      "consequences": "Easy: version bumps are a one-constant change; fakes are trivial. Hard: pagination, rate-limit backoff and batching are hand-rolled inside the adapter and must be tested as first-class behavior.",
+      "decision": "Meta access goes through a versioned adapter using direct HTTPS against a pinned Graph API version (v26.0 at brief time), no Business SDK; a fake Meta provider ships with it for tests and simulation.",
+      "title": "Direct fetch Meta adapter"
+    },
+    {
+      "because": "node:sqlite is compiled into Node itself, maintained by the Node core team, mirrors the better-sqlite3 sync API, and installs nothing — ideal for a clean CI runner. better-sqlite3 remains mature but carries a native prebuild chain with an open 2026 deprecation and a Node 26 compilation gap. A repository interface keeps the choice reversible.",
+      "consequences": "Easy: zero-dependency persistence, temp-file test databases. Hard: node:sqlite is Stability 1.2 (release candidate); minor API churn is possible and pgvector has no local equivalent, so vector search starts as keyword plus embedding-column scaffolding.",
+      "decision": "Persist through repository interfaces backed by node:sqlite now; move to Cloud SQL Postgres plus pgvector in Phase 2 without touching domain code.",
+      "title": "SQLite now, Postgres later"
+    },
+    {
+      "because": "node:test is stable since Node 20, ships with the runtime, and needs no install on the clean runner, which makes sdlc:verify hermetic apart from the app's own dependencies. Vitest is the 2026 default for Vite/TS projects, which this is not.",
+      "consequences": "Easy: fast, zero-config unit and integration tests. Hard: no snapshot UI or coverage dashboards; if the suite outgrows node:test, migrating to Vitest is a small, contained change.",
+      "decision": "Tests run on the built-in node:test plus node:assert/strict; no test framework dependency.",
+      "title": "Built-in test runner"
+    },
+    {
+      "because": "qa_auth.mode is none and the API allowlist is localhost-only: v1 is a single-operator local tool, and any login screen would be untestable ceremony QA cannot drive. The spec's organizations, memberships and RLS arrive with real deployment.",
+      "consequences": "Easy: every page is immediately drivable by QA with no fixture accounts. Hard: the first hosted or multi-user deployment must add auth plus tenant scoping first, before any other feature on that epic.",
+      "decision": "No authentication or multi-tenancy in v1; all records still carry tenant_id from day one so scoping is a constraint, not a migration.",
+      "title": "No auth in v1"
+    },
+    {
+      "because": "env.mode is compose with boot npm run sdlc:serve, but no registry, cloud project or preview infrastructure exists, and claiming one would imply a deployment nobody can drive. QA runs against the local compose boot until a deployment issue creates the real path.",
+      "consequences": "Easy: honest previews, no phantom infra tickets. Hard: Temporal Cloud, Cloud SQL and secret management all queue behind the deployment issue, which becomes the critical path to any production autonomy.",
+      "decision": "Deploy target is nowhere yet: local compose boot only; the first deployment issue creates Cloud Run plus Cloud SQL previews per PR.",
+      "title": "Deploy nowhere yet"
+    }
+  ],
+  "deploy": "Nowhere yet. v1 boots locally via compose (npm run sdlc:serve on $PORT, default 3000) and QA drives that local instance; there is no staging or production environment and no per-PR cloud preview. The first deployment issue, filed after this brief lands, creates the Cloud Run plus Cloud SQL path with per-PR previews; until then any ticket assuming hosted infrastructure is out of scope.",
+  "invariants": [
+    "Money is integer minor units (amount_micros BIGINT plus ISO currency); floats never touch money.",
+    "Every record carries tenant_id; every mutation carries the actor and the capability id; there are no anonymous writes.",
+    "Timestamps are stored UTC ISO-8601; rendering converts to the viewer's zone.",
+    "Raw source payloads are immutable and never overwritten by normalized or derived values.",
+    "No metric is acted on as mature until its maturity score passes the policy band for that action class.",
+    "Strategy and research code never hold ad mutation credentials; writes cross Policy Kernel to Executor on signed capabilities only.",
+    "External web content is untrusted data wrapped with origin metadata; it never alters instructions, tools, or policy."
+  ],
+  "issue": 14,
+  "prd": {
+    "constraints": [
+      "Clean CI runner has only node/npm and python3; verify installs its own toolchain.",
+      "QA drives a real browser against compose boot on localhost:3000 with no login.",
+      "No cloud project, registry, or secret store exists; nothing may assume hosted infrastructure.",
+      "Owner capacity is the bottleneck: Meta app credentials arrive from the owner before real-read tickets."
+    ],
+    "jobs": [
+      "Connect ad spend to downstream revenue so budget follows profit, not form-fill CPL.",
+      "Keep researching where the next profitable demand is instead of defending a local optimum.",
+      "Run controlled experiments and wait for mature evidence before calling a winner.",
+      "Stay safe by default: freeze, roll back, or do nothing when measurement or confidence breaks.",
+      "Keep improving the decision process itself from its own prediction errors."
+    ],
+    "non_goals": [
+      "Google Ads integration now: a later epic reusing the Meta slice, per owner decision.",
+      "Temporal Cloud, Kubernetes, managed Postgres, or any hosted dependency in v1.",
+      "Multi-user auth, SSO, or cross-tenant features in v1.",
+      "Media mix modeling, geo incrementality, and contextual bandits before L1/L2 experiments earn them.",
+      "Self-modifying production code before replay, shadow, and protected evals exist.",
+      "A React/Vite SPA or any frontend build step before server-rendered pages stop sufficing."
+    ],
+    "problem": "Paid acquisition is managed by hand or by narrow optimizers that chase platform-reported CPL, stop at targets, and never learn what actually became revenue. Businesses need a system that verifies its own measurement, researches demand, experiments causally, and keeps moving the efficient-growth frontier without a marketer watching every account.",
+    "scope": [
+      "Meta-first vertical slices: read, measure, shadow, then guarded write, per owner decision.",
+      "First-party measurement truth layer: event ingest, journey linkage, quality funnel, maturity gating.",
+      "Decision journal, shadow mode, calibration, and approvals UI on the local app.",
+      "Local-first single-operator app serving pages and API on :3000 with /health.",
+      "Autonomous growth OS for paid acquisition spanning research, measurement, experimentation, and bounded execution."
+    ],
+    "success": [
+      {
+        "how_measured": "Shadow evaluations on frozen replay scenarios in CI.",
+        "metric": "Shadow decision precision",
+        "target": "At least 70% of shadow decisions directionally match matured outcomes by the end of the shadow epic."
+      },
+      {
+        "how_measured": "Synthetic business scenarios with known saturation and breakage points.",
+        "metric": "Simulator episode quality",
+        "target": "Agent holds qualified CPL within 15% of the known-good policy while pausing spend during tracking-outage scenarios."
+      },
+      {
+        "how_measured": "CI run of sdlc:verify plus QA browser pass on the compose boot.",
+        "metric": "Every-merge verifiability",
+        "target": "100% of merged PRs pass sdlc:verify and a QA browser smoke of dashboard, journal, and approvals."
+      },
+      {
+        "how_measured": "Maturity audit query over the decision log each release.",
+        "metric": "Maturity-gated actions",
+        "target": "Zero consequential actions executed on metrics below their action-class maturity band."
+      }
+    ],
+    "users": [
+      {
+        "context": "Runs ₹1L–₹20L monthly spend through lead funnels with a CRM or at least qualified/unqualified labels.",
+        "pain": "Reports say CPL is fine while sales complains about junk leads; nobody connects spend to qualified pipeline.",
+        "sophistication": "Knows their funnel numbers; does not want to babysit bids.",
+        "who": "Growth lead at a B2B/lead-gen business"
+      },
+      {
+        "context": "Owns the number, approves spend changes, absorbs the downside of a bad automated decision.",
+        "pain": "Autonomy without auditability is unbuyable; a black box that cannot show its receipts never gets authority.",
+        "sophistication": "Reads dashboards, not code; decides on evidence and downside estimates.",
+        "who": "Founder approving automation authority"
+      }
+    ]
+  },
+  "product": "The Autonomous Growth OS is a continuously running growth intelligence system that connects ad spend to downstream business outcomes, researches new demand, runs causal experiments, and executes bounded optimizations through a deterministic safety kernel. It starts as a local-first, single-operator web app whose first platform slice is Meta Ads end to end (read, measure, shadow, then guarded write), with Google Ads, cross-channel allocation, and self-improvement arriving as later epics on the same kernel, measurement, and memory foundations.",
+  "research": {
+    "findings": [
+      {
+        "affects": "Stack runtime pin and engines field.",
+        "claim": "Node 22 is the safe Active LTS target in September 2026, supported through April 2027.",
+        "confidence": 85,
+        "evidence": "Release schedule: v20 EOL 2026-04-30, v22 EOL 2027-04-30; Node 22 described as the current LTS and safe default for new services; Node 26 enters LTS 2026-10-28.",
+        "source": "https://nodejs.org/en/about/previous-releases (via web search, Sep 2026)"
+      },
+      {
+        "affects": "Stack web framework choice.",
+        "claim": "Express 5 is stable and current; v5 adds async error forwarding and drops pre-v18 Node support.",
+        "confidence": 85,
+        "evidence": "Express v5.0.0 officially released after years of development; focuses on simplified codebase, security, dropped old-Node support; 2026 stack guides list Express 5 with async errors auto-forward.",
+        "source": "https://github.com/expressjs/express/releases (via web search, Sep 2026)"
+      },
+      {
+        "affects": "SQLite driver decision: node:sqlite over better-sqlite3.",
+        "claim": "node:sqlite (DatabaseSync) ships in Node 22.5+, needs no flag from 22.13+/24, is Release Candidate Stability 1.2 (not final stable), and mirrors the better-sqlite3 sync API with zero install.",
+        "confidence": 75,
+        "evidence": "node:sqlite included with Node 22.5.0+; v22.13.0+ experimental without flag; v24.15.0+/v25.7.0+ Release Candidate Stability 1.2; API modeled on better-sqlite3; 2026 migration trend drops better-sqlite3 as the only native dep.",
+        "source": "https://nodejs.org/api/sqlite.html (via web search, Sep 2026)"
+      },
+      {
+        "affects": "SQLite driver decision: node:sqlite over better-sqlite3.",
+        "claim": "better-sqlite3 is still actively maintained but carries a native-prebuild chain with an open deprecation and a Node 26 gap.",
+        "confidence": 75,
+        "evidence": "Described as mature and actively maintained with Node 22+ prebuilds; npm still warns deprecated prebuild-install@7.1.3 with replacement PR #1446 open; 11.x ships no Node 26 prebuilt and its C++ no longer compiles against that V8.",
+        "source": "https://github.com/WiseLibs/better-sqlite3/pull/1446 (via web search, Sep 2026)"
+      },
+      {
+        "affects": "Meta adapter shape and version pin.",
+        "claim": "Meta Marketing API v26.0 is current as of June 2026 with roughly four-monthly releases; a Meta-maintained Node SDK exists but direct versioned fetch is viable.",
+        "confidence": 70,
+        "evidence": "Current version of the Marketing API is v26.0 (updated Jun 24, 2026); versions released approximately every four months with at least 90 days support for the previous version; facebook/facebook-nodejs-business-sdk listed as official Meta-maintained.",
+        "source": "https://developers.facebook.com/docs/marketing-api/ (version via search excerpts only; direct fetch returned truncated content — re-check at implementation)"
+      },
+      {
+        "affects": "Test runner decision: node:test over Vitest.",
+        "claim": "node:test is stable since Node 20 and sufficient for non-Vite Node services; Vitest is the 2026 default for Vite/TS projects, which this is not.",
+        "confidence": 80,
+        "evidence": "node:test stable since 20.0, mature in 22, but lacking watch mode/snapshots/coverage UI; 2026 rule of thumb: libraries/CLIs use node:test, Vite apps use Vitest; greenfield default recommendation is Vitest.",
+        "source": "https://nodejs.org/api/test.html plus 2026 ecosystem guides (via web search, Sep 2026)"
+      }
+    ],
+    "questions": [
+      "Which Node LTS line should v1 pin given September 2026 timing?",
+      "Which SQLite access path is boring and safe on a clean CI runner: better-sqlite3 or node:sqlite?",
+      "Is Express 5 stable and suitable as the v1 web framework?",
+      "What is the current Meta Marketing API version and is the Node SDK Meta-maintained?",
+      "Which test runner fits a no-build-step Node service: Vitest or node:test?"
+    ],
+    "rejected_sources": [
+      "Direct fetch of the Meta Marketing API docs returned truncated content with no version details; version claim rests on search excerpts and must be re-checked by the first Meta ticket."
+    ]
+  },
+  "stack": {
+    "choice": "Node.js 22 LTS, Express 5, node:sqlite (built-in DatabaseSync), server-rendered HTML with vanilla JS, node:test. No TypeScript, no frontend build, no external services in v1.",
+    "rejected": [
+      {
+        "because": "Adds a build step and typecheck to every ticket's verify path for a codebase whose first value is runtime behavior QA drives in a browser; revisit if contributors or domain size demand it.",
+        "option": "TypeScript with a build and typecheck gate"
+      },
+      {
+        "because": "A second toolchain on a runner where npm is the pipeline's only guaranteed indirection; the Meta ecosystem and SSR needs are equally served in JS.",
+        "option": "Python/FastAPI service"
+      },
+      {
+        "because": "Needs a server process in compose and CI before event volume justifies it; the repository abstraction makes this a later swap, not a rewrite.",
+        "option": "Postgres server in v1"
+      },
+      {
+        "because": "Build tooling, router, and client-state complexity before the first slice exists; server-rendered pages cover dashboard, journal, and approvals with nothing to compile.",
+        "option": "React/Vite SPA"
+      },
+      {
+        "because": "An external SaaS with credentials and network dependency before the first durable workflow exists; the in-process scheduler proves the abstraction first.",
+        "option": "Temporal Cloud in v1"
+      },
+      {
+        "because": "SDK version lag plus an extra abstraction over endpoints the read-first slice touches with plain fetch; pinned-version fetch keeps one constant and trivial fakes.",
+        "option": "facebook-nodejs-business-sdk"
+      }
+    ],
+    "why": "The pipeline boots npm run sdlc:serve on a clean runner and drives a real browser against localhost:3000 with no login, so v1 must boot in seconds with zero external services and servable pages. Node 22 LTS (supported through April 2027) with Express 5 and the built-in node:sqlite gives exactly that: one runtime, one install, one process, no native compilation, no build step. SQLite persists through repository interfaces that Postgres plus pgvector will implement in Phase 2, and the in-process scheduler implements the workflow abstraction Temporal Cloud will later replace. Everything rejected returns with the phase that needs it."
+  },
+  "trd": {
+    "data_model": [
+      {
+        "entity": "tenant",
+        "holds": "Single-operator scope anchor; every record carries tenant_id from day one."
+      },
+      {
+        "entity": "money",
+        "holds": "amount_micros BIGINT plus currency CHAR(3); never float, never bare number."
+      },
+      {
+        "entity": "event",
+        "holds": "Immutable raw source payload with provider, account, source and ingestion timestamps, API version, payload hash, replay key."
+      },
+      {
+        "entity": "state_snapshot",
+        "holds": "Immutable matured plus raw KPIs, budgets, funnel state, experiments, health, applicable memories; referenced by every decision."
+      },
+      {
+        "entity": "decision",
+        "holds": "Alternatives including do-nothing, expected distributions, downside, evidence and memory refs, critic result, policy decision id."
+      },
+      {
+        "entity": "capability",
+        "holds": "Signed ActionCapability: tenant, provider, resource, action, constraints, expiry, nonce, policy version."
+      },
+      {
+        "entity": "action_record",
+        "holds": "Intent, risk review, policy decision, receipts, reconciliation, rollback, and matured evaluation."
+      },
+      {
+        "entity": "learning",
+        "holds": "Claim plus scope, evidence refs, evidence type, effect interval, confidence, status lifecycle."
+      },
+      {
+        "entity": "experiment",
+        "holds": "Arms, exposures, metrics, caps, stop rules, evaluations with a first-class inconclusive state."
+      }
+    ],
+    "interfaces": [
+      {
+        "errors": "4xx with stable error codes for validation/policy denial; capability denials name the violated constraint, never internals.",
+        "idempotency": "Client-supplied idempotency keys; retries never duplicate: ingest dedupes on event_id, mutations dedupe on capability nonce plus provider reconciliation.",
+        "name": "POST /v1/events",
+        "shape": "JSON growth event {event_id, event_name, occurred_at, user/session/order references, value, currency, properties}; 202 plus receipt, never partial application."
+      },
+      {
+        "errors": "Unknown snapshot id is a 422; nothing executes without a referenced snapshot.",
+        "idempotency": "Decisions are append-only records; re-proposing the same intent returns the existing decision id.",
+        "name": "Decisions and approvals (API plus pages)",
+        "shape": "Decision record with alternatives, expected outcomes, risk, evidence refs; approvals transition authorized or rejected with actor and reason."
+      },
+      {
+        "errors": "Provider errors surface as typed integration failures with retry advice; quota exhaustion backs off with jitter.",
+        "idempotency": "Mutations carry capability nonce; executor reconciles provider state after every write.",
+        "name": "Meta adapter (integrations/meta_ads)",
+        "shape": "Typed reads (campaigns, ad sets, ads, insights) and typed writes (drafts, budgets, statuses) against a pinned Graph version; fake provider implements the same interface."
+      }
+    ],
+    "nfrs": [
+      "Local pages respond p95 under 400ms on a clean runner with seed data; ingest sustains 100 events/sec without queue growth.",
+      "sdlc:verify completes in under 5 minutes on a clean runner including npm install.",
+      "Zero consequential actions on metrics below their maturity band, audited per release.",
+      "Risk violations against protected invariants remain zero across all replay scenarios."
+    ],
+    "requirements": [
+      {
+        "id": "TR-1",
+        "priority": "must",
+        "rationale": "Float rounding on spend and value compounds into wrong marginal decisions; the spec bans float three times.",
+        "requirement": "All money is integer minor units (amount_micros) with ISO currency; no float enters storage, APIs, or the utility function.",
+        "sources": [
+          "S-2",
+          "S-33",
+          "S-35",
+          "S-37"
+        ],
+        "verified_by": "Unit tests on the money module plus a review check that rejects float money types in diffs."
+      },
+      {
+        "id": "TR-2",
+        "priority": "must",
+        "rationale": "A compromised reasoner with credentials is an unbounded spender; isolation is the load-bearing safety property.",
+        "requirement": "Strategy, research, and model-called code never possess ad mutation credentials; only the Executor service identity can call platform mutation endpoints.",
+        "sources": [
+          "S-2",
+          "S-13",
+          "S-37",
+          "S-41"
+        ],
+        "verified_by": "Integration test asserting credential absence outside the executor module plus a static import-boundary check in verify."
+      },
+      {
+        "id": "TR-3",
+        "priority": "must",
+        "rationale": "The Policy Kernel plus signed capability is the one choke point that holds even when the agent is compromised.",
+        "requirement": "Every external mutation flows Intent to deterministic Policy Kernel to signed capability (tenant, resource, action, constraints, expiry, nonce, policy version) to Executor validation; violations and active kill switches reject.",
+        "sources": [
+          "S-2",
+          "S-14",
+          "S-16",
+          "S-37"
+        ],
+        "verified_by": "Policy regression suite: expired, replayed, over-scope, and kill-switched capabilities all reject in tests."
+      },
+      {
+        "id": "TR-4",
+        "priority": "must",
+        "rationale": "Money protection must work faster than any optimizer loop and outside agent authority.",
+        "requirement": "Kill switches exist at global, tenant, provider, and campaign levels outside agent authority; the Guardian loop may trigger them and only a human or deterministic recovery policy re-enables after severe incidents.",
+        "sources": [
+          "S-6",
+          "S-14",
+          "S-16"
+        ],
+        "verified_by": "Guardian scenario tests: spend spike and tracking-loss fixtures freeze automation and require explicit re-enable."
+      },
+      {
+        "id": "TR-5",
+        "priority": "must",
+        "rationale": "Retries, schedulers, and humans all duplicate writes; without idempotency plus reconciliation the system evaluates experiments against states it no longer controls.",
+        "requirement": "All mutations are idempotent on capability nonce and reconciled against provider-reported state; manual, platform-rule, and third-party drift is detected and recorded.",
+        "sources": [
+          "S-24",
+          "S-26",
+          "S-37",
+          "S-42"
+        ],
+        "verified_by": "Duplicate-delivery tests against the fake Meta provider plus a drift-detection scenario test."
+      },
+      {
+        "id": "TR-6",
+        "priority": "must",
+        "rationale": "Replay, audit, and self-improvement are impossible if decisions do not name the world they were made in.",
+        "requirement": "Every consequential decision references an immutable StateSnapshot and records alternatives including do-nothing, expected effect distributions, downside, and evidence plus memory refs.",
+        "sources": [
+          "S-4",
+          "S-12",
+          "S-14",
+          "S-37"
+        ],
+        "verified_by": "Schema test: decision writes without snapshot id or do-nothing alternative are rejected."
+      },
+      {
+        "id": "TR-7",
+        "priority": "must",
+        "rationale": "Acting on immature conversions is the canonical paid-media failure mode; lag differs per product, channel, and geography.",
+        "requirement": "Every reported metric carries a maturity score 0..1 with lag distribution; policy bands gate action classes (<0.35 emergency only, 0.35-0.70 protective, 0.70-0.90 moderate, >0.90 strategic) and bands become account-specific over time.",
+        "sources": [
+          "S-9",
+          "S-10",
+          "S-11",
+          "S-42"
+        ],
+        "verified_by": "Maturity unit tests plus scenario tests where an apparent winner inside the lag window is not acted on."
+      },
+      {
+        "id": "TR-8",
+        "priority": "must",
+        "rationale": "Targets-as-finish-lines is the exact failure the prime directive forbids; the utility function must keep searching.",
+        "requirement": "Targets are constraints and milestones in a versioned, inspectable utility function; the system keeps proposing frontier moves and records valid do-nothing decisions after targets are met.",
+        "sources": [
+          "S-2",
+          "S-3",
+          "S-5",
+          "S-43"
+        ],
+        "verified_by": "Simulator episode: hitting the CPL target does not stop proposals; do-nothing appears in the journal with reasons."
+      },
+      {
+        "id": "TR-9",
+        "priority": "must",
+        "rationale": "Platform-reported ROAS routinely exceeds incrementality and CRM truth; optimizing it buys junk leads.",
+        "requirement": "Optimization objectives graduate from raw CPL to qualified CPL to expected CAC, contribution profit, and LTV/spend using the downstream quality funnel; measurement disagreement lowers decision confidence instead of cherry-picking.",
+        "sources": [
+          "S-3",
+          "S-5",
+          "S-9",
+          "S-10",
+          "S-42",
+          "S-43"
+        ],
+        "verified_by": "Scenario test with cheap low-quality versus expensive high-quality campaigns selects the profitable one."
+      },
+      {
+        "id": "TR-10",
+        "priority": "must",
+        "rationale": "Vector retrieval without structured verification is how a US ecommerce learning ends up steering India B2B lead-gen.",
+        "requirement": "Durable event history is the truth store; embeddings assist retrieval only; every learning carries evidence refs, evidence type, applicability scope, and a status lifecycle with expiry and contradiction handling.",
+        "sources": [
+          "S-2",
+          "S-12",
+          "S-23",
+          "S-37"
+        ],
+        "verified_by": "Retrieval tests: out-of-scope and stale learnings are rejected by scope and evidence checks before use."
+      },
+      {
+        "id": "TR-11",
+        "priority": "must",
+        "rationale": "Research ingests hostile text by design; one confused-deputy read can become a spend action.",
+        "requirement": "External content is wrapped with origin metadata as untrusted data, never instructions; research tools are isolated from the Executor and cannot reach policy private endpoints.",
+        "sources": [
+          "S-2",
+          "S-18",
+          "S-20",
+          "S-37",
+          "S-41",
+          "S-42"
+        ],
+        "verified_by": "Prompt-injection fixtures: pages demanding credential upload or instruction override are classified malicious and cause no tool call."
+      },
+      {
+        "id": "TR-12",
+        "priority": "should",
+        "rationale": "Single-vendor dependence turns an outage or price change into a system outage; model names in logic freeze routing evolution.",
+        "requirement": "All model access goes through a router abstraction (no model names in business logic); every decision records provider, model, prompt, and tool-catalog versions; high-impact actions get an independent critic, optionally on a second provider.",
+        "sources": [
+          "S-2",
+          "S-13",
+          "S-17",
+          "S-19"
+        ],
+        "verified_by": "Router tests swap providers behind the interface; decision records assert version fields present."
+      },
+      {
+        "id": "TR-13",
+        "priority": "must",
+        "rationale": "Owner decision: Meta end to end is the first platform slice, and it must prove the kernel/executor/measurement pattern Google later reuses.",
+        "requirement": "A versioned Meta adapter behind a typed interface ships read (campaigns, ad sets, ads, insights) first, then drafts, budgets, statuses, and supported experiments; a fake Meta provider implements the same interface for tests and simulation.",
+        "sources": [
+          "S-26",
+          "S-36",
+          "S-37"
+        ],
+        "verified_by": "Adapter contract tests run identically against fake and (credential-gated) live Meta; version pin asserted in one constant."
+      },
+      {
+        "id": "TR-14",
+        "priority": "must",
+        "rationale": "Without owned conversion truth the system is a chatbot around platform attribution.",
+        "requirement": "First-party measurement ships a client event path and POST /v1/events for lead, qualification, opportunity, order, refund, and margin events with a privacy-aware journey graph from click to customer.",
+        "sources": [
+          "S-7",
+          "S-9"
+        ],
+        "verified_by": "End-to-end ingest test: synthetic click-to-revenue journey resolves to the correct qualified-CPL figure."
+      },
+      {
+        "id": "TR-15",
+        "priority": "must",
+        "rationale": "Shadow mode is the Phase 2 gate between read-only analysis and any autonomous spend; calibration data is its output.",
+        "requirement": "Before any autonomous execution, the system runs a decision journal plus shadow mode: it records what it would do with predicted impact, evaluates at maturity, and reports decision precision, false-intervention rate, and calibration.",
+        "sources": [
+          "S-31",
+          "S-36",
+          "S-43"
+        ],
+        "verified_by": "Frozen replay scenarios produce a calibration report in CI with zero mutations executed."
+      },
+      {
+        "id": "TR-16",
+        "priority": "must",
+        "rationale": "Self-graded homework is how strategy evolution silently corrupts; the exam must be unreadable to the candidate.",
+        "requirement": "No strategy or code candidate is promoted on model claims; promotion requires beating the champion on frozen replay plus adversarial evals, and candidates cannot modify the protected eval corpus or BLACK-zone authority code.",
+        "sources": [
+          "S-2",
+          "S-17",
+          "S-37"
+        ],
+        "verified_by": "Zone classifier test plus a red-team test where a candidate attempts eval modification and is blocked."
+      },
+      {
+        "id": "TR-17",
+        "priority": "should",
+        "rationale": "Single-vendor research and eternal-truth memory are how echo chambers become strategy.",
+        "requirement": "Research runs a layered mesh (first-party truth, official structured sources, search abstraction, fetch/extraction, browser last) with evidence tiers, claim states, contradiction tracking, source-independence scoring, and caching of slow-changing data.",
+        "sources": [
+          "S-5",
+          "S-7",
+          "S-8"
+        ],
+        "verified_by": "Research pipeline tests: vendor swap behind the search interface; contradiction fixtures yield CONTRADICTORY state, not silent overwrite."
+      },
+      {
+        "id": "TR-18",
+        "priority": "should",
+        "rationale": "Scattered bets without opportunity cost or information value are just spend; inconclusive handling prevents false certainty.",
+        "requirement": "Opportunities carry stored score components (value, success probability, fit, information value, reversibility, cost, downside, delay); experiments carry caps, stop rules, and a first-class inconclusive state, starting at native A/B plus Bayesian levels.",
+        "sources": [
+          "S-4",
+          "S-5",
+          "S-28",
+          "S-29"
+        ],
+        "verified_by": "Opportunity ranking test with known-value fixtures; experiment evaluator marks underpowered results inconclusive, never forced win/loss."
+      },
+      {
+        "id": "TR-19",
+        "priority": "should",
+        "rationale": "One account-level autonomy switch grants new-geography authority on the evidence of negative-keyword precision.",
+        "requirement": "Trust is tracked per action class from calibrated success minus false-intervention and downside penalties; low-risk classes go autonomous under micro-limits while rare or high-risk classes stay in shadow or approval.",
+        "sources": [
+          "S-6",
+          "S-15",
+          "S-30"
+        ],
+        "verified_by": "Trust ledger tests: repeated safe outcomes raise limits, one bad outcome collapses them for that class only."
+      },
+      {
+        "id": "TR-20",
+        "priority": "must",
+        "rationale": "Audit and replay die if raw truth is overwritten or history is mutable.",
+        "requirement": "Audit events are append-only and immutable; raw, normalized, and derived data are stored separately; money uses micros and timestamps are UTC.",
+        "sources": [
+          "S-23",
+          "S-33",
+          "S-35"
+        ],
+        "verified_by": "Storage tests: update/delete paths on raw and audit tables do not exist; replay rebuilds derived metrics from raw."
+      },
+      {
+        "id": "TR-21",
+        "priority": "must",
+        "rationale": "The pipeline verifies through a browser against compose boot; an API without drivable pages fails QA by construction.",
+        "requirement": "The app serves dashboard, decision journal, opportunities, experiments, and approvals as server-rendered pages plus the JSON API on $PORT (default 3000) with GET /health; all five UI states are defined per screen and QA drives them with no login.",
+        "sources": [
+          "S-36",
+          "S-40"
+        ],
+        "verified_by": "QA browser smoke on the compose boot covering each page's ideal, empty, loading, and error states."
+      },
+      {
+        "id": "TR-22",
+        "priority": "must",
+        "rationale": "Schedulers and message buses deliver at-least-once; multi-day workflows must survive crashes without a giant cron script.",
+        "requirement": "All event consumers are idempotent on event_id; multi-step mutations run as sagas with compensating actions through the workflow abstraction; the in-process scheduler implements it now and Temporal replaces it later.",
+        "sources": [
+          "S-21",
+          "S-22",
+          "S-24"
+        ],
+        "verified_by": "Crash-recovery test: killing a mid-saga worker resumes to exactly-once effects on restart."
+      },
+      {
+        "id": "TR-23",
+        "priority": "should",
+        "rationale": "Unevaluated predictions compound into confident wrongness; cost blindness turns research into a burn rate.",
+        "requirement": "Every prediction is evaluated against matured outcomes with calibration tracking; every model, browser, and research call records tenant, tokens, latency, cost, and usefulness for the auditor.",
+        "sources": [
+          "S-4",
+          "S-31",
+          "S-40"
+        ],
+        "verified_by": "Calibration dashboard data test: a batch of known overconfident predictions shows miscalibration numerically."
+      },
+      {
+        "id": "TR-24",
+        "priority": "should",
+        "rationale": "Unsafe writes must default to refusal while reads stay available; incidents that leave no artifact repeat.",
+        "requirement": "The system fails closed on unsafe writes and open on read-only research; every material failure becomes a memory entry, a regression test, an improvement candidate, or an alert.",
+        "sources": [
+          "S-2",
+          "S-37",
+          "S-42",
+          "S-43"
+        ],
+        "verified_by": "Kill-switch and tracking-outage scenarios freeze writes while research pages keep serving; each leaves a regression fixture."
+      },
+      {
+        "id": "TR-25",
+        "priority": "could",
+        "rationale": "Meta delivery optimizes the auction; the system's edge is creative concepts and fatigue detection, not bid micromanagement.",
+        "requirement": "Creative assets carry semantic features (hook, angle, pain, persona, proof, offer, CTA, format); fatigue is estimated from performance decay plus saturation, never raw frequency; generated creative is experimental by default.",
+        "sources": [
+          "S-26",
+          "S-27"
+        ],
+        "verified_by": "Fatigue model test: high-frequency but non-decayed creative is not flagged while decayed creative is."
+      },
+      {
+        "id": "TR-26",
+        "priority": "should",
+        "rationale": "Cross-tenant leakage destroys the multi-tenant future; priors must help without exposing customer data.",
+        "requirement": "Tenant isolation holds on every query path; cross-account learning flows only as de-identified aggregates with minimum cohort sizes, and customer evidence always overrides weaker priors.",
+        "sources": [
+          "S-10",
+          "S-12"
+        ],
+        "verified_by": "Isolation tests with two tenants plus a leakage test asserting no customer rows cross the aggregate boundary."
+      }
+    ]
+  },
+  "ui": {
+    "accessibility": [
+      "Text contrast at least 4.5:1 for body and 3:1 for large text against the --color-bg and --color-surface tokens.",
+      "Every page is fully operable by keyboard: visible focus ring, logical tab order matching the region order, approvals confirmable without a mouse.",
+      "All form inputs carry labels; all async regions announce state changes via aria-live; tables expose headers and row counts.",
+      "QA checks contrast, keyboard-only approval flow, and screen-reader labels on the journal and approvals pages."
+    ],
+    "layouts": [
+      {
+        "purpose": "Is the business efficient, safe, and improving right now?",
+        "regions": "Header with tenant, spend-guard status, and tracking health; KPI strip (qualified CPL, qualified volume, maturity coverage); decision feed; open experiments; guardian incidents.",
+        "responsive": "Single column under 900px: guard status first, KPI strip as stacked cards, feed below.",
+        "screen": "Command dashboard",
+        "states": {
+          "empty": "No connected account yet: shows the connect-Meta plus install-pixel checklist with expected time per step.",
+          "error": "Failed provider sync or unhealthy tracking: names the failing check, shows last good data timestamp, offers retry.",
+          "ideal": "Live KPIs with maturity badges, today's proposed and executed actions, experiment statuses.",
+          "loading": "Skeleton KPI cards and feed rows; no layout shift when data arrives.",
+          "partial": "Stale provider data banner with age; matured metrics render normally, immature ones show maturity bars."
+        }
+      },
+      {
+        "purpose": "What did the system decide, why, and was it right?",
+        "regions": "Filterable decision table (date, action class, expected vs matured impact, status); decision detail drawer with alternatives, evidence refs, and policy id; calibration summary.",
+        "responsive": "Table collapses to cards; drawer becomes full-screen overlay.",
+        "screen": "Decision journal",
+        "states": {
+          "empty": "Before shadow mode starts: explains what will appear and links to start the first replay.",
+          "error": "Replay or evaluation failure names the scenario and preserves prior entries; retry is per-scenario.",
+          "ideal": "Decisions with matured evaluations, calibration curve, and false-intervention annotations.",
+          "loading": "Skeleton rows; calibration panel shows cached last run with a refreshing indicator.",
+          "partial": "Unevaluated recent decisions show awaiting-maturity with expected evaluation dates."
+        }
+      },
+      {
+        "purpose": "Which bets compete for the next unit of spend, and what will settle them?",
+        "regions": "Ranked opportunity list with score components visible; experiment cards with caps, stop rules, and state; new-hypothesis composer.",
+        "responsive": "Score components collapse behind disclosure toggles.",
+        "screen": "Opportunities and experiments",
+        "states": {
+          "empty": "Empty queue state triggers a research prompt: the strategist explains what it will investigate first.",
+          "error": "Failed experiment fetch preserves drafts; error names the failed source.",
+          "ideal": "Ranked opportunities with components, live experiments with progress toward maturity.",
+          "loading": "Skeleton cards.",
+          "partial": "Some experiment arms await maturity; cards show data-through timestamps."
+        }
+      },
+      {
+        "purpose": "What needs a human yes or no, and what happens on each path?",
+        "regions": "Pending approval queue with impact, downside, evidence, and expiry; approve/reject with reason field; executed-approval receipts.",
+        "responsive": "Queue becomes stacked cards with sticky approve/reject bar.",
+        "screen": "Approvals",
+        "states": {
+          "empty": "No pending approvals: shows autonomy posture per action class so emptiness reads as healthy.",
+          "error": "Approval action failure keeps the item pending and surfaces the reconciliation state.",
+          "ideal": "Pending items with full context and one-click decide plus reason.",
+          "loading": "Skeleton queue rows.",
+          "partial": "Expired approvals move to a lapsed section instead of vanishing."
+        }
+      }
+    ],
+    "patterns": [
+      {
+        "pattern": "Forms and approvals",
+        "rule": "Validate inline on blur, summarize on submit, and never clear user input on error; destructive approvals require typing-free explicit confirm plus reason, with the downside estimate shown beside the button."
+      },
+      {
+        "pattern": "Tables and lists",
+        "rule": "Every table shows row counts, sorts deterministically, and renders an explicit empty state naming the action that fills it; never a blank panel."
+      },
+      {
+        "pattern": "Async and maturity",
+        "rule": "Immature or loading data always shows its state: skeleton while loading, maturity bar while awaiting conversions, stale banner past freshness thresholds."
+      },
+      {
+        "pattern": "Errors and incidents",
+        "rule": "Error panels name what failed, what is still true, and the next action (retry, inspect, escalate); guardian freezes get a persistent banner until explicitly re-enabled."
+      },
+      {
+        "pattern": "Toasts and feedback",
+        "rule": "Mutations confirm via a toast naming the receipt id; failures persist as panels, never auto-dismissing toasts."
+      }
+    ],
+    "theme": {
+      "dark_mode": "No dark mode in v1; light theme only, with tokens structured so a dark inversion maps each --color-* token without touching layouts.",
+      "density": "Comfortable density: 8px base spacing, 44px minimum touch targets on decision buttons.",
+      "motion": "No decorative animation; state changes crossfade under 150ms; skeletons pulse subtly and respect prefers-reduced-motion.",
+      "typography": "System stack with tabular numerals for every metric; one display size for KPI values, one body size, one caption size.",
+      "tokens": [
+        {
+          "name": "--color-bg",
+          "use": "Page background.",
+          "value": "#F7F5F0"
+        },
+        {
+          "name": "--color-surface",
+          "use": "Cards, panels, table headers.",
+          "value": "#FFFFFF"
+        },
+        {
+          "name": "--color-ink",
+          "use": "Primary text.",
+          "value": "#1C1A16"
+        },
+        {
+          "name": "--color-muted",
+          "use": "Secondary text and timestamps.",
+          "value": "#6B655A"
+        },
+        {
+          "name": "--color-accent",
+          "use": "Links, active states, primary buttons.",
+          "value": "#1D5FBF"
+        },
+        {
+          "name": "--color-good",
+          "use": "Healthy metrics, successful evaluations.",
+          "value": "#1E7E34"
+        },
+        {
+          "name": "--color-warn",
+          "use": "Immature data, pending approvals.",
+          "value": "#B26A00"
+        },
+        {
+          "name": "--color-bad",
+          "use": "Guard freezes, errors, regressions.",
+          "value": "#B3261E"
+        },
+        {
+          "name": "--space-1",
+          "use": "Base spacing unit; all gaps are multiples.",
+          "value": "8px"
+        },
+        {
+          "name": "--radius-1",
+          "use": "Cards, inputs, buttons.",
+          "value": "8px"
+        },
+        {
+          "name": "--font-body",
+          "use": "All UI text; tabular numerals for metrics.",
+          "value": "system-ui, sans-serif"
+        }
+      ]
+    }
+  }
+}

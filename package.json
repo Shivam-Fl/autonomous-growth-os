@@ -1,0 +1,10 @@
+{
+  "name": "autonomous-growth-os",
+  "private": true,
+  "scripts": {
+    "sdlc:verify": "echo \"sdlc:verify is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
+    "sdlc:serve": "echo \"sdlc:serve is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
+    "sdlc:seed": "echo \"sdlc:seed is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
+    "sdlc:ready": "echo \"sdlc:ready is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\""
+  }
+}
