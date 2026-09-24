@@ -314,6 +314,14 @@
       "attempt": 1,
       "at": "2026-09-24T19:23:34.857Z",
       "digest": "The implement stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "implement",
+      "error_signature": "a4b7d12ca6b21274",
+      "error_type": "agent-runtime",
+      "attempt": 2,
+      "at": "2026-09-24T22:41:53.191Z",
+      "digest": "The implement stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [],
