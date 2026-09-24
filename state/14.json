@@ -96,7 +96,7 @@
         ],
         "what": "Google Ads as the second platform slice reusing the Meta adapter, kernel and measurement pattern",
         "why": "Owner decision on #14: Meta end to end ships first; Google is a later epic that reuses what the Meta slice established, not work built in parallel.",
-        "issue": null
+        "issue": 23
       },
       {
         "covers": [
