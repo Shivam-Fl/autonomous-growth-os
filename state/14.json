@@ -158,7 +158,7 @@
         "risk": "Touches migrations, money representation and audit immutability; a mistake here corrupts every later slice.",
         "title": "Boot local app with dashboard shell, health, money and audit foundations",
         "why": "An operator can open localhost:3000 and see guard status plus empty states, and every later slice has a bootable app, a database and real sdlc verbs to build on.",
-        "issue": null
+        "issue": 16
       },
       {
         "acceptance": [
@@ -345,5 +345,7 @@
     ],
     "understanding": "Epic #14 is the whole Autonomous Growth OS: architecture decided and merged in #15, so this split orders the build per spec S-38 build order (measurement truth, then memory, then shadow intelligence, then bounded execution, then research-driven experimentation) with the recorded owner decision that Meta ships first and Google reuses it. Spec S-39 argues Google-first; that section is now stale on platform order by explicit human decision. Clubbing test, one line per adjacent pair (budget 6 files): pieces 1-2 SPLIT — foundation (boot, pages, SQLite, money, audit) vs measurement (events, funnel, maturity) touch different modules with separate demos (empty app vs qualified CPL) and together exceed one work order. Pieces 2-3 SPLIT — first-party measurement vs Meta adapter read touch different surfaces (measurement/API vs integrations/meta_ads) and each demos alone (owned truth vs platform campaigns). Pieces 3-4 SPLIT — Meta read vs shadow journal is new surface (decision records, snapshots, replay, calibration) needing 2+3 as input, not an incremental input mode. Pieces 4-5 SPLIT — journal (zero mutations) vs safety (capabilities, executor, approvals, guardian) is the spec's own phase gate (shadow before autonomy, engineering rule 17); shared decision records but a new authority boundary and the highest risk, and combined far exceeds one PR. Pieces 5-6 SPLIT — safety (policy/executor) vs research/memory (adapters, router, learnings) share no files and 6 depends only on 2, so they parallelize rather than chain. Pieces 6-7 SPLIT (closest call) — research/memory vs opportunities/experiments share evidence concepts and feed one screen, but combined (mesh plus router plus lifecycle plus scoring plus evaluator plus UI) exceeds one work order and each demos alone (scoped learning vs ranked bets with inconclusive states), so kept as consumer 7 on producer 6. Dependencies branch (2 and 3 off 1; 4 joins them; 6 off 2; 7 joins 4+6) so no linear chain of near-identical titles."
   },
-  "children": []
+  "children": [
+    16
+  ]
 }
