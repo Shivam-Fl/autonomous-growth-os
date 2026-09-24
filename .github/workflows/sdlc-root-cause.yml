@@ -216,7 +216,11 @@ jobs:
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
         id: prov
-        run: node .sdlc/bin/provider-settings.mjs
+        # The roles this job runs: a model the gateway serves only on the OpenAI API starts a local
+        # translator here (runtime.provider.openai_models), and it needs the key to call through.
+        run: node .sdlc/bin/provider-settings.mjs root_cause
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # The constraints the validator will apply, straight from the schema. A limit the agent
       # is never told about is not a constraint, it is a trap: a council's twenty minutes of

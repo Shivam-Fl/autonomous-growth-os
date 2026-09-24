@@ -22,21 +22,23 @@ runtime:
                         # the client reports as a missing model
     headers:
       x-opencode-session: "sdlc-{run}"   # required: without it the endpoint answers an opaque 500
+    # Served only on OpenCode Go's OpenAI API; the job running one starts a local translator.
+    openai_models: [glm-5.3-flash]
   # Model per STEP. Empty = the action's default — a CLAUDE model, so with a provider above
   # every step must name a model that provider serves (claude-args refuses otherwise, and so
   # does doctor). A council member inherits its stage only when its key is absent.
   # Spend where a mistake is hardest to recover from: the diagnosis every later stage
   # inherits, and the last read before code is trusted.
   model:
-    plan:               qwen3.7-plus
-    plan_proposer:      deepseek-v4.1-flash
+    plan:               minimax-m3
+    plan_proposer:      glm-5.3-flash
     plan_critic:        qwen3.6-plus
-    plan_arbiter:       qwen3.7-plus
-    plan_reviewer:      qwen3.7-plus
-    debug:              deepseek-v4.1-flash
-    implement:          deepseek-v4.1-flash
+    plan_arbiter:       minimax-m3
+    plan_reviewer:      minimax-m3
+    debug:              minimax-m3
+    implement:          glm-5.3-flash
     review:             qwen3.7-plus
-    review_correctness: deepseek-v4.1-flash
+    review_correctness: qwen3.7-plus
     review_design:      qwen3.7-plus
     qa:                 minimax-m3
     root_cause:         qwen3.7-plus

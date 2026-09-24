@@ -597,7 +597,7 @@ async function doctor() {
     }
   }
 
-  if (process.argv.includes('--live')) await liveProbe();
+  if (process.argv.includes('--live')) await liveProbe(cfg);
   summary();
 }
 
@@ -605,13 +605,16 @@ async function doctor() {
 // demands, a model it does not serve. Only a request says so — and until one did, the first
 // sign was an agent run failing, which the outage handling reads as a rate limit and answers
 // with four hours of cooldowns. Only the runner holds the secret, so the runner asks.
-async function liveProbe() {
+async function liveProbe(cfg) {
   section('Live model probe (sdlc-probe.yml)');
   const since = Date.now() - 60_000;   // our clock and the runner's disagree by seconds
   const at = process.argv.indexOf('--models');
   const models = at > 0 ? String(process.argv[at + 1] ?? '') : '';
   const bt = process.argv.indexOf('--bridge');
-  const bridge = bt > 0 ? String(process.argv[bt + 1] ?? '') : '';
+  // The configured OpenAI-only models are probed through the translator too, since that is how
+  // their stages will call them; a direct probe would only report the 503 they answer there.
+  const configuredBridge = (cfg?.runtime?.provider?.openai_models ?? []).join(',');
+  const bridge = bt > 0 ? String(process.argv[bt + 1] ?? '') : (process.argv.includes('--models') ? '' : configuredBridge);
   try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : []), ...(bridge ? ['-f', `bridge=${bridge}`] : []),
     ...(bridge && process.argv.includes('--agent') ? ['-f', 'agent_check=true'] : [])]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
@@ -647,6 +650,7 @@ async function liveProbe() {
     for (const r of [...JSON.parse(readFileSync(join(dir, 'probe.json'), 'utf8')), ...bridged]) {
       const timing = r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s ping${r.tool_ms ? `, ${(r.tool_ms / 1000).toFixed(1)}s tool call` : ''}` : '';
       if (r.role === 'catalog') { pass('the gateway lists', String(r.body).split(',').filter(Boolean).length + ' models'); process.stdout.write(`      ${r.body}\n`); }
+      else if (r.status === 'bridged') continue;
       else if (r.status === 'skipped') warn(`${r.model} (${r.role}) was not probed`, r.body);
       else if (r.status >= 200 && r.status < 300 && r.tools === 'ok') pass(`${r.model} answers and calls tools`, r.role + timing);
       else if (r.status >= 200 && r.status < 300) {

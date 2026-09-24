@@ -201,6 +201,11 @@ export async function probe(cfg, env = process.env) {
   for (const [model, roles] of byModel) {
     const role = roles.join(',');
     if (!model) { results.push({ role, model: '(action default)', status: 'skipped', body: 'no model named' }); continue; }
+    // Served only on the OpenAI API: its stages reach it through the translator, and the probe
+    // workflow probes it there. Asked directly it would only answer 503.
+    if (!candidates.length && (cfg.runtime?.provider?.openai_models ?? []).includes(model)) {
+      results.push({ role, model, status: 'bridged', body: 'probed through the translator' }); continue;
+    }
     if (refusal) { results.push({ role, model, status: 0, body: refusal }); continue; }
     if (!env.ANTHROPIC_API_KEY) {
       results.push({ role, model, status: 'skipped', body: 'no ANTHROPIC_API_KEY — this probe covers the API-key path' });

@@ -312,6 +312,10 @@ runtime:
                         # appends /v1/messages itself, and a doubled /v1 returns a 404 that
                         # the client reports as a missing model
     headers: {}         # e.g. { x-opencode-session: "sdlc-{run}" }
+    # Models this gateway serves only on the OpenAI API (e.g. glm-5.3-flash, kimi-k2.7-code on
+    # OpenCode Go). Claude Code speaks only Anthropic Messages, so a job running one starts a local
+    # LiteLLM translator; "sdlc doctor --live --bridge <m> --agent" proves a model works through it.
+    openai_models: []
   # Model per STEP. Empty = the action's default — a CLAUDE model, so with a provider above
   # every step must name a model that provider serves (claude-args refuses otherwise, and so
   # does doctor). A council member inherits its stage only when its key is absent.

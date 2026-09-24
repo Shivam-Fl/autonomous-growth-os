@@ -15,7 +15,9 @@
 // answers a missing one with an opaque 500 on its Anthropic endpoint — a 400 wearing the
 // wrong number, which costs an hour if you assume the model is down.
 
-import { loadConfig, setOutput } from './lib/actions.js';
+import { loadConfig, setOutput, die } from './lib/actions.js';
+import { modelFor } from './claude-args.mjs';
+import { needsBridge, startBridge } from './model-bridge.mjs';
 
 const cfg = await loadConfig();
 const p = cfg.runtime?.provider ?? {};
@@ -36,6 +38,22 @@ if (p.headers && typeof p.headers === 'object') {
     .join('\n');
 }
 
+// The roles this job runs, as arguments (`provider-settings.mjs plan_proposer plan_critic`). When one
+// of them names a model the gateway serves only on the OpenAI API (runtime.provider.openai_models),
+// Claude Code cannot call it directly, so a local translator is started for the job and every
+// agent step in it points there; a job whose models all speak Messages is untouched.
+const roles = process.argv.slice(2).flatMap((a) => a.split(',')).map((r) => r.trim()).filter(Boolean);
+const models = [...new Set(roles.map((r) => modelFor(cfg, r)).filter(Boolean))];
+let bridged = false;
+if (needsBridge(cfg, models)) {
+  if (!process.env.ANTHROPIC_API_KEY) die('a model in this job needs the translator, and this step was not given ANTHROPIC_API_KEY');
+  env.ANTHROPIC_BASE_URL = await startBridge(cfg, models);
+  // The translator adds the gateway's headers itself; the agent's own would be sent to localhost.
+  delete env.ANTHROPIC_CUSTOM_HEADERS;
+  bridged = true;
+  process.stdout.write(`translator up for ${models.join(', ')} at ${env.ANTHROPIC_BASE_URL}\n`);
+}
+
 // Emitted BOTH ways on purpose.
 //
 // `settings.env` is what the action documents, and it does not reach the CLI process: a run
@@ -49,3 +67,4 @@ setOutput('settings', JSON.stringify(Object.keys(env).length ? { env } : {}));
 setOutput('base_url', env.ANTHROPIC_BASE_URL ?? '');
 setOutput('headers', env.ANTHROPIC_CUSTOM_HEADERS ?? '');
 setOutput('uses_provider', p.base_url ? 'true' : 'false');
+setOutput('bridged', bridged ? 'true' : 'false');

@@ -431,6 +431,10 @@ runtime:
   provider:
     base_url: ${q(a.provider.base_url)}
     headers: {}         # e.g. { x-opencode-session: "sdlc-{run}" }
+    # Models this gateway serves only on the OpenAI API (e.g. glm-5.3-flash, kimi-k2.7-code on
+    # OpenCode Go). Claude Code speaks only Anthropic Messages, so a job running one starts a local
+    # LiteLLM translator; "sdlc doctor --live --bridge <m> --agent" proves a model works through it.
+    openai_models: []
   # One line per step, every step. Empty = the action's default, which is a Claude model.
   # Opus where a mistake is hardest to recover from (the diagnosis every later stage inherits,
   # the last read before code is trusted, the stack decided once); the router runs on every

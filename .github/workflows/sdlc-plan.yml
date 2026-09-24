@@ -186,7 +186,11 @@ jobs:
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
         id: prov
-        run: node .sdlc/bin/provider-settings.mjs
+        # The roles this job runs: a model the gateway serves only on the OpenAI API starts a local
+        # translator here (runtime.provider.openai_models), and it needs the key to call through.
+        run: node .sdlc/bin/provider-settings.mjs plan debug plan_proposer plan_critic plan_arbiter
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Args — proposer
         id: rt_prop
@@ -631,7 +635,11 @@ jobs:
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
         id: prov
-        run: node .sdlc/bin/provider-settings.mjs
+        # The roles this job runs: a model the gateway serves only on the OpenAI API starts a local
+        # translator here (runtime.provider.openai_models), and it needs the key to call through.
+        run: node .sdlc/bin/provider-settings.mjs plan_reviewer
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Plan review agent
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".

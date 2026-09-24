@@ -112,7 +112,11 @@ jobs:
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
         id: prov
-        run: node .sdlc/bin/provider-settings.mjs
+        # The roles this job runs: a model the gateway serves only on the OpenAI API starts a local
+        # translator here (runtime.provider.openai_models), and it needs the key to call through.
+        run: node .sdlc/bin/provider-settings.mjs maintainer
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # A check that the vendored js-yaml loads, not an install. This ran the product's
       # `npm ci` — every install script in its dependency tree — with this job's write token,
