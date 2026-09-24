@@ -115,7 +115,7 @@
         ],
         "what": "Self-improving brain: strategy DSL, champion/challenger promotion, protected evals, GitHub improvement pipeline",
         "why": "Promotion gates need frozen replay, shadow and calibration history from the earlier slices before any candidate can be judged; not plannable until those exist.",
-        "issue": null
+        "issue": 25
       },
       {
         "covers": [
