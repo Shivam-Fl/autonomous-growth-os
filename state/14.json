@@ -17,8 +17,11 @@
   "work_order": null,
   "touch_paths": [],
   "acceptance": [],
-  "planned_route": [],
-  "on_complete": null,
+  "planned_route": [
+    "project",
+    "maintainer"
+  ],
+  "on_complete": "comment-only",
   "artifacts": {},
   "failure_history": [],
   "review_history": [],
@@ -30,6 +33,11 @@
       "at": "2026-09-24T18:36:12.421Z",
       "agent": "intake",
       "action": "-> planning"
+    },
+    {
+      "at": "2026-09-24T18:36:25.622Z",
+      "agent": "router",
+      "action": "route project -> maintainer (greenfield-spec, confidence 90)"
     }
   ],
   "answers": [
@@ -38,5 +46,14 @@
       "by": "Shivam-Fl",
       "answer": "Meta Ads first, Google Ads after. The first ad-platform epic is the Meta Ads integration end to end; Google Ads is a later epic that reuses what the Meta slice established. This overrides the Google-first argument in spec §37."
     }
-  ]
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "epic",
+    "confidence": 90,
+    "matched_rule": "greenfield-spec",
+    "gates": {},
+    "councils": {},
+    "decided_at": "2026-09-24T18:36:25.621Z"
+  }
 }
