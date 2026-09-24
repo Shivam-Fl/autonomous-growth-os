@@ -1,0 +1,688 @@
+{
+  "$id": "project-brief",
+  "title": "Project brief",
+  "description": "The once-per-repo architecture decision, made before the first ticket is planned. Its sections become .sdlc/memory/project.md, which every other agent reads before deciding anything.",
+  "type": "object",
+  "required": [
+    "issue",
+    "product",
+    "stack",
+    "architecture",
+    "invariants",
+    "commands",
+    "deploy",
+    "decisions",
+    "research",
+    "assumptions",
+    "prd",
+    "trd",
+    "coverage"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "section",
+          "disposition",
+          "refs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "section": {
+            "type": "string",
+            "pattern": "^S-[0-9]+$",
+            "description": "A section id from spec-index.json."
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "scope",
+              "requirement",
+              "non_goal",
+              "deferred"
+            ]
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The TR- ids (or scope items) that carry this section. Empty only for a non-goal or a deferral."
+          },
+          "why": {
+            "type": "string",
+            "description": "For a non-goal or a deferral: why, in a sentence the owner can disagree with."
+          }
+        }
+      },
+      "description": "Every section of spec-index.json, each with what happens to it. A section missing from here was dropped without anyone deciding to, and the brief is refused."
+    },
+    "product": {
+      "type": "string",
+      "minLength": 20,
+      "description": "What this is, in a paragraph a new contributor could act on. Not the ticket restated."
+    },
+    "stack": {
+      "type": "object",
+      "required": [
+        "choice",
+        "why"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "choice": {
+          "type": "string",
+          "minLength": 3,
+          "description": "Languages, runtime, framework, data store. Named versions where they matter."
+        },
+        "why": {
+          "type": "string",
+          "minLength": 20,
+          "description": "The reasoning, including what was rejected. This is the most expensive class of decision to reverse in the whole pipeline."
+        },
+        "rejected": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "option",
+              "because"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "because": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "required": [
+        "shape",
+        "modules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "minLength": 20,
+          "description": "How the pieces fit: what talks to what, and across which boundary."
+        },
+        "modules": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "holds"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "holds": {
+                "type": "string",
+                "minLength": 5
+              }
+            }
+          }
+        }
+      }
+    },
+    "invariants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 10
+      },
+      "description": "Domain rules the whole product must respect, whatever the ticket. \"Money is integer minor units, never a float\" is the shape: a rule that is cheap to state now and expensive to retrofit after four features have assumed otherwise."
+    },
+    "conventions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 10
+      },
+      "description": "How code in THIS stack is written here: layout, naming, errors, tests, dependencies. Becomes .sdlc/memory/conventions.md, which the implementer follows and the reviewer checks drift against."
+    },
+    "commands": {
+      "type": "object",
+      "required": [
+        "verify",
+        "serve"
+      ],
+      "additionalProperties": false,
+      "description": "The four sdlc: verbs the pipeline calls. Each is either a real command or an explicit stub naming the issue that should make it real — a verb that silently does nothing is worse than a missing one.",
+      "properties": {
+        "verify": {
+          "type": "string",
+          "minLength": 1
+        },
+        "serve": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "string"
+        },
+        "ready": {
+          "type": "string"
+        },
+        "stubbed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Which verbs are placeholders, and what has to exist before each can be real."
+        }
+      }
+    },
+    "deploy": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Where this runs, and how a preview of a pull request is produced. QA drives that preview, so \"nowhere yet\" is an answer with consequences — say so."
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "decision",
+          "because"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 5
+          },
+          "decision": {
+            "type": "string",
+            "minLength": 10
+          },
+          "because": {
+            "type": "string",
+            "minLength": 20
+          },
+          "consequences": {
+            "type": "string",
+            "description": "What this makes easy and what it makes hard. An ADR without this is an announcement."
+          }
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "What could not be decided from the brief, and what would settle it. The human reading this gate is the person who can answer them."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "research": {
+      "type": "object",
+      "description": "What was learned from OUTSIDE this repository before deciding anything. A brief written without it is an opinion.",
+      "required": [
+        "questions",
+        "findings"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What had to be true for this plan to be right, that the repo could not answer."
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "claim",
+              "evidence",
+              "source"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "claim": {
+                "type": "string",
+                "description": "What was learned, stated so it could be wrong."
+              },
+              "evidence": {
+                "type": "string",
+                "description": "What the source actually says. Not a paraphrase of the claim."
+              },
+              "source": {
+                "type": "string",
+                "description": "URL, or \"first-party: <where>\" when it came from the repo or the issue."
+              },
+              "confidence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "affects": {
+                "type": "string",
+                "description": "Which decision below this changed. A finding that changed nothing is noise."
+              }
+            }
+          },
+          "description": "Each finding names the decision it moved."
+        },
+        "rejected_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Sources looked at and not trusted, with why. Cheap to write, stops the next agent re-reading them."
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "assumption",
+          "if_wrong"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "assumption": {
+            "type": "string",
+            "description": "Stated as a fact someone could check."
+          },
+          "basis": {
+            "type": "string",
+            "description": "Why it is believed — evidence, convention, or nothing."
+          },
+          "if_wrong": {
+            "type": "string",
+            "description": "What breaks and how expensive it is to discover late."
+          },
+          "validate_by": {
+            "type": "string",
+            "description": "The cheapest thing that would settle it."
+          }
+        }
+      },
+      "description": "What this brief takes for granted. Unstated assumptions are found on ticket nine."
+    },
+    "prd": {
+      "type": "object",
+      "description": "What is being built and for whom, before how.",
+      "required": [
+        "problem",
+        "users",
+        "jobs",
+        "scope",
+        "non_goals",
+        "success"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "problem": {
+          "type": "string",
+          "description": "The problem in the world, not the feature list."
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "who",
+              "context",
+              "pain"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "who": {
+                "type": "string"
+              },
+              "context": {
+                "type": "string",
+                "description": "When and where they hit this."
+              },
+              "pain": {
+                "type": "string"
+              },
+              "sophistication": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Jobs to be done, as outcomes the user wants, not features."
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "In scope for v1."
+        },
+        "non_goals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deliberately not doing, with the reason. The most useful section here."
+        },
+        "success": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "metric",
+              "target"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "metric": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "how_measured": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Observable, with a number. \"Users like it\" is not one."
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Budget, deadline, compliance, existing systems."
+        }
+      }
+    },
+    "trd": {
+      "type": "object",
+      "description": "The technical requirements the architecture has to satisfy.",
+      "required": [
+        "requirements"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "requirement",
+              "rationale"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "TR-1, TR-2 …"
+              },
+              "requirement": {
+                "type": "string",
+                "description": "Testable. \"Fast\" is not; \"p95 under 400ms at 50 rps\" is."
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "must",
+                  "should",
+                  "could"
+                ]
+              },
+              "verified_by": {
+                "type": "string",
+                "description": "The check that proves it — a test, a load run, a QA step."
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^S-[0-9]+$"
+                },
+                "description": "The spec sections this requirement comes from."
+              }
+            }
+          }
+        },
+        "data_model": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity",
+              "holds"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "type": "string"
+              },
+              "holds": {
+                "type": "string"
+              },
+              "keys": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "The nouns and what each owns."
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "shape"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Endpoint, queue, or module boundary."
+              },
+              "shape": {
+                "type": "string"
+              },
+              "errors": {
+                "type": "string",
+                "description": "What the caller sees when it fails."
+              },
+              "idempotency": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "nfrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Performance, availability, security, privacy, cost — each with a number."
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "description": "How it looks and behaves, decided once so twenty tickets do not each invent it.",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tokens": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "value",
+                  "use"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "--color-bg, --space-3, --font-body …"
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "use": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Design tokens as names and values. Every screen uses these and nothing else."
+            },
+            "dark_mode": {
+              "type": "string",
+              "description": "How it inverts, or why it does not exist."
+            },
+            "typography": {
+              "type": "string"
+            },
+            "density": {
+              "type": "string"
+            },
+            "motion": {
+              "type": "string"
+            }
+          }
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "rule"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Form, table, empty state, destructive action, toast …"
+              },
+              "rule": {
+                "type": "string",
+                "description": "The decision every ticket follows."
+              },
+              "example": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Decided once. A pattern list is what stops the fifth screen looking like a different product."
+        },
+        "layouts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "screen",
+              "purpose",
+              "regions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "screen": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string",
+                "description": "The one question this screen answers."
+              },
+              "regions": {
+                "type": "string",
+                "description": "The blocks and where they sit."
+              },
+              "states": {
+                "type": "object",
+                "description": "The five states, each described. A screen that cannot reach one says why under that key.",
+                "additionalProperties": false,
+                "properties": {
+                  "ideal": {
+                    "type": "string",
+                    "description": "The state the screen is designed for."
+                  },
+                  "empty": {
+                    "type": "string",
+                    "description": "No data yet — what the person sees and what it invites them to do."
+                  },
+                  "loading": {
+                    "type": "string",
+                    "description": "While data is in flight. Skeleton, spinner, or nothing, and why."
+                  },
+                  "partial": {
+                    "type": "string",
+                    "description": "Some data, some still arriving or missing."
+                  },
+                  "error": {
+                    "type": "string",
+                    "description": "It failed. What is said, and what the person can do next."
+                  }
+                }
+              },
+              "responsive": {
+                "type": "string",
+                "description": "What changes at narrow width."
+              }
+            }
+          }
+        },
+        "accessibility": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Contrast, focus order, keyboard paths, labels — the ones QA will check."
+        }
+      }
+    }
+  }
+}

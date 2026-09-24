@@ -1,0 +1,24 @@
+name: Feature
+description: Something should exist that doesn't.
+labels: ["sdlc:triage", "feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't someone do today? Describe the problem, not the solution — the planner may find a smaller way to solve it.
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Done looks like
+      description: Observable in a browser. QA has to verify each of these against a live URL.
+      placeholder: |
+        - Signing in with Google lands on the dashboard
+        - Reloading keeps you signed in
+    validations: { required: true }
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Explicitly out of scope
+      description: Stops the agent from wandering.

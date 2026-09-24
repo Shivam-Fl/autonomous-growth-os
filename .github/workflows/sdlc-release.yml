@@ -1,0 +1,133 @@
+# Agent 8 — Release. A model writes the release notes; a script files them.
+name: sdlc-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr: { required: true, type: string }
+
+# No concurrency group. One was added when two agents a minute apart each pushed to main, and
+# GitHub keeps only ONE pending run per group: a third merge's dispatch cancelled the second's,
+# silently, and that PR's notes were never written. Nothing here pushes any more, and the one
+# thing runs share — the draft release's body — is merged by publish-release-notes itself.
+
+# What the publish job needs: a draft GitHub release is written through `contents`. The agent's
+# job has its own read-only block below.
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  # The agent holds no write token. It used to run with Bash, Edit and contents: write and commit
+  # CHANGELOG, docs and version bumps straight to main — no gate, no diff check, nothing a
+  # person saw first. Now it writes one file, and the job it runs in could not push if it tried.
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No id-token: the action asks for an OIDC token only when it is NOT given github_token, and
+    # any process the agent starts could otherwise mint this repository's OIDC identity.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+
+      # Base URL, key style and any headers the provider demands. Empty config
+      # means the default Anthropic endpoint, exactly as before this existed.
+      - name: Provider
+        id: prov
+        # The roles this job runs: a model the gateway serves only on the OpenAI API starts a local
+        # translator here (runtime.provider.openai_models), and it needs the key to call through.
+        run: node .sdlc/bin/provider-settings.mjs release
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # The framework's own dependency is vendored, so this only checks it loads. No product
+      # install: writing release notes needs none, and `npm ci` runs every dependency's install
+      # script.
+      - name: Bootstrap
+        run: node .sdlc/bin/ensure-deps.mjs
+
+      - name: Runtime args from config
+        id: rt
+        run: node .sdlc/bin/claude-args.mjs release
+
+      - name: Release notes
+        # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
+        # real repository legitimately takes a long time, and truncating that to protect a
+        # cleanup step trades the work for the bookkeeping.
+        #
+        # It exists because GitHub CANCELS a job that hits `timeout-minutes`, and a cancelled
+        # job skips its remaining steps — including the `if: failure()` step that turns a
+        # failure into a failure-packet. A step that fails on its own is answerable; a job
+        # that gets cancelled dispatches nobody and leaves the issue looking exactly like one
+        # still being worked on. So the job cap is generous, and this sits under it.
+        timeout-minutes: 20
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          # Passed explicitly so the action does NOT try to exchange its OIDC token for a
+          # GitHub App token — that path 401s unless the Claude GitHub App is installed on
+          # the repo, and requiring an App install would make this framework harder to clone.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Every stage dispatches the next, so all but the first agent run is initiated by
+          # github-actions[bot]. The action refuses bot-initiated runs by default — a sensible
+          # guard against bot loops, and one that blocks an automated pipeline entirely.
+          # Scoped to github-actions rather than "*": a workflow WE dispatched, not any bot.
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt.outputs.args }}
+          prompt: |
+            Follow .sdlc/agents/release.md exactly for merged PR #${{ inputs.pr }}.
+
+            Write release-notes.md and nothing else: no commits, no pushes, no labels, no
+            version bumps, no edits to any other file. Write it for someone USING the software,
+            not someone reading the diff: "Fixed sessions being lost after signing in with
+            Google", never "patched SameSite in session.ts".
+
+      # Through a job output, so the only thing that crosses into the job holding a write token
+      # is text — never a checkout the agent could have changed.
+      - name: Hand the notes to the publish job
+        id: notes
+        run: >-
+          node -e "import('./.sdlc/bin/lib/actions.js').then(({ setOutput }) => setOutput('notes',
+          require('fs').existsSync('release-notes.md') ? require('fs').readFileSync('release-notes.md', 'utf8').slice(0, 60000) : ''))"
+
+  publish:
+    needs: draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+      # One rolling draft release. Publishing it — and choosing its version — is a person's.
+      - name: Add them to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+          NOTES: ${{ needs.draft.outputs.notes }}
+        run: node .sdlc/bin/publish-release-notes.mjs

@@ -1,0 +1,63 @@
+{
+  "$id": "survey",
+  "title": "Survey findings",
+  "description": "What the maintainer's survey found worth filing. A script files each entry as an issue and adds each epic link; nothing else the survey wants reaches GitHub.",
+  "type": "object",
+  "required": [
+    "issues"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "body"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 10
+          },
+          "body": {
+            "type": "string",
+            "minLength": 10,
+            "description": "What should be true when it is done, and why. `Covers:`, `Part of #<epic>` and `Depends on #<n>` lines are read as written."
+          },
+          "epic": {
+            "type": "boolean",
+            "description": "true files it as an epic (sdlc:epic): bigger than one issue, and next. Otherwise the watchdog starts it like any other issue."
+          }
+        }
+      },
+      "description": "Two good issues beat ten plausible ones; an empty list is a fine answer."
+    },
+    "epic_links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "epic",
+          "depends_on"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "epic": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The open epic that waits."
+          },
+          "depends_on": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The open epic it cannot be built before."
+          }
+        }
+      },
+      "description": "Epics whose product genuinely cannot be built before another's. A script adds `Depends on #<depends_on>` to each `epic`; both must be open issues labelled sdlc:epic."
+    }
+  }
+}

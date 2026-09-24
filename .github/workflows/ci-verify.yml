@@ -1,0 +1,325 @@
+# Tier 0 — deterministic CI. No model, no cost beyond runner minutes.
+# Runs BEFORE any agent is allowed near the PR: never pay a model for what tsc finds free.
+name: ci-verify
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Dispatchable for one PR by number, because the `pull_request` event cannot be relied on.
+  #
+  # The implementer pushes as github-actions[bot], and GitHub holds bot-triggered
+  # `pull_request` runs at `action_required` until a human clicks approve. A held run produces
+  # no check, so the PR has no CI and the pipeline stalls — or worse, reads the empty rollup as
+  # clean. Dispatch is not held, so the gate starts this itself.
+  #
+  # A dispatched run's own check belongs to the branch it was dispatched on, not to the PR, so
+  # this posts an explicit commit status on the PR's head sha. That is what the rollup reads.
+  workflow_dispatch:
+    inputs:
+      pr: { required: false, type: string }
+
+# One group per PR. A dispatched run has no pull_request in its event, so this fell back to
+# github.ref — the default branch, identical for every dispatch — and with cancel-in-progress
+# each PR's CI cancelled whichever other PR's was still running.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || inputs.pr || github.ref }}
+  cancel-in-progress: true
+
+# No job runs with this block: each declares its own, which replaces it, and
+# tests/build-ci-verify.test.js fails any job that does not. It is the union of theirs because
+# the shared permission suite reads the workflow-level block.
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+# GitHub's default shell is `bash -e`, which has no pipefail. Every check runs
+# `eval "$CMD" | tee -a /tmp/ci.log`, so each step's exit status was tee's — always 0 — and a
+# type error, a failing test suite or a missing script all reported "all configured checks
+# passed". `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Which commit is under test, marked pending before anything runs.
+  #
+  # Pending first, because the gate treats a check that has not appeared as one that may never
+  # appear: minutes of install with nothing on the commit read as "no CI ran".
+  start:
+    # The project brief is a document, not an implementation. It carries no work order, its
+    # branch holds .sdlc/memory and package.json and nothing to compile, and `sdlc:verify`
+    # is red on it by construction — the brief itself says so, because that PR is what
+    # ADDS the verify script and no tsconfig or dependency exists yet. Gating it would put a
+    # red check on the one pull request a human is required to read and merge, and there is
+    # no faster way to teach someone to merge red than to show them a red they must ignore.
+    if: ${{ !startsWith(github.event.pull_request.head.ref || '', 'sdlc/project-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      refused: ${{ steps.sha.outputs.refused }}
+    steps:
+      # The framework from the default branch, not the PR's merge tree. This job holds
+      # statuses: write, and on a `pull_request` event it ran the branch's own sdlc-ctl guard —
+      # which could plant BASH_ENV for the next step, the one holding GH_TOKEN. The commit under
+      # test is read through the API; `verify` is the job that checks the PR out.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+
+      # A `pull_request` run checks out the right thing by default; a DISPATCHED one gets the
+      # default branch, which would test the wrong code and report the result as the PR's.
+      #
+      # A dispatched run reports with this repository's token, so it tests this repository's
+      # own branches and nothing else. A fork's PR selected by branch name alone — memory/x is
+      # a name anyone can push — would have its code run and a green status posted for it. A
+      # fork's own `pull_request` run gets no status from us either: its token is read-only,
+      # and its check runs already say how it went.
+      - name: Resolve the commit under test
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ -z "$PR" ]; then
+            if [ -n "$EVENT_SHA" ] && [ "$EVENT_HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+              echo "sha=$EVENT_SHA" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          HEAD=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid,isCrossRepository \
+            --jq '.headRefOid + " " + (.isCrossRepository | tostring)')
+          SHA=${HEAD% *}
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if [ "${HEAD#* }" != "false" ]; then
+            echo "refused=the PR's head is in a fork" >> "$GITHUB_OUTPUT"
+            echo "::error::PR #$PR comes from a fork. A dispatched ci-verify only tests this repository's own branches."
+            exit 1
+          fi
+          echo "under test: $SHA"
+
+      - name: Report as pending on the commit under test
+        if: steps.sha.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state=pending -f context=ci-verify -f description="running" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+
+  # The PR's code, and nothing that can write. Its install scripts, its tests and its build all
+  # run here, and they used to run in the job holding statuses, issues and pull-requests write
+  # with the token persisted in .git/config — so the code under test could post its own green.
+  verify:
+    needs: start
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      checks_failed: ${{ steps.typecheck.outcome == 'failure' || steps.lint.outcome == 'failure' || steps.unit.outcome == 'failure' || steps.build.outcome == 'failure' || steps.e2e.outcome == 'failure' }}
+      summary: ${{ steps.digest.outputs.summary }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          ref: ${{ inputs.pr && needs.start.outputs.sha || '' }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('**/package-lock.json') != '' && 'npm' || '' }}
+
+      # Proof, on this runner, that a pipeline whose first command fails fails the step. The
+      # whole verdict below rests on it, and it was false for as long as this workflow existed.
+      - name: A failing check fails its step
+        run: |
+          if (false | tee /dev/null); then
+            echo "::error::this shell ignores a failure inside a pipeline — every check below would pass"
+            exit 1
+          fi
+
+      # Install scripts are not run. This job's verdict is the PR's checks, and a dependency's
+      # postinstall runs before every one of them: one the PR adds could stub the linter or the
+      # test runner in node_modules, and each check after it would pass. A product that needs a
+      # script runs it in verify.prepare, which is the owner's config and a reserved path.
+      - name: Bootstrap
+        run: |
+          if [ -f package-lock.json ]; then npm ci --ignore-scripts || FAILED="npm ci"
+          elif [ -f package.json ]; then npm install --no-audit --no-fund --ignore-scripts || FAILED="npm install"
+          fi
+          if [ -n "${FAILED:-}" ]; then
+            echo "::error::$FAILED --ignore-scripts failed. ci-verify never runs install scripts: a dependency's postinstall runs before the checks that judge this PR, and could neutralise them. If this product needs one (a native build, a generated client), run it by name in verify.prepare in .sdlc/config.yml, e.g. \`npm rebuild <package>\`."
+            exit 1
+          fi
+          node .sdlc/bin/ensure-deps.mjs
+
+      # Each step tees its output so the digest can read the real failure, and `continue-on-error`
+      # lets every check run — one digest listing four problems beats four sequential red builds.
+      # Not continue-on-error: if the prep fails, every check after it fails for the wrong
+      # reason and the digest blames the PR for a broken build setup.
+      # A repo with its own CI should keep using it. verify.mode: existing skips ours
+      # entirely rather than running a weaker duplicate alongside it.
+      - name: Should we run our own checks?
+        id: mode
+        run: |
+          MODE=$(node .sdlc/bin/read-config.mjs verify.mode)
+          echo "mode=${MODE:-own}" >> $GITHUB_OUTPUT
+          [ "$MODE" = "existing" ] && echo "verify.mode is 'existing' — this repo's own CI gates the PR" || true
+
+      # Deliberately NOT read from config. Reading `verify.install` would require a YAML
+      # parser, which is what we are about to install — a bootstrap deadlock. A project
+      # needing something other than npm edits this line.
+      # Works in a repo with no package.json: install the repo's own deps when there is a
+      # manifest, then make sure the framework's single dependency is available either way.
+      - name: Prepare
+        if: steps.mode.outputs.mode != 'existing'
+        run: |
+          set -o pipefail
+          CMD=$(node .sdlc/bin/read-config.mjs verify.prepare)
+          if [ -z "$CMD" ]; then echo "verify.prepare not configured — skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Typecheck
+        if: steps.mode.outputs.mode != 'existing'
+        id: typecheck
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          CMD=$(node .sdlc/bin/read-config.mjs verify.typecheck)
+          if [ -z "$CMD" ]; then echo "verify.typecheck not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Lint
+        if: steps.mode.outputs.mode != 'existing'
+        id: lint
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          CMD=$(node .sdlc/bin/read-config.mjs verify.lint)
+          if [ -z "$CMD" ]; then echo "verify.lint not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Unit tests
+        if: steps.mode.outputs.mode != 'existing'
+        id: unit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          CMD=$(node .sdlc/bin/read-config.mjs verify.unit)
+          if [ -z "$CMD" ]; then echo "verify.unit not configured - skipping"; exit 0; fi
+          # A stub verify on a branch with code would pass it without running anything.
+          node .sdlc/bin/verify-is-real.mjs 2>&1 | tee -a /tmp/ci.log
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Build
+        if: steps.mode.outputs.mode != 'existing'
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          CMD=$(node .sdlc/bin/read-config.mjs verify.build)
+          if [ -z "$CMD" ]; then echo "verify.build not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      # install writes verify.e2e from what it detects and prints it with a green tick, and
+      # nothing ran it: a repo with a Playwright suite was told it was checked when it was not.
+      - name: E2E
+        if: steps.mode.outputs.mode != 'existing'
+        id: e2e
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          CMD=$(node .sdlc/bin/read-config.mjs verify.e2e)
+          if [ -z "$CMD" ]; then echo "verify.e2e not configured - skipping"; exit 0; fi
+          echo "$ $CMD" | tee -a /tmp/ci.log
+          eval "$CMD" 2>&1 | tee -a /tmp/ci.log
+
+      - name: Digest failures
+        id: digest
+        if: steps.typecheck.outcome == 'failure' || steps.lint.outcome == 'failure' || steps.unit.outcome == 'failure' || steps.build.outcome == 'failure' || steps.e2e.outcome == 'failure'
+        run: node .sdlc/bin/sdlc-ctl.mjs digest --file /tmp/ci.log
+
+      - name: Fail if any check failed
+        if: steps.typecheck.outcome == 'failure' || steps.lint.outcome == 'failure' || steps.unit.outcome == 'failure' || steps.build.outcome == 'failure' || steps.e2e.outcome == 'failure'
+        run: exit 1
+
+  # The verdict, from the one thing that knows it: whether the verify JOB succeeded.
+  #
+  # This was computed from four check outcomes, posting success unless one of them read
+  # exactly "failure". A cancelled run, a timeout, or an `npm ci` that died on a broken lockfile
+  # skipped all four — and "skipped skipped skipped skipped" contains no failure, so each of
+  # those posted "all configured checks passed" on code nothing had checked.
+  #
+  # always(), so a cancelled or failed run never leaves `pending` on the commit — a status that
+  # never resolves stalls the gate exactly as thoroughly as a failing one, and says less.
+  report:
+    needs: [start, verify]
+    if: ${{ always() && needs.start.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      statuses: write
+    steps:
+      # Only the run that marked this commit pending resolves it. A newer run for the same PR
+      # cancels this one and marks it pending itself; "cancelled" posted after that would turn
+      # a run still in progress red.
+      - name: Report the result on the commit under test
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.start.outputs.sha }}
+          RESULT: ${{ needs.verify.result }}
+          CHECKS_FAILED: ${{ needs.verify.outputs.checks_failed }}
+          REFUSED: ${{ needs.start.outputs.refused }}
+        run: |
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          OWNER=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses" \
+            --jq '[.[] | select(.context == "ci-verify")][0].target_url // ""' || true)
+          if [ -n "$OWNER" ] && [ "$OWNER" != "$RUN_URL" ]; then
+            echo "ci-verify on $SHA belongs to $OWNER now — leaving it"
+            exit 0
+          fi
+          case "$RESULT" in
+            success)   STATE=success; DESC="all configured checks passed" ;;
+            cancelled) STATE=failure; DESC="cancelled" ;;
+            *)         STATE=failure
+                       if [ -n "$REFUSED" ]; then DESC="not run: $REFUSED"
+                       elif [ "$CHECKS_FAILED" = "true" ]; then DESC="a check failed"
+                       else DESC="setup failed"; fi ;;
+          esac
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$STATE" -f context=ci-verify -f description="$DESC" \
+            -f target_url="$RUN_URL" >/dev/null
+          echo "reported $STATE ($DESC) on $SHA"
+
+      - name: Post the digest to the PR
+        if: needs.verify.outputs.summary != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
+          SUMMARY: ${{ needs.verify.outputs.summary }}
+        run: |
+          printf '## CI failed\n\n%s\n\n_Digest produced by regex, not a model._\n' "$SUMMARY" \
+            | gh pr comment "$PR" --body-file -

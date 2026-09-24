@@ -1,0 +1,86 @@
+# Agent 10 — Watchdog. Pure script, every 15 minutes.
+# Reclaims stale locks, trips budgets, surfaces stalls. The thing that stops a hung issue
+# from sitting locked forever because an agent died mid-run.
+name: sdlc-watchdog
+
+on:
+  schedule: [{ cron: "*/15 * * * *" }]
+  workflow_dispatch:
+
+# One sweep at a time, and a running one is never cancelled. advance() dispatches a sweep whenever
+# a slot frees, on top of the cron, and two overlapping sweeps reported every stall twice. GitHub
+# keeps one waiting run per group, the newest, which sees everything an older waiting one would;
+# advance() does not dispatch at all while one is waiting.
+concurrency:
+  group: sdlc-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: write          # it dispatches intake to start a queued issue; without this the
+                          # wake marks an issue in flight and then cannot start it
+  pull-requests: read     # reconcile-merged asks each ledger's PR whether it already merged
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+      # The framework's own dependency is vendored, so this only checks it loads. No product
+      # install: `npm ci` in the root runs every dependency's install script with this job's
+      # contents, issues and actions write — on a schedule, every fifteen minutes.
+      - name: Bootstrap
+        run: node .sdlc/bin/ensure-deps.mjs
+
+      - name: Sweep every open ledger
+        id: sweep
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: node .sdlc/bin/sdlc-ctl.mjs watchdog
+
+      - name: Report anything that needs a human
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT: ${{ steps.sweep.outputs.report }}
+        run: node .sdlc/bin/watchdog-report.mjs
+
+      # A merge whose follow-up was cancelled or crashed left the ledger at qa-pass and the issue
+      # open, with nothing that would ever record it. Before the top-up below, so the issues
+      # that were waiting on it can start in this same sweep.
+      - name: Record merges nothing recorded
+        if: always()
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: node .sdlc/bin/reconcile-merged.mjs
+
+      # Re-offer the start queue. This is the only thing in the framework that runs on a
+      # clock, so it is the only thing that can notice a slot freed without a merge.
+      #
+      # `wake-dependents` was called from exactly one place — on-merge — so the queue was
+      # re-offered only when a pull request merged and closed an issue. A slot also frees when
+      # an issue stops at a human gate, exceeds its budget, or is closed by hand, and none of
+      # those run any code. On this repo both slots went to issues that stopped at human gates
+      # without ever claiming a lock: neither could close without a person, so no merge could
+      # happen, so nothing re-offered the queue, and two ready issues waited behind a slot
+      # nobody was holding. The pipeline could not restart itself.
+      #
+      # No CLOSED_ISSUE: top-up only. It wakes nothing when the cap is full, and nothing when
+      # no issue is ready — so on a healthy repo this step is a no-op every fifteen minutes.
+      # Issues parked waiting out a provider outage. This is the only thing in the framework
+      # that runs on a clock, so it is the only thing that can start work again after a wait
+      # that nothing else would notice — a quota limit clears silently, on its own schedule.
+      - name: Start anything whose cooldown has passed
+        if: always()
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: node .sdlc/bin/resume-cooled-down.mjs
+
+      - name: Start whatever is ready and has a slot
+        if: always()
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: node .sdlc/bin/wake-dependents.mjs

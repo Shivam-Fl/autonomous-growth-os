@@ -1,0 +1,88 @@
+# One real one-token request per model, plus one forced tool call, with the runner's own key and
+# headers. Started by `sdlc doctor --live`, which reads the uploaded probe.json and fails on any
+# non-2xx or on a model that cannot return a tool call. `models` probes candidates instead of the
+# configured map (`sdlc doctor --live --models a,b`), for choosing what a stage should run.
+name: sdlc-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      models: { required: false, type: string, default: '' }
+      # Models the gateway serves only on the OpenAI API, probed through a local LiteLLM translator
+      # (`sdlc doctor --live --bridge a,b`) — the same path an agent job would take to run one.
+      bridge: { required: false, type: string, default: '' }
+      # 'true' also runs a real Claude Code session on each bridged model (write a file, read it
+      # back): streaming and multi-turn tool results, which a ping cannot exercise.
+      agent_check: { required: false, type: string, default: '' }
+      # 'responses' translates to the OpenAI Responses API instead of chat/completions.
+      bridge_api: { required: false, type: string, default: '' }
+      # 'false' skips the direct Messages probe (a second run probing only another translator route).
+      direct: { required: false, type: string, default: '' }
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Provider
+        id: prov
+        run: node .sdlc/bin/provider-settings.mjs
+      - name: One request per model
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROBE_MODELS: ${{ inputs.models }}
+          PROBE_DIRECT: ${{ inputs.direct }}
+        run: node .sdlc/bin/claude-args.mjs --probe probe.json
+      - name: Start the translator
+        if: inputs.bridge != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BRIDGE: ${{ inputs.bridge }}
+          BRIDGE_API: ${{ inputs.bridge_api }}
+        run: |
+          python3 -m venv /tmp/litellm
+          /tmp/litellm/bin/pip install -q 'litellm[proxy]==1.102.1'
+          node .sdlc/bin/model-bridge.mjs /tmp/litellm.yaml
+          nohup /tmp/litellm/bin/litellm --config /tmp/litellm.yaml --host 127.0.0.1 --port 4000 > /tmp/litellm.log 2>&1 &
+          for i in $(seq 90); do curl -sf http://127.0.0.1:4000/health/liveliness >/dev/null && exit 0; sleep 2; done
+          echo "::error::the translator never came up"; tail -40 /tmp/litellm.log; exit 1
+      - name: One request per bridged model, through the translator
+        if: inputs.bridge != ''
+        env:
+          ANTHROPIC_BASE_URL: http://127.0.0.1:4000
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROBE_MODELS: ${{ inputs.bridge }}
+        run: |
+          node .sdlc/bin/claude-args.mjs --probe bridge.json
+          # The translator's own view of each request. Printed, never uploaded: this is a public
+          # repo's job log, where GitHub masks the key; an artifact would not be masked.
+          tail -60 /tmp/litellm.log || true
+      - name: A real Claude Code session per bridged model
+        if: inputs.bridge != '' && inputs.agent_check == 'true'
+        env:
+          ANTHROPIC_BASE_URL: http://127.0.0.1:4000
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODELS: ${{ inputs.bridge }}
+        run: |
+          npm install -g --no-audit --no-fund @anthropic-ai/claude-code >/dev/null
+          node .sdlc/bin/agent-check.mjs agent.json
+          tail -40 /tmp/litellm.log || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with:
+          name: sdlc-probe
+          path: |
+            probe.json
+            bridge.json
+            agent.json
+          if-no-files-found: warn

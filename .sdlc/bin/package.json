@@ -1,0 +1,4 @@
+{
+  "type": "module",
+  "//": "Marks everything under .sdlc/bin as ESM. Without it Node re-parses each file after guessing wrong, printing MODULE_TYPELESS_PACKAGE_JSON on every step, and the host repo's own package.json is not ours to change."
+}

@@ -1,0 +1,101 @@
+{
+  "$id": "plan-review",
+  "title": "Plan Review",
+  "description": "Verdict from the plan reviewer agent, which stands in for the human gate.",
+  "type": "object",
+  "required": [
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "reject",
+        "escalate"
+      ]
+    },
+    "escalation_reason": {
+      "description": "Only with verdict 'escalate'. Says WHO has to act. 'cannot-verify' is a critique the planner can answer, so with the human gate off it goes back to the planner as feedback. The other two need a person and always reach one.",
+      "type": "string",
+      "enum": [
+        "cannot-verify",
+        "product-ambiguity",
+        "human-authority-required"
+      ]
+    },
+    "confidence_agreement": {
+      "type": "string",
+      "enum": [
+        "agree",
+        "too-high",
+        "too-low"
+      ]
+    },
+    "blocking": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "claim",
+          "required_change"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "claim": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "required_change": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "route_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "stage",
+        "reason"
+      ],
+      "description": "Optional. This agent asking the Router for a detour: a stage the route did not include, because the route was decided before anyone had read the code. Asking is all it does — only the Router grants one, deterministically, against the graph and the same attempt budget as everything else.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "insert_stage",
+            "needs_earlier_stage",
+            "scope_changed"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "project",
+            "maintainer",
+            "plan",
+            "debug",
+            "implement",
+            "review",
+            "qa"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10
+        }
+      }
+    }
+  }
+}

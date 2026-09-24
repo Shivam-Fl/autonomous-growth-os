@@ -1,0 +1,91 @@
+{
+  "$id": "review-design",
+  "title": "Review council — design, and verification of reviewer A",
+  "description": "Reviewer B's own findings and its independent check of every finding in review/correctness.json, written to review/design.json. `index` is 0-based into correctness.findings; post-review refuses an index that names no finding, because applying a verdict to the wrong finding is worse than applying none.",
+  "type": "object",
+  "required": [
+    "findings",
+    "verification_of_a"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "severity",
+          "claim"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocking",
+              "major",
+              "minor"
+            ]
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "fix": {
+            "type": "string"
+          },
+          "ac": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "verification_of_a": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "status",
+          "reasoning"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "overstated",
+              "disproved"
+            ]
+          },
+          "reasoning": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "request-changes"
+      ]
+    }
+  }
+}

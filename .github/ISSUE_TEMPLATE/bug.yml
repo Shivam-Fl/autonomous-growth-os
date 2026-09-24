@@ -1,0 +1,35 @@
+name: Bug
+description: Something is broken. Intake refuses to plan a bug without reproduction steps.
+labels: ["sdlc:triage", "bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: The actual behaviour you observed.
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, from a clean session. The planner reproduces this before diagnosing — a vague report produces a confident fix for the wrong thing.
+      placeholder: |
+        1. Go to /login
+        2. Sign in with a valid account
+        3. Reload the page
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes:
+      label: Where
+      placeholder: "preview / production, browser, OS"
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshots, console errors, failing request. Optional but it shortens diagnosis a lot.

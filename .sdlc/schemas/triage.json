@@ -1,0 +1,50 @@
+{
+  "$id": "triage",
+  "title": "Failure triage",
+  "description": "One agent's decision about what a stage failure means and what happens next. Written by the failure-triage agent after reading the failed run's complete log — which nothing running inside that run can see.",
+  "type": "object",
+  "required": ["diagnosis", "evidence", "verdict", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "diagnosis": {
+      "type": "string",
+      "minLength": 20,
+      "description": "What broke and why, traced to a line, a limit or an outage — not which step went red."
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 5,
+      "description": "The log line, file:line or command output the diagnosis rests on."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["rerun", "resume", "repair", "replan", "wait", "escalate"],
+      "description": "rerun: transient, same stage unchanged. resume: the work survived, continue from where it stopped. repair: a defect in the project's code, inside the current work order. replan: the plan cannot be built as described. wait: an outage or a rate or quota limit — the stage parks and runs again after a cooldown. escalate: a person is needed."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "How sure the diagnosis is. A low score with a named uncertainty is worth more than a high one that rests on an unread log."
+    },
+    "transient": {
+      "type": "boolean",
+      "description": "Required true for a `rerun` verdict: nothing about the repository changed, so only a genuinely transient cause makes the next run different."
+    },
+    "framework_defect": {
+      "type": "object",
+      "description": "A defect in the pipeline itself. Reported, never applied — an agent that edits its own rules to make its own failure go away leaves no auditable failure behind.",
+      "required": ["file", "what", "fix"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "what": { "type": "string" },
+        "fix":  { "type": "string" }
+      }
+    },
+    "survived": {
+      "type": "string",
+      "description": "For a `resume` verdict: what work already exists and where — a pushed branch, an open PR, a stashed plan on the ledger."
+    }
+  }
+}
