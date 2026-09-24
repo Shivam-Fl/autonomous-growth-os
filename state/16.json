@@ -529,5 +529,8 @@
       "diagnosis": "The build job died in the 'How the app boots' step before the implement agent ever ran: `node .sdlc/bin/read-config.mjs env.boot` prints the value with no trailing newline, so the GITHUB_OUTPUT heredoc became `npm run sdlc:serveSDLC_EOF` on one line and the runner found no closing delimiter. Framework bug, not a code or plan failure; nothing survived.",
       "run": "36046862382"
     }
-  ]
+  ],
+  "retry_after": "2026-09-24T23:21:57.876Z",
+  "retry_stage": "implement",
+  "parked_at": "2026-09-24T22:41:58.254Z"
 }
