@@ -242,7 +242,7 @@
         ],
         "title": "Record shadow decisions in a journal with calibration",
         "why": "A founder sees what the system would do, its predicted impact, and whether past predictions were right — before a single rupee of spend moves.",
-        "issue": null
+        "issue": 19
       },
       {
         "acceptance": [
@@ -348,6 +348,7 @@
   "children": [
     16,
     17,
-    18
+    18,
+    19
   ]
 }
