@@ -610,7 +610,9 @@ async function liveProbe() {
   const since = Date.now() - 60_000;   // our clock and the runner's disagree by seconds
   const at = process.argv.indexOf('--models');
   const models = at > 0 ? String(process.argv[at + 1] ?? '') : '';
-  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : [])]); } catch (e) {
+  const bt = process.argv.indexOf('--bridge');
+  const bridge = bt > 0 ? String(process.argv[bt + 1] ?? '') : '';
+  try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...(models ? ['-f', `models=${models}`] : []), ...(bridge ? ['-f', `bridge=${bridge}`] : [])]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -630,7 +632,12 @@ async function liveProbe() {
   const dir = mkdtempSync(join(tmpdir(), 'sdlc-probe-'));
   try {
     await gh(['run', 'download', String(id), '-n', 'sdlc-probe', '-D', dir]);
-    for (const r of JSON.parse(readFileSync(join(dir, 'probe.json'), 'utf8'))) {
+    const bridged = existsSync(join(dir, 'bridge.json'))
+      ? JSON.parse(readFileSync(join(dir, 'bridge.json'), 'utf8')).filter((r) => r.role !== 'catalog')
+        .map((r) => ({ ...r, model: `${r.model} (via translator)` }))
+      : [];
+    if (bridge && !bridged.length) fail('the translator probe produced nothing', `read the "Start the translator" step of run ${id}`);
+    for (const r of [...JSON.parse(readFileSync(join(dir, 'probe.json'), 'utf8')), ...bridged]) {
       const timing = r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s ping${r.tool_ms ? `, ${(r.tool_ms / 1000).toFixed(1)}s tool call` : ''}` : '';
       if (r.role === 'catalog') { pass('the gateway lists', String(r.body).split(',').filter(Boolean).length + ' models'); process.stdout.write(`      ${r.body}\n`); }
       else if (r.status === 'skipped') warn(`${r.model} (${r.role}) was not probed`, r.body);
@@ -916,7 +923,7 @@ if (!run) {
     '  setup                     interactive: scan this repo and write its config\n' +
     '  install --target <repo>   copy the framework into another repository\n' +
     '  init                      labels and state branch (run inside the repo)\n' +
-    '  doctor [--live [--models a,b]]  verify every token, secret and integration\n' +
+    '  doctor [--live [--models a,b] [--bridge a,b]]  verify every token, secret and integration\n' +
     '                            (--live: one real request per model, from the runner)\n' +
     '  status                    show every issue in flight\n' +
     '  halt                      disable every pipeline workflow and cancel its runs\n' +

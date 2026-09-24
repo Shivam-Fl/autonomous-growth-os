@@ -8,6 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       models: { required: false, type: string, default: '' }
+      # Models the gateway serves only on the OpenAI API, probed through a local LiteLLM translator
+      # (`sdlc doctor --live --bridge a,b`) — the same path an agent job would take to run one.
+      bridge: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -33,7 +36,33 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PROBE_MODELS: ${{ inputs.models }}
         run: node .sdlc/bin/claude-args.mjs --probe probe.json
+      - name: Start the translator
+        if: inputs.bridge != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BRIDGE: ${{ inputs.bridge }}
+        run: |
+          python3 -m venv /tmp/litellm
+          /tmp/litellm/bin/pip install -q 'litellm[proxy]==1.102.1'
+          node .sdlc/bin/model-bridge.mjs /tmp/litellm.yaml
+          nohup /tmp/litellm/bin/litellm --config /tmp/litellm.yaml --host 127.0.0.1 --port 4000 > /tmp/litellm.log 2>&1 &
+          for i in $(seq 90); do curl -sf http://127.0.0.1:4000/health/liveliness >/dev/null && exit 0; sleep 2; done
+          echo "::error::the translator never came up"; tail -40 /tmp/litellm.log; exit 1
+      - name: One request per bridged model, through the translator
+        if: inputs.bridge != ''
+        env:
+          ANTHROPIC_BASE_URL: http://127.0.0.1:4000
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROBE_MODELS: ${{ inputs.bridge }}
+        run: |
+          node .sdlc/bin/claude-args.mjs --probe bridge.json
+          # The translator's own view of each request. Printed, never uploaded: this is a public
+          # repo's job log, where GitHub masks the key; an artifact would not be masked.
+          tail -60 /tmp/litellm.log || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: sdlc-probe
-          path: probe.json
+          path: |
+            probe.json
+            bridge.json
+          if-no-files-found: warn
