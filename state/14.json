@@ -71,5 +71,6 @@
     "decided_at": "2026-09-24T18:36:25.621Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "project"
+  "dispatched_stage": "project",
+  "brief_pr": 15
 }
