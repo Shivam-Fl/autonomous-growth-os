@@ -25,7 +25,7 @@
     "from": null,
     "pr": null,
     "work_order_version": 1,
-    "at": "2026-09-25T10:06:11.704Z"
+    "at": "2026-09-25T12:03:24.601Z"
   },
   "work_order": {
     "acceptance": [
@@ -305,7 +305,7 @@
     }
   ],
   "epic": 14,
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "feature",
     "confidence": 88,
@@ -314,7 +314,7 @@
     "councils": {},
     "decided_at": "2026-09-25T08:58:44.893Z"
   },
-  "stopped_at": "implement",
+  "stopped_at": null,
   "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-25T09:41:56.421Z",
