@@ -753,6 +753,11 @@
         "ci:unknown:01495bc7d1165a48",
         "qa:unknown:1cb3813330792f30"
       ]
+    },
+    "triage": {
+      "verdict": "resume",
+      "diagnosis": "The QA agent returned verdict pass / next_action merge for PR #27 @ 8500986 with 20 passing tests citing no evidence file, no HAR under qa-evidence, and 6 tests referencing BUG-1..3 while bugs[] is empty -- a report-shape failure, not a product failure. The work survived: branch sdlc/issue-16 @ 8500986 is pushed, PR #27 is open and mergeable with CI green (ci-verify), and the rejected report with reasons is kept on issue #16's ledger as rejected_artifacts[\"qa-report\"] for the next QA attempt to correct by retesting the same commit.",
+      "evidence": "failed-run.log test job check-evidence: 'T-14, T-28, T-9, T-10, T-11, T-12, T-29, T-30, T-31, T-32, T-33, T-34, T-35, T-17, T-18, T-19, T-20, T-23, T-24, T-26 prove a passing criterion and cite no evidence file' + 'no HAR under .../qa-evidence' (exit 1); judge validate: 'T-15 references BUG-1, which is not in bugs[]' (+8 more across BUG-1/2/3); ledger state/16.json rejected_artifacts[\"qa-report\"]: verdict pass, next_action merge, 35 tests, 0 bugs, 20 passing tests without evidence; check-evidence.mjs lines 71/75/118-119 (these gates fire only on a pass verdict, ci-cited tests exempt); gh pr view 27: OPEN, MERGEABLE, head 8500986d05fef7780d474865283431b42a99d086."
     }
   },
   "triage_history": [
@@ -787,6 +792,14 @@
       "confidence": 92,
       "diagnosis": "QA boot crashed deterministically in the app, not the environment: src/data/db.js openDatabase() calls new DatabaseSync('./data/app.db') without creating the parent directory, and /data/ is gitignored so a clean QA checkout has no data/ dir, yielding SQLITE_CANTOPEN errcode 14 on every boot. Tests passed because they open temp files inside mkdtempSync-created dirs, which is why CI was green on the same SHA. Branch sdlc/issue-16 at 4c1b8cc and open PR #27 survive; the fix belongs in project code ",
       "run": "36082089833"
+    },
+    {
+      "at": "2026-09-25T06:04:21.344Z",
+      "stage": "qa",
+      "verdict": "resume",
+      "confidence": 85,
+      "diagnosis": "The QA agent returned verdict pass / next_action merge for PR #27 @ 8500986 with 20 passing tests citing no evidence file, no HAR under qa-evidence, and 6 tests referencing BUG-1..3 while bugs[] is empty -- a report-shape failure, not a product failure. The work survived: branch sdlc/issue-16 @ 8500986 is pushed, PR #27 is open and mergeable with CI green (ci-verify), and the rejected report with reasons is kept on issue #16's ledger as rejected_artifacts[\"qa-report\"] for the next QA attempt to ",
+      "run": "36100122514"
     }
   ],
   "implemented_version": 3,
