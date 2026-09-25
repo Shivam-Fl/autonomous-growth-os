@@ -69,5 +69,155 @@
     "decided_at": "2026-09-25T16:29:08.895Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "debug"
+  "dispatched_stage": "debug",
+  "validated_work_order": {
+    "issue": 42,
+    "version": 1,
+    "kind": "bug",
+    "mode": "committed",
+    "confidence": 88,
+    "confidence_rationale": "Reproduced locally before planning: 0 of 25 route x state combinations emit an <h1>, and the cause is a single missing line in layout(). The change is four lines of markup plus one CSS rule, and the existing suite is known to be compatible with it because panel() keeps its <h2>. The only judgement call is the visible styling of the new heading, which is written down exactly in files[1].",
+    "reproduced": true,
+    "understanding": "All five routes render a document whose first heading is an <h2>, because layout() (src/web/pages.js:70) emits <main id=\"main\">${content}</main> with no page-level heading and every piece of page content is a panel(), which hardcodes <h2> at src/web/pages.js:83. The three hand-written headings agree with that level: the empty-journal panel at src/web/pages.js:499, the autonomy-posture panel at src/web/pages.js:840, and the journal drawer's dialog title at src/web/pages.js:458. The composer's 'New hypothesis' at src/web/pages.js:751 is an <h3> under that <h2>, so the existing relative hierarchy is fine; what is missing is only the level above it. I reproduced it by rendering every route under every ?state= override: 25/25 combinations have zero <h1> and a first-in-main heading of H2. Nothing else on the surface emits headings — client.js only creates a <p> and a <strong>, and the five routes in src/api/routes.js:96 are the only HTML responses. So the root cause is one omission in the shared layout, not five per-page bugs, and the fix belongs in layout() rather than in each page function.",
+    "root_cause": "layout() in src/web/pages.js builds the document shell (head, header, main, footer) and is handed a title it uses for <title> only; it never emits that title as a heading inside <main>. panel() then supplies the first heading on every page at a fixed <h2>, so no document can start at <h1>.",
+    "approach": "Emit the page heading once, in the shared layout, as the first child of <main id=\"main\"> and before ${content}, using the same TITLES[route] string the <title> already carries, so the visible heading and the document title can never disagree. Mark it data-testid=\"page-title\" for a stable QA hook. Do NOT demote panel(): its <h2> is already correctly nested beneath a new <h1>, the composer's <h3> is already correctly nested beneath that, and src/web/pages.js:83 is deliberately left alone — the existing test at test/web/pages.test.js:73 matches `panel-error[^]*?<h2>` and the h1 must sit inside <main> (not in the header or outside it) so that document.querySelector('main#main h1,h2,h3,h4,h5,h6') returns H1, which is the exact probe the QA run used to file this. One CSS rule is included because #main is a grid with gap var(--space-3): without it the browser default h1 margin stacks on top of the 24px gap and the page gains ~45px of dead space above the heading.",
+    "files": [
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "In layout(), inside the <main id=\"main\"> element, emit the page heading as its first child, before ${content}:\n<main id=\"main\">\n<h1 data-testid=\"page-title\">${escapeHtml(title)}</h1>\n${content}\n</main>\nUse the existing `title` parameter (renderPage passes TITLES[route], defined at src/web/pages.js:125) and run it through escapeHtml exactly as the <title> does. Change nothing else: panel() keeps its <h2> at line 83, the drawer's <h2 id=\"journal-drawer-title\"> keeps its id and level, the composer keeps its <h3>, and TITLES is not modified.",
+        "why": "One edit in the shared layout fixes all five routes in all five states; editing the five page functions would leave a sixth route broken and duplicate the same line five times."
+      },
+      {
+        "path": "src/web/styles.css",
+        "action": "edit",
+        "change": "Add one rule immediately after the existing #main block (currently lines 107-112), matching the file's existing token idiom:\n#main > h1 {\n  margin: 0;\n  font-size: 1.5rem;\n}\nNo other selector changes: .panel h2 (line 141) and every other heading rule stay as they are.",
+        "why": "#main is `display: grid; gap: var(--space-3)`, so the h1 is a grid item. The browser default h1 margin (0.67em) would stack with the 24px gap, and the default 2em size (32px) would dwarf the 1.05rem panel headings."
+      },
+      {
+        "path": ".sdlc/memory/qa/selectors.md",
+        "action": "edit",
+        "change": "In the 'Page chrome (every page)' section, after the `a.skip-link[href=\"#main\"], main#main` bullet, add:\n- `h1[data-testid=\"page-title\"]` — the one page-level heading, first child of `main#main` on all five routes; its text is the screen name and always equals the <title> minus the ' · Autonomous Growth OS' suffix. Panel headings beneath it stay <h2>.",
+        "why": "That file is the QA contract for stable hooks; a new one that QA is expected to assert belongs in it."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "every route renders exactly one <h1>: for each of '/', '/journal', '/opportunities', '/experiments', '/approvals' and each state in ['empty','ideal','loading','partial','error'], assert (html.match(/<h1/g) ?? []).length === 1, with the route and state in the assertion message",
+          "the first heading inside <main id=\"main\"> is that h1: extract main's inner HTML with /<main id=\"main\">([\\s\\S]*)<\\/main>/ and assert /<(h[1-6])[\\s>]/.exec(inner)[1] === 'h1'",
+          "the h1 names the screen and agrees with the document title: assert the h1 text equals the <title> text with the ' · Autonomous Growth OS' suffix removed, for every route and state, so a page cannot gain a heading that contradicts its own title",
+          "the hierarchy skips no level: on /experiments (ideal and empty) assert the heading order inside main is H1 then H2, and that the composer's 'New hypothesis' is still an <h3> beneath a panel <h2> — the composer's <h3> must not be bumped or dropped",
+          "the existing per-screen headings are untouched: on /opportunities with override 'error' the first <h2> still reads 'Opportunity fetch failed', and on /approvals 'Autonomy posture by action class' still renders as an <h2>",
+          "the journal drawer keeps its accessible name: on /journal (ideal) assert the hidden dialog aside still carries aria-labelledby=\"journal-drawer-title\" and that the referenced id still exists and reads 'Decision detail'",
+          "the existing suite's panel-error <h2> matcher still holds: renderPage('/opportunities', { override: 'error' }) still matches /panel-error[^]*?<h2>Opportunity fetch failed<\\/h2>/"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "On each of /, /journal, /opportunities, /experiments and /approvals, and in each of the empty, ideal, loading, partial and error states (?state=), document.querySelectorAll('h1').length is exactly 1 — 1, never 0 and never 2.",
+        "how_to_verify": "Visit all five routes with ?state=empty, ?state=ideal, ?state=loading, ?state=partial and ?state=error, and run document.querySelectorAll('h1').length on each.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "The first heading of any level inside the main landmark is the page heading: on every route, document.querySelector('main#main h1,h2,h3,h4,h5,h6').tagName is 'H1', and that element is the h1 carrying data-testid=\"page-title\".",
+        "how_to_verify": "Run the exact query from the bug report on each route; it returned 'H2' before this change.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-3",
+        "check": "The h1 names the screen and matches the document title: on /opportunities it reads 'Opportunities' while <title> reads 'Opportunities · Autonomous Growth OS'; on / it reads 'Command dashboard'. Visible text equals title text, so a screen reader heading and the browser tab never disagree.",
+        "how_to_verify": "Compare the h1's textContent with document.title minus the ' · Autonomous Growth OS' suffix on each route.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-4",
+        "check": "The hierarchy is well-formed with no skipped level: panel headings remain <h2> beneath the new <h1>, and on /experiments the composer's 'New hypothesis' remains an <h3> beneath a panel <h2>. On /opportunities?state=error the first <h2> still reads 'Opportunity fetch failed' and no <h3> appears before it.",
+        "how_to_verify": "On /opportunities?state=error run Array.from(document.querySelectorAll('main#main h1,main#main h2,main#main h3')).map(e => e.tagName + ': ' + e.textContent.trim()).",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-5",
+        "check": "The hidden journal drawer still has its own accessible name and is not mistaken for the page heading: on /journal the aside#journal-drawer keeps aria-labelledby=\"journal-drawer-title\" and document.getElementById('journal-drawer-title').textContent is 'Decision detail'.",
+        "how_to_verify": "On /journal run document.getElementById('journal-drawer-title')?.textContent and read the aside's aria-labelledby attribute.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-6",
+        "check": "Nothing else about the pages changed: body[data-page] and body[data-state] still carry the route and effective state, #tenant-name[data-testid=\"tenant-name\"] still reads 'No connected account' under ?state=empty and the tenant name otherwise, and the error shells still offer a focused [data-action=\"retry\"] button.",
+        "how_to_verify": "Regression sweep of the existing selectors in .sdlc/memory/qa/selectors.md on each route's error and empty states.",
+        "source": "TR-21",
+        "verify": "browser"
+      }
+    ],
+    "qa_script": [
+      "npm run sdlc:seed then npm run sdlc:serve, and open http://localhost:3000/ — confirm the h1 'Command dashboard' is visible at the top of the page, above the first panel, with no doubled gap above it.",
+      "Repeat for /journal, /opportunities, /experiments and /approvals: the h1 text is Decision journal, Opportunities, Experiments and Approvals respectively, and each matches the browser tab title minus the ' · Autonomous Growth OS' suffix.",
+      "Run document.querySelectorAll('h1').length and document.querySelector('main#main h1,h2,h3,h4,h5,h6').tagName on each route: 1 and 'H1' respectively.",
+      "Append ?state=empty, ?state=ideal, ?state=loading, ?state=partial and ?state=error to every route and re-run both expressions on all 25 combinations.",
+      "On /opportunities?state=error confirm the error panel is still named 'Opportunity fetch failed' at level h2 beneath the h1, its Retry button still exists and receives focus on load, and 'What is still true' is still present.",
+      "On /experiments confirm the 'New hypothesis' composer heading is still an h3 nested under a panel h2, and that its three labelled fields still render.",
+      "On /journal open a decision row, confirm the drawer opens with the focus move and Close still returns focus to the row, and that the drawer's accessible name is still 'Decision detail'.",
+      "Tab from the top of /: the skip link is the first stop, and activating it still moves the reading/tab start into main#main, which now begins with the page heading.",
+      "Narrow the window under 900px on two routes: the h1 does not clip, and #main's single-column grid keeps the heading above the panels.",
+      "Regression: assert body[data-page], body[data-state], #tenant-name, the per-screen empty-state testids and the aria-live region still behave as .sdlc/memory/qa/selectors.md describes."
+    ],
+    "risks": [
+      "The h1 is a grid item of #main (display: grid; gap: var(--space-3)). The one CSS rule in files[1] is required, not cosmetic: without it the browser default 0.67em margin stacks on the 24px gap and the default 2em size overpowers the 1.05rem panel headings.",
+      "Placing the h1 anywhere but the first child of <main> (in the header, or after ${content}) still renders an h1 and still passes a naive h1 count, but AC-2 fails and the bug is not actually fixed. The probe that found the bug is the first-heading-in-main probe, not the count.",
+      "The temptation to 'demote' panel() to <h3> must be resisted: it is not required by the ticket, it would break the existing matcher at test/web/pages.test.js:73 (`panel-error[^]*?<h2>`), and it would leave the composer's <h3> needing a bump to <h4>. h1 -> h2 -> h3 is already well-formed.",
+      "src/web/pages.js is the shared layout for every screen, so this is the widest-blast-radius change in the repo even though it is four lines. It touches presentation markup only: no data is read or written differently, no API changes, no new dependency, no host added to env.api_allowlist.",
+      ".sdlc/memory/qa/selectors.md in files[2] is pipeline-owned documentation. It is not in forbidden_paths, so the diff gate will allow it, but if a reviewer considers it out of band it is safe to drop that one file — it records a hook, it does not affect behaviour."
+    ],
+    "out_of_scope": [
+      "Demoting or renumbering panel() headings: h2 under a new h1 is already correct, and the composer's h3 is already correct beneath it.",
+      "Changing the drawer's <h2 id=\"journal-drawer-title\"> — it is a dialog label, not a page section, and aria-labelledby depends on the id staying put.",
+      "Changing the <title> strings or TITLES. '/' keeping the name 'Command dashboard' while the nav says 'Dashboard' is a separate copy question, not this bug.",
+      "Any other accessibility finding (colour contrast, focus order, live-region verbosity): each would ship on its own and belongs in its own ticket.",
+      "A landmarks or aria-describedby sweep beyond the heading level: not asked for here and not needed to make this hierarchy well-formed."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Add the h1 inside each of the five page functions (dashboard, journal, opportunities, experiments, approvals) rather than in layout().",
+        "rejected_because": "Duplicates the same line five times, and any sixth route added later silently reproduces the bug. layout() is the only place all five documents pass through, so the fix belongs there and the change is one edit rather than five."
+      },
+      {
+        "approach": "Demote panel() to <h3> and the composer to <h4>, on the reading that the ticket says panel headings are 'demoted beneath' the new heading.",
+        "rejected_because": "The panels are already <h2>, which is already one level beneath <h1> — nothing needs demoting. It would break test/web/pages.test.js:73, force a second bump for the composer, and change the visual weight of every panel on every screen for no accessibility gain."
+      },
+      {
+        "approach": "Make the h1 visually hidden (clip it) so the layout does not change at all.",
+        "rejected_because": "A sighted user gets no page name, and the ticket's own premise is that the only accessible name today is the <title>, which most screen readers do not surface when navigating by heading. It also dodges rather than answers the visual question the new element raises."
+      },
+      {
+        "approach": "Put the h1 in the app header next to the brand, reusing the existing chrome.",
+        "rejected_because": "It would sit outside <main>, so the main landmark would still have no top-level heading and the exact probe from the bug report would keep returning H2. The h1 belongs inside the landmark it names."
+      },
+      {
+        "approach": "Treat the five routes as five tickets, one h1 each.",
+        "rejected_because": "The cause is one shared line in layout(); five tickets would be five PRs racing to edit the same function. This is a single coherent change, and it is small enough that splitting it costs more than it saves."
+      }
+    ],
+    "assumptions": [
+      "docs/ui.md names the five screens ('Command dashboard', 'Decision journal', 'Opportunities and experiments', 'Approvals') and prescribes no heading levels, so the ticket's well-formedness rule is the only constraint and nothing in the UI spec conflicts with it.",
+      "TITLES[route] is the authoritative screen name in the code today; the h1 reuses it rather than introducing a second map that could drift.",
+      "The h1 belongs visually at the top of the page, above the first panel, in every state including loading and error — the screen has a name even when its data has not loaded or has failed."
+    ],
+    "unknowns": [
+      "Whether the maintainer wants '/' to read 'Dashboard' (the nav label) or 'Command dashboard' (the TITLES and <title> value) as its visible heading. This plan uses 'Command dashboard' because it makes the heading and the document title identical, which AC-3 then enforces; if the maintainer prefers the nav label, it is a one-word change in TITLES plus the corresponding test, not a redesign."
+    ]
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-09-25T16:32:32.481Z",
+  "validated_ac_changes": []
 }
