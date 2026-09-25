@@ -494,6 +494,79 @@ test('a component-less or legacy-shaped row renders the placeholder, never ₹Na
   assert.doesNotMatch(row, /cost 1900\b/);
 });
 
+test('a row missing a NON-money component renders the placeholder, not a blank or "undefined"', async () => {
+  // Coverage, not a regression guard: this passed before the shared rule too,
+  // because the view's own `raw == null` check already caught the undefined
+  // value. The seven-key defect that motivated this was WIRE-only — a dropped
+  // key vanishes in JSON.stringify — and it is pinned in
+  // test/api/opportunities.test.js. What this holds is the view's half of the
+  // contract: a dimensionless component this build cannot read prints the
+  // em-dash, like the money ones, and the row's readable values still render.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  const { pSuccess, ...stored } = {
+    name: 'No success probability', value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9,
+    infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+  };
+  repos.opportunities.create({ tenant_id: 'tenant_demo', opportunity_id: 'opp_nopsuccess', record: stored, score: 0.9208 });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="pSuccess">success probability —</);
+  assert.doesNotMatch(row, /undefined/, 'a dropped key never renders as the string "undefined"');
+  // The components it CAN read still render, so the em-dash is a statement
+  // about the one component and not about the whole row.
+  assert.match(row, /data-component="value_micros">value ₹6,000\.00</);
+  assert.match(row, /data-component="fit">fit 0\.9</);
+});
+
+test('a negative amount renders the em-dash, never a negative number of rupees', async () => {
+  // A negative micros IS a safe integer, so the renderer's previous local
+  // guard printed '-1.00' for a record the wire projection and the
+  // contribution both called unknown. The renderer's guard is the domain's
+  // rule now, and the three agree.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_negative',
+    score: 0.4,
+    record: {
+      name: 'Negative value', value_micros: -1_000_000, pSuccess: 0.6, fit: 0.9,
+      infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="value_micros">value —</);
+  assert.doesNotMatch(row, /-1\.00|₹-1|value -\d/, 'never as a negative amount');
+  assert.match(row, /data-component="cost_micros">cost ₹1,900\.00</, 'and the readable money is unaffected');
+});
+
+test('a component stored as a numeric string renders the placeholder, not the string', async () => {
+  // '0.5' is not a number this build can stand behind. Rendering it as itself
+  // would print a probability the domain never validated, in a row whose
+  // contribution is null on the wire.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_string',
+    score: 0.4,
+    record: {
+      name: 'String probability', value_micros: 6_000_000_000, pSuccess: '0.5', fit: 0.9,
+      infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="pSuccess">success probability —</);
+  assert.doesNotMatch(row, /success probability 0\.5/, "never as '0.5'");
+  assert.doesNotMatch(row, /₹NaN/);
+});
+
 test('the seeded underpowered experiment renders the Inconclusive badge, never Win or Loss', async () => {
   const repos = seededRepos('pages-exp-badge-');
   const html = await renderPage('/experiments', { repositories: repos });

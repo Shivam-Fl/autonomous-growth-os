@@ -133,6 +133,25 @@ test('expectedContribution still answers for a real record, and 0 stays a real a
   assert.equal(expectedContribution(breakEven), 0, 'a genuine break-even contributes 0, not null');
 });
 
+test('a negative amount is a number this build cannot stand behind, so the contribution is null', () => {
+  // A negative micros is a safe integer, so the guard this replaced let it
+  // through and reported a confident NEGATIVE contribution for a record the
+  // wire projection calls unknown — the two halves of the same response
+  // disagreeing about one record. Money is a non-negative safe integer here
+  // for the same reason validateOpportunity rejects a negative on the way in.
+  for (const key of ['value_micros', 'cost_micros']) {
+    assert.equal(
+      expectedContribution({ ...GENERIC, [key]: -1_000_000 }),
+      null,
+      `${key}: a negative amount is unknown money, not a negative contribution`,
+    );
+  }
+  // The renderer half of the same rule — a negative amount renders '—' rather
+  // than '-1.00' — is pinned in test/domain/opportunity-readability.test.js,
+  // where the projection and the page are checked against this predicate for
+  // the same fixtures.
+});
+
 test('a zero cost is floored at one currency unit in micros, never infinite and never throws', () => {
   const validated = validateOpportunity({ ...GENERIC, cost_micros: 0 });
   assert.equal(validated.ok, true);

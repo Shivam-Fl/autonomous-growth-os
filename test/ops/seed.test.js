@@ -31,13 +31,18 @@ function reposFor(dbPath) {
 }
 
 /** Overwrite a seed row's stored record in place, exactly as an operator
- * upgrading across the rename would find it. The opportunities table carries
- * no immutability trigger — it is deliberately mutable working state. */
-function plantPreRenameRecord(dbPath, opportunityId, record = PRE_RENAME_RECORD) {
+ * upgrading across the rename — or a build other than this one writing a
+ * different shape — would find it. The opportunities table carries no
+ * immutability trigger — it is deliberately mutable working state. */
+function plantRecord(dbPath, opportunityId, record) {
   const db = openDatabase(dbPath);
   db.prepare('UPDATE opportunities SET record = ? WHERE tenant_id = ? AND opportunity_id = ?')
     .run(JSON.stringify(record), TENANT, opportunityId);
   db.close();
+}
+
+function plantPreRenameRecord(dbPath, opportunityId) {
+  plantRecord(dbPath, opportunityId, PRE_RENAME_RECORD);
 }
 
 test('a fresh database seeds the three opportunities and reports them', () => {
@@ -84,9 +89,87 @@ test('a pre-rename row makes the seed throw OPP_STALE_RECORD and name the recove
   // and never `.code`, and this is the only guidance the operator gets.
   assert.match(thrown.message, /^OPP_STALE_RECORD/, 'the printed message names the code');
   assert.match(thrown.message, /opp_seed_expensive/, 'the message names the row that is the problem');
-  assert.match(thrown.message, /micros rename/, 'and why this build cannot read it');
+  // Pinned to the RULE, not to one symptom of it. The message used to claim
+  // the record "predates the micros rename", which is a guess about the cause
+  // and wrong for every shape except the one it was written for — a record
+  // missing pSuccess did not come from the rename either. So the message names
+  // the components it could not read and the rule they failed, and this
+  // assertion follows it there. Weakening it to a bare code check, or dropping
+  // it, would let the next person to change the wording delete the test
+  // instead of fixing it.
+  for (const key of ['value_micros', 'cost_micros']) {
+    assert.match(thrown.message, new RegExp(key), `the message names ${key}, the component this build cannot read`);
+  }
+  assert.match(thrown.message, /non-negative integer number of micros/, 'and states the rule those components failed');
   assert.match(thrown.message, /delete the database and re-seed/i, 'and the recovery that actually works');
   assert.equal(thrown.details.opportunity_id, 'opp_seed_expensive');
+  assert.deepEqual(
+    thrown.details.unreadable_components,
+    ['value_micros', 'cost_micros'],
+    'details name exactly the keys that are wrong, so a hardcoded field cannot pass',
+  );
+});
+
+test('a record this build cannot read for a NON-money reason also throws, and names the component', () => {
+  // BUG-3: the guard checked two of the eight components, so a record whose
+  // only damage is a missing pSuccess sailed past it and the run reported
+  // "already present, nothing new written" — a clean exit-0 no-op over a row
+  // the rest of the app renders as '—' and the API reports as null. That is
+  // the exact shape QA planted, and it is the shape a guard written against
+  // the pre-rename key order cannot see.
+  const dbPath = freshDbPath('seed-stale-nopsuccess-');
+  seed({ dbPath });
+
+  const { pSuccess, ...withoutSuccess } = JSON.parse(
+    openDatabase(dbPath).prepare("SELECT record FROM opportunities WHERE opportunity_id = 'opp_seed_expensive'").get().record,
+  );
+  plantRecord(dbPath, 'opp_seed_expensive', { ...withoutSuccess, name: 'No success probability' });
+
+  let thrown = null;
+  try {
+    seed({ dbPath });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown, 'the re-seed must not exit cleanly over a record missing pSuccess');
+  assert.equal(thrown.code, 'OPP_STALE_RECORD');
+  assert.match(thrown.message, /opp_seed_expensive/);
+  assert.match(thrown.message, /pSuccess/, 'the message names the component that is actually unreadable');
+  assert.doesNotMatch(
+    thrown.message,
+    /micros rename/,
+    'and does not assert a cause it cannot know: a missing pSuccess did not come from the rename',
+  );
+  assert.deepEqual(thrown.details.unreadable_components, ['pSuccess'], 'both money keys are fine, so only this one is named');
+});
+
+test('a money component this build cannot stand behind also throws, whichever way it is wrong', () => {
+  // The other non-pre-rename shape: money the rest of the app calls unknown.
+  // A guard that only tested the pre-rename key ORDER would pass this and
+  // still ship the bug, so both are pinned.
+  for (const [label, money, unreadable] of [
+    ['a fractional rupee', { value_micros: 5_000_000.5, cost_micros: 1_000_000.5 }, ['value_micros', 'cost_micros']],
+    ['a negative amount', { value_micros: -1_000_000 }, ['value_micros']],
+    ['a numeric string', { value_micros: '2000000000' }, ['value_micros']],
+  ]) {
+    const dbPath = freshDbPath('seed-stale-money-');
+    seed({ dbPath });
+    const stored = JSON.parse(
+      openDatabase(dbPath).prepare("SELECT record FROM opportunities WHERE opportunity_id = 'opp_seed_expensive'").get().record,
+    );
+    plantRecord(dbPath, 'opp_seed_expensive', { ...stored, ...money });
+
+    let thrown = null;
+    try {
+      seed({ dbPath });
+    } catch (error) {
+      thrown = error;
+    }
+    assert.ok(thrown, `${label} must not re-seed as a clean no-op`);
+    assert.equal(thrown.code, 'OPP_STALE_RECORD', label);
+    assert.match(thrown.message, /value_micros/, `${label}: the message names value_micros`);
+    assert.deepEqual(thrown.details.unreadable_components, unreadable, `${label}: and names exactly the keys that are wrong`);
+  }
 });
 
 test('the throw is loud, not atomic: earlier phases stay committed and later ones never run', () => {

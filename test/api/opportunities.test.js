@@ -538,3 +538,100 @@ test('a half-migrated row keeps its real money key, nulls the missing one and re
   assert.equal(repost.components.value_micros, 2_000_000_000);
   assert.equal(repost.components.cost_micros, null);
 });
+
+// BUG-1 and BUG-2 on the PR branch (issue #40): the projection normalised the
+// two money keys and passed the other six through untouched, so it was the one
+// consumer that disagreed with the contribution, the renderer and the seed
+// guard about the same stored record. These are the QA repro shapes, driven
+// through HTTP rather than the domain, because the wire is where the
+// self-contradictory body was observable.
+
+const READABLE_BASE = { pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, downside: 2, delay: 2 };
+
+test('a stored record missing pSuccess still carries all eight keys, with pSuccess null', async () => {
+  // Valid safe-integer money on both keys and one dimensionless component
+  // never written. The projection wrote `pSuccess: record.pSuccess`, and
+  // JSON.stringify drops an undefined value — so this row went out with SEVEN
+  // keys and a client could not tell "this build could not read it" from "it
+  // was never stored". It is the exact fixture QA planted as opp_qa_nop_005.
+  const { pSuccess, ...withoutSuccess } = READABLE_BASE;
+  repositories.opportunities.create({
+    tenant_id: 'tenant_gamma',
+    opportunity_id: 'opp_gamma_nopsuccess',
+    score: 0.4,
+    record: { name: 'No success probability', value_micros: 2_000_000_000, cost_micros: 100_000_000, ...withoutSuccess },
+  });
+
+  const listing = await (await fetch(url('/v1/opportunities?tenant_id=tenant_gamma'))).json();
+  const row = listing.opportunities.find((entry) => entry.opportunity_id === 'opp_gamma_nopsuccess');
+  assert.equal(Object.keys(row.components).length, 8, 'eight keys, whatever the record is missing');
+  assert.ok('pSuccess' in row.components, 'present-and-null, never a dropped key');
+  assert.equal(row.components.pSuccess, null);
+  assert.equal(row.components.value_micros, 2_000_000_000, 'and the money it CAN read is untouched');
+  assert.equal(row.components.cost_micros, 100_000_000);
+});
+
+test('money this build cannot stand behind is null on the wire, in the same body as the null contribution', async () => {
+  // BUG-2: a float and a numeric string both reached the client intact
+  // alongside a null contribution. That body tells a reader the money is
+  // unknown and then hands it a number it cannot trust — the two fields come
+  // from the same domain predicate now, so they agree.
+  const corrupt = {
+    opp_gamma_float: { record: { name: 'Fractional money', value_micros: 5_000_000.5, cost_micros: 1_000_000.5 }, unreadable: ['value_micros', 'cost_micros'] },
+    opp_gamma_string: { record: { name: 'String money', value_micros: '2000000000', cost_micros: '500000000' }, unreadable: ['value_micros', 'cost_micros'] },
+    // A negative amount is a safe integer, which is why the old money guard
+    // passed it and the page rendered '-1.00' for it.
+    opp_gamma_negative: { record: { name: 'Negative money', value_micros: -1_000_000, cost_micros: 100_000_000 }, unreadable: ['value_micros'] },
+  };
+  for (const [opportunity_id, { record }] of Object.entries(corrupt)) {
+    repositories.opportunities.create({ tenant_id: 'tenant_gamma', opportunity_id, score: 0.4, record: { ...READABLE_BASE, ...record } });
+  }
+
+  for (const [opportunity_id, { record, unreadable }] of Object.entries(corrupt)) {
+    // An idempotent re-post, so the response describes the STORED row.
+    const body = await (await fetch(url('/v1/opportunities'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...CHEAP, opportunity_id, tenant_id: 'tenant_gamma' }),
+    })).json();
+    assert.equal(body.created, false, `${opportunity_id}: the well-formed body did not overwrite the stored row`);
+    assert.equal(Object.keys(body.components).length, 8);
+    for (const key of ['value_micros', 'cost_micros']) {
+      assert.equal(
+        body.components[key],
+        unreadable.includes(key) ? null : record[key],
+        `${opportunity_id}.${key}: an unreadable amount is null, never ${JSON.stringify(record[key])}`,
+      );
+    }
+    assert.equal(
+      body.expected_contribution_micros,
+      null,
+      `${opportunity_id}: the two halves of the body agree — a null contribution never sits beside a number`,
+    );
+  }
+});
+
+test('a dimensionless component stored as a numeric string is null, not the string', async () => {
+  // The non-money half of the same rule, which no test covered: a numeric
+  // string is not a number this build can stand behind, whether it sits in a
+  // money key or a multiplier. Without this the renderer would print '0.5'.
+  repositories.opportunities.create({
+    tenant_id: 'tenant_gamma',
+    opportunity_id: 'opp_gamma_pstr',
+    score: 0.4,
+    record: { name: 'String probability', value_micros: 2_000_000_000, cost_micros: 100_000_000, ...READABLE_BASE, pSuccess: '0.5' },
+  });
+
+  const listing = await (await fetch(url('/v1/opportunities?tenant_id=tenant_gamma'))).json();
+  const row = listing.opportunities.find((entry) => entry.opportunity_id === 'opp_gamma_pstr');
+  assert.equal(Object.keys(row.components).length, 8);
+  assert.equal(row.components.pSuccess, null, "never '0.5'");
+  assert.equal(row.components.fit, 0.5, 'the components that are real numbers are untouched');
+
+  const body = await (await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...CHEAP, opportunity_id: 'opp_gamma_pstr', tenant_id: 'tenant_gamma' }),
+  })).json();
+  assert.equal(body.expected_contribution_micros, null, 'and the contribution follows it to null');
+});

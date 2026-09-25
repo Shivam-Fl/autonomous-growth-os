@@ -19,6 +19,13 @@
 // expectedContribution is a stored display field, never a sort key. A record
 // this build cannot read reports null on the wire rather than a number it
 // cannot stand behind.
+//
+// The read side has one rule too, and it is the twin of the write-side rules
+// above: isReadableComponent below, derived from COMPONENTS, is what every
+// consumer of a stored record consults. Four consumers each re-deriving it
+// from whichever keys the bug that motivated them happened to name is how one
+// record came to be readable in the projection and unreadable in the
+// contribution.
 
 const COMPONENTS = ['value_micros', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost_micros', 'downside', 'delay'];
 const RATIO_COMPONENTS = ['pSuccess', 'fit', 'reversibility', 'infoValue'];
@@ -46,6 +53,65 @@ export function opportunityError(code, message, details = {}) {
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * The read-side rule, and the only definition of it: can this build stand
+ * behind this stored number? Money is a non-negative safe integer of micros —
+ * the same rule validateOpportunity enforces on the way in — and every other
+ * component must be a finite number.
+ *
+ * It is a number check, not a coercion, so a numeric string such as
+ * '2000000000' is unreadable rather than silently read as 2e9, and a null or
+ * undefined is unreadable for every key.
+ *
+ * What it deliberately does NOT answer is "does this record satisfy every
+ * domain range". Re-running validateOpportunity on a read would conflate a
+ * number the build can print with a record the build endorses: a stored
+ * pSuccess of 1.5 is out of range and is still a finite number, so it stays
+ * readable and stays on the wire. Range rules stay on the write side.
+ */
+export function isReadableComponent(key, value) {
+  return MONEY_COMPONENTS.includes(key)
+    ? Number.isSafeInteger(value) && value >= 0
+    : isFiniteNumber(value);
+}
+
+/**
+ * The component keys of a stored record this build cannot stand behind, in
+ * COMPONENTS order. The array rather than a boolean because the seed's
+ * operator-facing error has to name the keys that failed, and a record this
+ * build cannot read is a specific diagnosis rather than a verdict.
+ */
+export function unreadableComponents(record) {
+  return COMPONENTS.filter((key) => !isReadableComponent(key, record?.[key]));
+}
+
+/** True when every component of a stored record is readable — the seed guard's
+ * question, and the one answer every consumer of a stored record agrees on. */
+export function isReadableOpportunityRecord(record) {
+  return unreadableComponents(record).length === 0;
+}
+
+/**
+ * The wire projection of a stored record's components: all eight keys, always,
+ * in COMPONENTS order, each readable value passed through and each unreadable
+ * one null.
+ *
+ * Always-present is the point. An unreadable component is present-and-null,
+ * never a dropped key, because JSON.stringify removes an undefined one and a
+ * client cannot tell a component the build chose not to return from a
+ * component that was never stored. Deriving the projection from COMPONENTS is
+ * also what makes it impossible for a key to be left out — the eight
+ * hand-written lines this replaced are how a record missing pSuccess reached
+ * the wire with seven keys.
+ */
+export function readableComponents(record) {
+  const components = {};
+  for (const key of COMPONENTS) {
+    components[key] = isReadableComponent(key, record?.[key]) ? record[key] : null;
+  }
+  return components;
 }
 
 /**
@@ -161,8 +227,11 @@ export function expectedContribution(opportunity) {
   // The guard stands IN FRONT of the arithmetic, not after it. A null or
   // undefined reaching `valueMicros * pSuccess` is 0, which would turn "the
   // money is unknown" into a confident break-even — the exact lie this returns
-  // null to avoid.
-  if (!Number.isSafeInteger(valueMicros) || !Number.isSafeInteger(costMicros) || !isFiniteNumber(pSuccess)) {
+  // null to avoid. It asks the domain's shared rule rather than a local copy,
+  // so this and the projection above can never classify a record differently.
+  if (!isReadableComponent('value_micros', valueMicros)
+    || !isReadableComponent('cost_micros', costMicros)
+    || !isReadableComponent('pSuccess', pSuccess)) {
     return null;
   }
   const contribution = Math.trunc(valueMicros * pSuccess) - costMicros;

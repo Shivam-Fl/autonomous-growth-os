@@ -364,8 +364,15 @@ export function buildApp({ repositories }) {
       // From the STORED row, not the request body: on an idempotent re-post
       // the body is discarded, and the response must describe the record that
       // exists rather than the one that was ignored.
-      // CONTRACT: this field is null, never 0, when the stored row is one this
-      // build cannot read — a row stored before the micros rename has no
+      // CONTRACT: components and this field are two halves of one rule, and
+      // both come from the same domain predicate, so they agree: a component
+      // this build cannot stand behind is null in `components` above, and
+      // this field is null exactly when one or more of the components in this
+      // same body is null. A client that null-checks one can rely on the
+      // other agreeing — a body never reports an unknown contribution and then
+      // hands the client a float or a string it cannot trust.
+      //
+      // null, never 0: a row stored before the micros rename has no
       // value_micros/cost_micros to compute from. null is an honest unknown;
       // 0 is not, because a break-even bet legitimately contributes zero, so a
       // client doing arithmetic on this field must null-check it.

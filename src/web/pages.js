@@ -10,6 +10,7 @@ import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
 import { formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
+import { isReadableComponent } from '../domain/opportunities.js';
 import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
@@ -189,13 +190,20 @@ const META_CELLS = {
  * The one money renderer in this file, over the repo's currency-aware
  * formatter, so every amount on every screen agrees with the dashboard's
  * Qualified CPL. Two guards keep a page strictly safer than the hand-rolled
- * rupee version it replaces: a value that is not integer micros degrades to the
- * em-dash (today's ₹NaN), and a currency outside ISO_CURRENCIES falls back to
- * INR rather than throwing — tenants.create accepts any string, so an unknown
- * code is bad data, and a page render must not 500 on it.
+ * rupee version it replaces: a value the domain's readability rule rejects
+ * degrades to the em-dash (today's ₹NaN), and a currency outside
+ * ISO_CURRENCIES falls back to INR rather than throwing — tenants.create
+ * accepts any string, so an unknown code is bad data, and a page render must
+ * not 500 on it.
+ *
+ * The readability guard is the domain's, not a local re-derivation: it is the
+ * same rule the wire projection and the contribution use, so an amount the API
+ * reports as null cannot render as a number here. That rule is stricter than a
+ * bare safe-integer check — a negative amount is a safe integer, and rendering
+ * '-1.00' would be standing behind a number the rest of the app calls unknown.
  */
 function money(micros, currency = 'INR') {
-  if (!Number.isSafeInteger(micros)) {
+  if (!isReadableComponent('value_micros', micros)) {
     return '—';
   }
   return formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR'));
@@ -750,7 +758,7 @@ function experimentCard(experiment, currency) {
   const inconclusive = experiment.state === 'inconclusive';
   const stopRules = experiment.record?.stopRules ?? {};
   // An experiment stored with no caps at all renders '—' twice rather than
-  // ₹NaN twice: money()'s safe-integer guard is what covers the absent keys.
+  // ₹NaN twice: money()'s readability guard is what covers the absent keys.
   const caps = experiment.record?.caps ?? {};
   return `<li class="experiment-card" data-testid="experiment-card" data-experiment-id="${escapeHtml(experiment.experiment_id)}">
 <strong>${escapeHtml(experiment.name)}</strong>

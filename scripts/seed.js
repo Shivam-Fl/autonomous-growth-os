@@ -7,7 +7,7 @@ import { createRepositories, replayRawToDerived } from '../src/data/repositories
 import { validateEvent } from '../src/domain/events.js';
 import { validateDecisionRecord } from '../src/domain/decisions.js';
 import { validateLearning } from '../src/memory/learnings.js';
-import { validateOpportunity, scoreOpportunity, opportunityError } from '../src/domain/opportunities.js';
+import { validateOpportunity, scoreOpportunity, opportunityError, isReadableOpportunityRecord, unreadableComponents } from '../src/domain/opportunities.js';
 import { validateExperiment } from '../src/domain/experiments.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
@@ -311,15 +311,6 @@ const SEED_EXPERIMENTS = [
   },
 ];
 
-/** Can this build read a stored opportunity record at all? A record written
- * before the micros rename carries value/cost instead of value_micros/
- * cost_micros, so neither the renderer nor the contribution can stand behind
- * it. Nothing in the seed can fix that: opportunities.create is INSERT OR
- * IGNORE on a fixed id, so a re-seed leaves the stored row byte-identical. */
-function isReadableOpportunityRecord(record) {
-  return Number.isSafeInteger(record?.value_micros) && Number.isSafeInteger(record?.cost_micros);
-}
-
 function seedOpportunities(repositories) {
   let written = 0;
   for (const candidate of SEED_OPPORTUNITIES) {
@@ -341,11 +332,16 @@ function seedOpportunities(repositories) {
     if (previous && !isReadableOpportunityRecord(previous.record)) {
       // The code leads the message as well as riding on the error: an uncaught
       // throw from `npm run sdlc:seed` prints message and stack, never `.code`,
-      // and this message is the only guidance the operator gets.
+      // and this message is the only guidance the operator gets. It names the
+      // components this build could not read and the rule they failed, and
+      // deliberately does not assert a cause: a record missing pSuccess did not
+      // come from the micros rename any more than a float money value did, and
+      // guessing wrong about why costs an operator the one run they get.
+      const unreadable = unreadableComponents(previous.record);
       throw opportunityError(
         'OPP_STALE_RECORD',
-        `OPP_STALE_RECORD: seed opportunity ${candidate.opportunity_id}: the stored record predates the micros rename and this build cannot read it; delete the database and re-seed (the seed is idempotent by fixed id and never rewrites a stored record)`,
-        { opportunity_id: candidate.opportunity_id, field: 'value_micros' },
+        `OPP_STALE_RECORD: seed opportunity ${candidate.opportunity_id}: this build cannot read the stored record's component(s) ${unreadable.join(', ')} — money must be a non-negative integer number of micros and every other component a finite number; delete the database and re-seed (the seed is idempotent by fixed id and never rewrites a stored record)`,
+        { opportunity_id: candidate.opportunity_id, unreadable_components: unreadable },
       );
     }
     const result = repositories.opportunities.create({
