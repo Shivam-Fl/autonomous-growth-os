@@ -1,41 +1,105 @@
-# Roadmap — survey of 2026-09-25
+# Roadmap — survey of 2026-09-25 (second)
 
-First survey (no prior roadmap on file). Rebuilt from 11 open issues (#14, #16–#26), 1 open PR (#27), and 9 recently closed (#1, #4–#12). No `untrusted` entries.
+Rebuilt from 12 open issues (#14, #20, #23–#28, #40, #44, #46–#48), 1 open PR (#43) and 19
+recently closed. No `untrusted` entries. The previous roadmap described a repository with no
+code in it; six of the seven slices it listed as in flight have since landed.
 
 ## Shipped
 
-Nothing a user can do yet: there is no code — `src/`, `test/` and `scripts/` do not exist and all four `sdlc:` verbs are still stubs. What shipped is the plan: architecture decided and recorded (`project.md`, ADRs, TR-1–TR-26, UI spec), the product split into seven ordered slices (#16–#22) under epic #14, and the pre-architecture prototype issues (#4–#10) plus duplicate architecture issues (#1, #12) closed out of the way.
-
-Binding owner decision (recorded on #14, copied to every slice): Meta Ads end-to-end ships first; Google Ads is a later epic reusing the Meta slice. Spec §37 argues Google-first and is stale on that point.
+- **The app boots.** A local-first Node monolith on $PORT serving five server-rendered screens
+  and a versioned JSON API, with health, money as integer micros, append-only audit, and an
+  in-process workflow scheduler with sagas.
+- **First-party measurement.** Events ingest idempotently; a click-to-customer journey graph, a
+  downstream quality funnel, maturity scores with lag, and a maturity-gated qualified CPL.
+- **Meta read.** A versioned adapter with a fake provider, campaign regions on the dashboard,
+  last-good data and a named failure when the provider errors.
+- **A shadow decision journal.** Alternatives including do-nothing, expected effect
+  distributions, downside, evidence and memory refs, matured evaluation, and a calibration
+  report — computed live and against a frozen replay corpus.
+- **A research mesh.** Layered source adapters, claim extraction with evidence tiers, and
+  evidence-scoped learnings with staleness and contradiction handling.
+- **Opportunities and experiments.** Eight stored score components, ranked bets, experiments with
+  caps and stop rules, and a first-class inconclusive state.
+- **Money is honest on the wire.** Opportunity money stored and returned as integer micros, and
+  the tenant's currency threaded through every renderer that draws an amount.
+- **Every page opens with a heading.** One `h1` per document across all five routes and five
+  states, added today (#42).
 
 ## In flight
 
-- #16 Boot local app (dashboard shell, health, money, audit) — in QA, with the only open PR (#27 from `sdlc/issue-16`). Opened 2026-09-24; not stalled.
-- #17 Measure click-to-revenue truth — open, parked on #16.
-- #18 Meta read + dashboard — open, parked on #16.
-- #19 Shadow journal + calibration — open, parked on #17 and #18.
-- #21 Research mesh + memory — open, parked on #17.
-- #20 Policy capabilities + approvals + guardian — open, parked on #19.
-- #22 Opportunity ranking + experiments — open, parked on #19 and #21.
+- **#20 Policy capabilities, approvals, guardian freezes** — the last Meta slice, in
+  `sdlc:planning` with an owner `replan` note. Nothing else in the project can start until it
+  lands.
+- **#40 Follow-ups from the review of #39** — has the only open PR (#43). Carries
+  `sdlc:needs-human`; #44 is parked behind it.
+- **#44 Follow-ups from the review of #43** — `sdlc:blocked` on #40. Two of its eight findings
+  are the same two defects #47 filed 17 minutes later.
+- **#46 Follow-ups from the review of #45** — in `sdlc:planning`; #45 is already merged.
+- **#47 and #48** — pre-existing bugs QA found while testing #43 and #45 and correctly scoped out
+  of those PRs. Unlabelled and unplanned; #48 (pages overflow at 375px) is the one that matters.
+- **#28 Spec coverage** — stale. Its table was rebuilt at 06:01, before #16–#22 closed, so it
+  still reads "in flight" against six closed issues. This survey's rebuild is what corrects it.
+- **#14 the epic** — stays open while #20 is open.
 
 ## Next
 
-1. Land #16 (merge #27). Reason: it defines the app, database, money, audit and workflow contracts every later slice builds on; nothing else can start until it does.
-2. #17 and #18, in either order. Reason: they depend only on #16, are independent of each other, and together supply the owned-truth funnel and the platform data that the journal (#19) and research (#21) slices consume.
-3. #19 shadow journal. Reason: it is the gate between read-only analysis and any autonomous spend, and its decision-record contract is what the safety slice (#20) later executes against.
+1. **Land #20.** Reason: it is the last slice of the Meta-first direction the owner chose, and it
+   is the single chokepoint — all four deferred items (#23, #24, #25, #26) wait on it. Nothing
+   else in the project is unblocked.
+2. **Close the follow-up tail as one unit rather than round by round.** Reason: #40 → #44 → #46
+   is a chain in which each fix PR generated the next issue, and #44 and #47 describe the same two
+   defects. Fixing both as filed will do the same work twice and will generate a seventh round.
+3. **Decide whether #25 becomes the next epic — after #20 lands, not before.** Reason: its stated
+   reason for deferral ("promotion gates need frozen replay, shadow and calibration history")
+   became false today, when #19 closed and the replay corpus landed. It is the only deferred item
+   whose blocker has cleared, and it is four separate architectural decisions inside one issue. It
+   is not an epic this week: it has no architecture to split against until #20 fixes the BLACK-zone
+   boundary TR-16 names, and splitting it now would produce issues that all get replanned.
 
 ## Blocked, and on whom
 
-Nothing waits on a human decision: the one owner question (Meta-first) is answered and recorded. Two constraints to watch, neither blocking today:
-
-- Meta app credentials arrive from the owner before real-read tickets (prd.md constraint) — #18 stays buildable without them via the fake provider; only the live path is credential-gated.
-- No staging or production exists and v1 assumes none — anything needing hosted infra waits for the hosted-runtime epic (#24, still deferred).
+- **#20's plan, on the owner.** The recorded `replan` (2026-09-25T15:07) says to read a triage
+  comment on the work-order issue and replan. That comment is not in `maintainer/`, and this
+  survey cannot read it. This is the only open human dependency in the project.
+- **Meta app credentials, on the owner** — still required before any live read. Every read path
+  shipped so far runs on the fake provider, so nothing is blocked today.
+- **Hosted infrastructure, on the owner** — none exists (ADR-0008) and #24 needs a human to
+  choose and pay for a target. Deferred, not blocking.
+- **`.sdlc/config.yml` is under `forbidden_paths`, so this is noted, not filed.** The installer's
+  "Detected stack: unknown — could not work out how to start this app" comment is stale:
+  `env.boot` is `npm run sdlc:serve` and QA has been driving the pages all day. Only a human can
+  edit that file, and nothing is wrong.
 
 ## Epics
 
-- #14 Decide the architecture for the Autonomous Growth OS — in flight (architecture decided and split; 0 of 7 slices closed). No dependencies; it is the only open epic.
-- Not yet epics (deferred issues under #14; file as epics only when next): #23 Google Ads slice — waits on the Meta pattern (#18/#20); #24 hosted runtime — waits on local slices proving the pattern; #25 self-improving brain — waits on frozen replay + shadow + calibration history; #26 creative/MMM/geo/bandits — waits on L1/L2 experiments earning them.
+One open epic, and it waits on nothing:
+
+- **#14 Decide the architecture for the Autonomous Growth OS** — in flight. 6 of 7 slices closed,
+  #20 open, 4 deferred children open.
+
+The four deferred children are not epics, but they are the graph that comes after #14, and
+**every one of them waits on #20**:
+
+- **#25 Self-improving brain** — blocker cleared (#19 closed, replay corpus landed); waits on #20
+  for the protected BLACK-zone boundary.
+- **#23 Google Ads** — waits on #20; it reuses the kernel, executor and measurement pattern the
+  Meta slice establishes.
+- **#26 Creative, MMM, geo incrementality, bandits** — waits on #20, and on L1/L2 experiment
+  evidence that must earn the advanced causal layers.
+- **#24 Hosted runtime** — waits on #20, and on a human choosing a target.
+
+No `epic_links` were written: there is one open epic and it has no upstream dependency, and
+dependencies between non-epic issues are carried by the `Depends on #N` lines already in their
+bodies.
 
 ## Survey notes
 
-Filed nothing this run: every TR-1–TR-26 is covered by a slice or a deferred item, the backlog is one day old with no stalled work, and the codebase is empty so there is no drift, recurrence, or dead code to report. The hosted-runtime issue project.md anticipates already exists as deferred #24; filing it as an epic now would violate the next-not-eventual rule.
+Filed one issue: the recurring "a comment or contract states a stronger guarantee than the code
+enforces" shape, found in three consecutive review rounds and a QA pass, is still not written
+down in `.sdlc/memory/patterns/` — which is what that file exists to stop.
+
+Deliberately not filed: the two-of-eight money-readability asymmetry (already filed twice, as
+#44 and #47 findings, with the same one-line fix proposed in both); the stale `docs/ui.md` and the
+missing page title (already #46); the 375px overflow (already #48); the empty
+`.sdlc/memory/patterns/` README's other half (the instances belong to the issues that found
+them); and any epic — the only work that is next is #20, and it already exists as an issue.
