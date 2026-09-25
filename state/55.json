@@ -354,5 +354,39 @@
       }
     ],
     "pr": "59"
-  }
+  },
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 4,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6"
+    ],
+    "sha": "97295e890452be07cbba96c279818c17c20e5587",
+    "run_id": "36192850610",
+    "work_order_version": 1,
+    "at": "2026-09-25T21:50:54.232Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-1",
+      "title": "Cascade guard skips the exact-match attribute selectors, so a 38.4px page title passes the suite"
+    },
+    {
+      "id": "BUG-2",
+      "title": "A second .page-title rule re-sizes the page title to 38.4px with every test green"
+    },
+    {
+      "id": "BUG-3",
+      "title": "Cascade guard reports a no-op descendant rule as an override, with a message that is not true"
+    },
+    {
+      "id": "BUG-4",
+      "title": "Cascade guard throws on an attribute selector whose quoted value contains a space"
+    }
+  ]
 }
