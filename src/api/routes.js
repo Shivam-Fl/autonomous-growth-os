@@ -38,9 +38,10 @@ export function buildApp({ repositories }) {
   }
 
   // The versioned API: only /health exists in this slice; unknown /v1 paths
-  // return the error envelope, never a stack trace.
+  // return the error envelope, never a stack trace. Express strips the mount
+  // prefix from request.path, so the reported path is rebuilt from baseUrl.
   app.use('/v1', (request, response) => {
-    response.status(404).json({ code: 'NOT_FOUND', message: `no API route for ${request.method} ${request.path}` });
+    response.status(404).json({ code: 'NOT_FOUND', message: `no API route for ${request.method} ${request.baseUrl}${request.path}` });
   });
 
   app.use((request, response) => {

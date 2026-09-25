@@ -106,7 +106,10 @@ export function renderPage(route, { repositories, override = null } = {}) {
   const state = resolveState(route, override, repositories);
   const tenant = firstTenant(repositories);
   const content = PAGES[route](state, { repositories, tenant });
-  const tenantName = tenant ? tenant.name : 'No connected account';
+  // The header must never disagree with the body: chrome follows the effective
+  // (post-override) state, so ?state=empty reads 'No connected account' even
+  // when the store holds a tenant.
+  const tenantName = state === 'empty' ? 'No connected account' : tenant ? tenant.name : 'No connected account';
   return layout({ route, state, title: TITLES[route], tenantName, content });
 }
 

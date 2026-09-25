@@ -10,7 +10,7 @@
     "sdlc:verify": "npm ci --no-audit --no-fund && node --test",
     "sdlc:serve": "node src/index.js",
     "sdlc:seed": "node scripts/seed.js",
-    "sdlc:ready": "curl -fsS http://localhost:3000/health"
+    "sdlc:ready": "curl -fsS http://localhost:${PORT:-3000}/health"
   },
   "dependencies": {
     "express": "^5.2.1"

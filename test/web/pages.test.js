@@ -78,6 +78,35 @@ test('after seeding, the header names the demo tenant and the dashboard goes ide
   assert.match(seededHtml, /Decision feed · 2 rows/);
 });
 
+test('?state=empty on a seeded database shows the empty body AND the empty header, on every route', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pages-override-'));
+  seed({ dbPath: join(dir, 'app.db') });
+  const repos = createRepositories(openDatabase(join(dir, 'app.db')));
+  assert.ok(repos.tenants.list().length > 0, 'fixture: the database is seeded');
+
+  for (const route of ROUTES) {
+    const html = renderPage(route, { repositories: repos, override: 'empty' });
+    assert.match(html, /data-state="empty"/, `${route} body follows the override`);
+    assert.match(html, /data-testid="tenant-name">No connected account</, `${route} header agrees with the empty body`);
+    assert.doesNotMatch(html, />Demo Tenant</, `${route} header never names the tenant under ?state=empty`);
+  }
+});
+
+test('without an override the header still follows the store, exactly as before', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pages-store-'));
+  seed({ dbPath: join(dir, 'app.db') });
+  const repos = createRepositories(openDatabase(join(dir, 'app.db')));
+
+  const ideal = renderPage('/journal', { repositories: repos });
+  assert.match(ideal, /data-state="ideal"/);
+  assert.match(ideal, /data-testid="tenant-name">Demo Tenant</);
+
+  const fresh = createRepositories(openDatabase(join(mkdtempSync(join(tmpdir(), 'pages-store-')), 'app.db')));
+  const empty = renderPage('/journal', { repositories: fresh });
+  assert.match(empty, /data-state="empty"/);
+  assert.match(empty, /data-testid="tenant-name">No connected account</);
+});
+
 test('skeleton shells keep a fixed height so data arriving causes no layout shift', () => {
   const repos = freshRepos();
   const loading = renderPage('/', { repositories: repos, override: 'loading' });
