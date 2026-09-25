@@ -2,6 +2,11 @@
 // ideal, empty, loading, partial and error variants selected from store
 // state. The ?state= preview override (empty|ideal|loading|partial|error)
 // renders a shell for QA to drive on a fresh database; it never writes.
+// The dashboard additionally reads the Meta provider passed in at render
+// (per request, from routes) and renders its campaign regions from the typed
+// read envelopes; ?meta_error=quota|revoked simulates a provider failure.
+
+import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
 const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals'];
@@ -99,13 +104,13 @@ function skeletonRows(count, className = 'skeleton-row') {
   return `<div class="skeleton-stack" aria-hidden="true">${Array.from({ length: count ?? 3 }, () => `<div class="skeleton ${className}"></div>`).join('')}</div>`;
 }
 
-export function renderPage(route, { repositories, override = null } = {}) {
+export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null } = {}) {
   if (!ROUTES.includes(route)) {
     throw new Error(`unknown page route ${route}`);
   }
   const state = resolveState(route, override, repositories);
   const tenant = firstTenant(repositories);
-  const content = PAGES[route](state, { repositories, tenant });
+  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError });
   // The header must never disagree with the body: chrome follows the effective
   // (post-override) state, so ?state=empty reads 'No connected account' even
   // when the store holds a tenant.
@@ -155,7 +160,108 @@ function maturityBar(score) {
 </div>`;
 }
 
-function dashboard(state, { repositories, tenant }) {
+// The Meta campaign regions (TR-13): four tables read through the typed
+// adapter interface, each with headers and a row count, rows sorted by id.
+// A failed read renders the error panel naming the failing check and keeps
+// the prior rows visible from the provider's last-good snapshot.
+
+const META_CHECKS = {
+  [META_ERROR_CODES.QUOTA]: 'provider-sync/quota',
+  [META_ERROR_CODES.PERMISSION]: 'provider-sync/permission',
+};
+
+// The ?meta_error= simulation names the same checks the typed envelope does,
+// so the panel renders even if a simulation is wired to a provider that did
+// not fail. Unknown values are ignored, like an unknown ?state=.
+const META_SIMULATIONS = new Set(['quota', 'revoked']);
+const META_SIMULATION_CHECKS = { quota: 'provider-sync/quota', revoked: 'provider-sync/permission' };
+
+const META_TABLES = [
+  ['campaigns', 'Meta campaigns', ['Id', 'Name', 'Status', 'Objective']],
+  ['adSets', 'Meta ad sets', ['Id', 'Campaign', 'Name', 'Status', 'Daily budget']],
+  ['ads', 'Meta ads', ['Id', 'Ad set', 'Name', 'Status']],
+  ['insights', 'Meta insights', ['Id', 'Campaign', 'Spend', 'Impressions', 'Clicks']],
+];
+
+const META_CELLS = {
+  campaigns: (row) => [row.id, row.name, row.status, row.objective],
+  adSets: (row) => [row.id, row.campaign_id, row.name, row.status, money(row.daily_budget_micros)],
+  ads: (row) => [row.id, row.ad_set_id, row.name, row.status],
+  insights: (row) => [row.id, row.campaign_id, money(row.spend_micros), String(row.impressions), String(row.clicks)],
+};
+
+function money(micros) {
+  return `₹${(micros / 1_000_000).toFixed(2)}`;
+}
+
+function metaTable(collection, title, headers, rows) {
+  const cells = META_CELLS[collection];
+  const body = rows.length === 0
+    ? `<p class="empty-copy">No ${escapeHtml(title.toLowerCase())} in the last good sync.</p>`
+    : `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
+${rows.map((row) => `<tr>${cells(row).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
+</tbody></table>`;
+  return panel({
+    title: `${title} · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
+    body,
+    testid: `meta-${collection}`,
+  });
+}
+
+function metaSyncLine(syncedAt) {
+  return `<p data-testid="meta-last-good">Meta last good sync ${escapeHtml(syncedAt)}</p>`;
+}
+
+function metaErrorPanel({ check, error }) {
+  return errorPanel({
+    failed: {
+      title: 'Meta provider sync failed',
+      detail: `Meta data could not be read (check: ${escapeHtml(check)}).${error ? ` ${escapeHtml(error.message)}` : ''}`,
+    },
+    stillTrue: 'nothing was changed by the failed read and no spend was recorded since.',
+    retryHref: '/',
+  });
+}
+
+async function metaRegions({ metaProvider, metaError }) {
+  if (!metaProvider) {
+    return panel({
+      title: 'Meta campaigns',
+      body: `<p class="empty-copy">Meta data is not connected yet. Connect a Meta ad account to fill campaigns, ad sets, ads and insights here.</p>`,
+      testid: 'meta-unavailable',
+    });
+  }
+
+  const reads = {
+    campaigns: await metaProvider.listCampaigns(),
+    adSets: await metaProvider.listAdSets(),
+    ads: await metaProvider.listAds(),
+    insights: await metaProvider.getInsights(),
+  };
+  const failed = Object.values(reads).find((read) => !read.ok);
+  const simulation = META_SIMULATIONS.has(metaError) ? metaError : null;
+
+  if (!failed && !simulation) {
+    const syncedAt = metaProvider.lastGood?.()?.synced_at ?? 'unknown';
+    return `${metaSyncLine(syncedAt)}
+${META_TABLES.map(([collection, title, headers]) => metaTable(collection, title, headers, reads[collection].data)).join('')}`;
+  }
+
+  const check = failed ? META_CHECKS[failed.error.code] ?? 'provider-sync' : META_SIMULATION_CHECKS[simulation];
+  const snapshot = metaProvider.lastGood?.() ?? null;
+  const syncedAt = snapshot?.synced_at ?? 'unknown';
+  const tables = META_TABLES
+    .map(([collection, title, headers]) => {
+      const rows = snapshot ? snapshot[collection] : reads[collection].ok ? reads[collection].data : null;
+      return rows ? metaTable(collection, title, headers, rows) : null;
+    })
+    .filter(Boolean);
+  return `${metaErrorPanel({ check, error: failed?.error ?? null })}
+${tables.length > 0 ? `${metaSyncLine(syncedAt)}
+${tables.join('')}` : ''}`;
+}
+
+async function dashboard(state, { repositories, tenant, metaProvider, metaError }) {
   if (state === 'loading') {
     return `${panel({
       title: 'Loading KPIs',
@@ -163,7 +269,11 @@ function dashboard(state, { repositories, tenant }) {
 <div class="skeleton kpi-card"></div><div class="skeleton kpi-card"></div><div class="skeleton kpi-card"></div>
 <div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>
 </div>`,
-    })}`;
+    })}
+${panel({
+    title: 'Loading Meta campaigns',
+    body: skeletonRows(4),
+  })}`;
   }
 
   if (state === 'error') {
@@ -183,6 +293,7 @@ function dashboard(state, { repositories, tenant }) {
       : 'unknown';
     return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(lastGood)}</div>
 ${kpiStrip(state, { repositories, tenant, stale: true })}
+${await metaRegions({ metaProvider, metaError })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
@@ -202,6 +313,7 @@ ${guardianPanel(state)}`;
   }
 
   return `${kpiStrip(state, { repositories, tenant })}
+${await metaRegions({ metaProvider, metaError })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
