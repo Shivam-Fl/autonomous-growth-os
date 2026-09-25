@@ -68,5 +68,133 @@
     "decided_at": "2026-09-25T17:36:32.799Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "issue": 46,
+    "version": 1,
+    "kind": "chore",
+    "confidence": 92,
+    "confidence_rationale": "Three of the four findings reproduce verbatim at the line numbers the review names, and each fix is a mechanical rewrite with no design content. The regex change is the only one that alters what the suite asserts, and it is offset by a new self-guard case so the net coverage is not weaker. Confidence is 92 rather than higher only because the fourth finding is deliberately not implemented (docs/ui.md is a forbidden path), so this PR will not close the issue completely.",
+    "reproduced": false,
+    "understanding": "Issue #46 carries four non-blocking findings from the review of #45. I re-checked all four against the code as it stands after #45 merged (1fa7d9a); all four still reproduce, and none was closed by a later commit.\n\n1. test/web/pages.test.js:127 asserts `/<h1 class=\"page-title\" data-testid=\"page-title\">[^<]*<\\/h1>/`. It pins the CSS class and the attribute order, so a purely cosmetic rename of `.page-title` in src/web/styles.css:137 fails 25 route x state assertions. This contradicts .sdlc/memory/qa/selectors.md, which says class names are styling hooks, not assertions. The same test already gets this right on the next line (`/<h1[^>]*>([^<]*)<\\/h1>/` for the text).\n\n2. docs/ui.md:23 says \"one display size for KPI values, one body size, one caption size\", but .page-title (styles.css:140) is now also 1.4rem, the same value as .kpi-value (styles.css:195), so the display step has a second user the spec does not mention. The five **Regions** lines in docs/ui.md (59, 73, 87, 101 and the fifth screen) do not list the page title that layout() now emits as the first region inside main. The drift is real, but docs/ui.md is an approved doc no ticket may change, so it is recorded in risks for a human and is not in files[].\n\n3. src/web/styles.css:139 `.page-title { color: var(--color-ink) }` is a no-op. I enumerated every `color:` declaration in the stylesheet: body (32), a (39), .app-header .brand (72), .app-header nav a (83), .app-header nav a[aria-current] (92), .page-footer (116), .page-title (139), .banner-warn (168), .kpi-label (188), .check-time (232), .maturity-label (257), .button (303), .button-secondary (310). Every one except 139 overrides an inherited or UA value. The h1's parent is main#main (pages.js:75-78) and #main (styles.css:107-113) declares max-width, margin, padding, display and gap but no color, so the h1 already inherits --color-ink from body.\n\n4. test/web/pages.test.js:123 uses Array.prototype.reduce purely for its side effect, asserting inside the callback. `grep -rn \"\\.reduce(\" test/` returns four hits; the other three (test/data/append-only.test.js:74, test/domain/money.test.js:43 and :51) use reduce to compute a sum. The same file iterates with `for (const ... of ...)` at lines 49, 112, 113, 174, 218, 262, 322, 493, 497, 605.",
+    "root_cause": "The #45 work order asked only for \"the h1 carries data-testid=\\\"page-title\\\"\" and left the styling class in the same assertion, so a rendering concern (the class) was bound into a behavioural check. The two stylesheet and test-style findings are ordinary leftovers of a change that was correct but not swept afterwards: a restated inherited colour, and a reduce used for its side effect because the assertion was written as one expression. None is a defect in behaviour -- all 25 route x state shells render correctly today.",
+    "approach": "Three surgical edits, no behaviour change, no new dependency, no new abstraction.\n\n(1) Extract the h1 hook matcher in test/web/pages.test.js to a module-level constant and make it class-free: `const H1_HOOK = /<h1[^>]*\\bdata-testid=\"page-title\"[^>]*>[^<]*<\\/h1>/;`, then assert `assert.match(html, H1_HOOK, ...)` in place of the inline regex. `[^>]*` on both sides of the testid means the attribute may appear in any position and the class may be present, renamed, or absent, while a missing h1, a missing testid, or an h1 with nested markup inside it still fails. Add a new test in the same file that exercises H1_HOOK directly against four literal strings, so the relaxation cannot silently become vacuous.\n\n(2) Delete `color: var(--color-ink);` from the `.page-title` rule in src/web/styles.css. Leave the margin, font-size and line-height declarations and the existing explanatory comment untouched -- the comment is still accurate about the display size.\n\n(3) Rewrite the heading-order check in test/web/pages.test.js as the for...of the rest of the suite uses, keeping the seed of 0, the same comparison and the same failure message, and updating the comment above it, which currently says \"Reduce from 0\".\n\nI verified there is no third caller to worry about: `grep -rn \"page-title\" src/ test/ docs/` returns exactly three hits (pages.js:56 emits it, styles.css:137 styles it, pages.test.js:127 asserts on it), so relaxing the assertion touches nothing else.",
+    "files": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "Three edits. (a) Add a module-level constant near the existing `ROUTES` constant at line 14: `// The h1 hook, without the styling class: a CSS rename must not fail a\n// behavioural test, per .sdlc/memory/qa/selectors.md. The class may appear\n// anywhere, or not at all; the testid must be on an <h1> whose content is\n// plain text.\nconst H1_HOOK = /<h1[^>]*\\bdata-testid=\"page-title\"[^>]*>[^<]*<\\/h1>/;` (b) Replace line 127 `assert.match(html, /<h1 class=\"page-title\" data-testid=\"page-title\">[^<]*<\\/h1>/, ...)` with `assert.match(html, H1_HOOK, ...)`, keeping the existing `${where}: the h1 carries the page-title hook` message verbatim. (c) Replace lines 121-126 -- the comment `// Reduce from 0, so the first heading has to be the h1 too, and no step may rise by more than one: h1 -> h3 would fail here.` and the `levels.reduce((previous, level) => { assert.ok(level <= previous + 1, ...); return level; }, 0);` call -- with a for...of that is semantically identical: the comment reworded to `// Start from 0, so the first heading has to be the h1 too, and no step may\n// rise by more than one: h1 -> h3 would fail here.` followed by `let previous = 0;\nfor (const level of levels) {\n  assert.ok(level <= previous + 1, `${where}: h${previous} is not followed by h${level}`);\n  previous = level;\n}`. Do not change the assertion's comparison, its seed, or its failure message; the loop must reject exactly the inputs the reduce rejected. (d) Add one new test after the route x state test, titled `the h1 hook matcher depends on the testid, not the styling class`, asserting four things about H1_HOOK: it matches `<h1 class=\"page-title\" data-testid=\"page-title\">Command dashboard</h1>`; it matches the same h1 with the class removed; it matches it with the attributes in the reverse order, `data-testid` before `class`; and it does NOT match an `<h1>` with no testid, an `<h1 data-testid=\"page-title\"><span>x</span></h1>` whose content is not plain text, and an `<h2 data-testid=\"page-title\">` at the wrong level. Use node:assert/strict's assert.match and assert.doesNotMatch, already imported at line 3.",
+        "why": "Findings 1 and 4. `grep -rn \"page-title\" src/ test/ docs/` returns exactly three hits, so this file is the only consumer of the class name in an assertion and no other caller needs updating."
+      },
+      {
+        "path": "src/web/styles.css",
+        "action": "edit",
+        "change": "Delete the single line `  color: var(--color-ink);` at line 139 from the `.page-title` rule (lines 137-142), leaving `margin: 0;`, `font-size: 1.4rem;` and `line-height: 1.25;` in place, and leaving the three-line comment above the rule unchanged -- it documents the display size and stays true. Do not add a replacement declaration or a comment about the deletion; the rule is about size and spacing, and colour is inherited from body.",
+        "why": "Finding 3. The h1's parent is main#main, which sets no colour (styles.css:107-113), and body already sets `color: var(--color-ink)` (styles.css:32), so the declaration restates the inherited value. It is the only one of the 13 `color:` declarations in this stylesheet that overrides nothing."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "existing route x state matrix (5 routes x 5 states) still passes unchanged: exactly one h1, first heading inside main is the h1, no heading below h3, heading order never rises by more than one level, h1 text equals the expected screen name",
+          "existing 'the page h1 never replaces the error panel heading' test still passes on /opportunities and /experiments in the error state",
+          "new: H1_HOOK matches `<h1 class=\"page-title\" data-testid=\"page-title\">Command dashboard</h1>`",
+          "new: H1_HOOK matches the same h1 with the class attribute removed entirely",
+          "new: H1_HOOK matches the same h1 with data-testid before class (attribute order reversed)",
+          "new: H1_HOOK does NOT match `<h1 class=\"page-title\">Command dashboard</h1>` (no testid)",
+          "new: H1_HOOK does NOT match `<h1 data-testid=\"page-title\"><span>x</span></h1>` (content is not plain text)",
+          "new: H1_HOOK does NOT match `<h2 data-testid=\"page-title\">Command dashboard</h2>` (wrong heading level)"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "On all five routes (/, /journal, /opportunities, /experiments, /approvals) in each preview state (?state=ideal, empty, loading, partial, error), the page shows exactly one visible h1 as the first element inside main, naming the screen: Command dashboard, Decision journal, Opportunities, Experiments, Approvals respectively.",
+        "how_to_verify": "Load each URL and inspect the h1; also confirm main#main's first child is that h1 and no other h1 exists on the document.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "The h1 still carries data-testid=\"page-title\" on every route in every state, and the page-title class, if present, is not what the check depends on -- deleting or renaming the class in styles.css must not change whether this criterion holds.",
+        "how_to_verify": "Confirm the attribute in the rendered HTML at each URL. The class-independence half is proven by the `node --test` run in AC-4, not by the browser.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-3",
+        "check": "With `color: var(--color-ink)` removed from `.page-title`, the h1's computed colour is still the same ink as the body text on every route in every state (no visible change from the deletion).",
+        "how_to_verify": "Compare the computed colour of the h1 against the computed colour of body via devtools on each of the five routes; both should resolve to #1C1A16.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-4",
+        "check": "`npm run sdlc:verify` (which runs `node --test`) passes, including the new h1 hook matcher cases: H1_HOOK matches an h1 with the class, with the class removed, and with reversed attribute order, and does not match an h1 missing the testid, an h1 whose content is nested markup, or an h2. The heading-order check is unchanged in behaviour after the reduce-to-for...of rewrite.",
+        "how_to_verify": "CI runs the suite; the cases are the ones enumerated in tests[0].cases named 'new:' plus the two existing route x state and error-panel tests in the same file.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "Boot the app per .sdlc/memory/qa/environment.md (`npm run sdlc:serve`, base_url http://localhost:3000) and confirm / responds on /health.",
+      "For each of the five routes and each of the five ?state= values, assert body[data-page] and body[data-state] are set as expected and that main#main's first child is the single h1 (AC-1, AC-2).",
+      "Assert the h1 text per screen: Command dashboard, Decision journal, Opportunities, Experiments, Approvals (AC-1).",
+      "Read the computed colour of the h1 and of body on each route; they must both be #1C1A16 after the styles.css deletion (AC-3).",
+      "Confirm the stylesheet is served with the .page-title rule still present and still carrying font-size: 1.4rem -- only the color line was removed.",
+      "Check the error state on /opportunities and /experiments: the panel's own h2 ('Opportunity fetch failed' / 'Experiment fetch failed') is still inside the error panel and the page h1 still sits before it, not inside it.",
+      "Run the suite (`npx node --test test/web/pages.test.js`) and confirm the new h1 hook matcher cases pass (AC-4).",
+      "Adversarial: confirm the suite would still fail if layout() dropped the h1 entirely or dropped only the data-testid -- edit nothing on disk; reason from the negative cases in the new test instead."
+    ],
+    "risks": [
+      "Finding 2 (docs/ui.md) is NOT fixed here and this PR will not fully close issue #46. docs/ui.md:23 states \"one display size for KPI values, one body size, one caption size\", but .page-title is now also 1.4rem (styles.css:140), the same value as .kpi-value (styles.css:195) -- the display step has a second user the spec does not mention. Separately, none of the five **Regions** lines in docs/ui.md (lines 59, 73, 87, 101, and the fifth screen section) mentions the page title, which layout() (src/web/pages.js:75-78) now emits as the first region inside main on all 25 shells. docs/ui.md is an approved doc that no ticket may change, so this needs a human edit.",
+      "Relaxing the h1 assertion weakens it slightly in one direction: it no longer proves the h1 is the .page-title element. That is deliberate -- the class is a styling hook per .sdlc/memory/qa/selectors.md -- and the new matcher cases plus the existing h1-count, hierarchy and text assertions cover what the class-coupled version was actually protecting. If a future design genuinely needs a different h1 to carry the hook, that is a new requirement, not a regression.",
+      "The `[^<]*` in H1_HOOK still rejects an h1 whose content contains nested markup, so it is not as permissive as a bare `/<h1[^>]*data-testid=\"page-title\"/`. That is intentional: it keeps the assertion meaningful about a non-empty text heading. Do not loosen it to the bare form.",
+      "No path in this change touches forbidden_paths in .sdlc/config.yml. The change deletes no data, touches no money, policy-kernel or executor path, and adds no network host, so env.api_allowlist is unaffected."
+    ],
+    "out_of_scope": [
+      "docs/ui.md:23 typography line and the five **Regions** lines -- the page title and the display size's second use are not documented. docs/ui.md is an approved doc no ticket may change; a human must make this edit, and it is the one part of #46 this PR leaves open.",
+      "No change to src/web/pages.js. The h1 continues to be emitted with both class=\"page-title\" and data-testid=\"page-title\"; only the test's dependence on the class goes away. Dropping the class from the markup is a separate decision that would need the stylesheet rule renamed with it.",
+      "The other eleven `color:` declarations in src/web/styles.css are left alone. Each of them overrides a UA or inherited value and is doing real work; this change touches only the one that overrides nothing.",
+      "The other three `reduce` calls in the test suite (test/data/append-only.test.js:74, test/domain/money.test.js:43 and :51) are left as they are. They use reduce for its return value, which is what reduce is for.",
+      "No docs/spec/**, docs/prd.md or docs/trd.md change. TR-21 already requires the five screens and five states, and this change does not alter what any of them renders."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Delete the class=\"page-title\" from the h1 in src/web/pages.js and keep the test as it is.",
+        "rejected_because": "It removes the styling hook the stylesheet depends on, so the h1 would lose its margin/font-size rule and the fix would be a visual regression. The class is a legitimate styling hook; the test is what is wrong."
+      },
+      {
+        "approach": "Rewrite all thirteen `color:` declarations in src/web/styles.css to use a shared class or a utility, on the grounds that the inconsistency is worth cleaning up.",
+        "rejected_because": "Twelve of them override a real inherited or UA value and changing them risks visible regressions across five screens for no gain. This ticket is about the one that overrides nothing."
+      },
+      {
+        "approach": "Replace the reduce with levels.some((level, i) => level > levels[i - 1] + 1) or a filter+count.",
+        "rejected_because": "The failure message names the offending pair (h2 followed by h4), which is what makes the assertion useful at 3am. some() would give a boolean and lose the message; a filter+count would need a second pass to find which pair failed."
+      },
+      {
+        "approach": "Fold finding 2 into this PR by editing docs/ui.md alongside the code.",
+        "rejected_because": "docs/ui.md is an approved doc and the reserved-path guard refuses the whole plan for it. Recorded in risks for a human instead."
+      },
+      {
+        "approach": "Request a maintainer stage to split this ticket so the docs edit ships separately.",
+        "rejected_because": "The ticket is not really several tickets -- it is one cleanup with one blocked item. The block is a path guard, not a scoping problem, and a maintainer stage would not be permitted to edit docs/ui.md either."
+      }
+    ],
+    "assumptions": [
+      "The reserved-path guard that refuses plans touching docs/ui.md applies to agents the same way the planner's hard rules state it. If a maintainer grants a human exception for this repo, finding 2 becomes implementable and this work order should be revised rather than superseded.",
+      "The `page-title` class is not referenced by any client-side script, so relaxing the test assertion cannot affect runtime behaviour. Verified: the only three references in the repo are pages.js:56 (emits), styles.css:137 (styles) and pages.test.js:127 (asserts)."
+    ],
+    "unknowns": [
+      "Whether the four findings were written against an earlier revision of #45. I re-checked all four against 1fa7d9a and all four still reproduce, so none can be dropped as already fixed."
+    ],
+    "residual_risks": [
+      "QA reads this first: the browser cannot distinguish whether the h1-hook assertion is class-coupled. AC-4's verify:test is the only place that is observable, and it depends on CI running node --test, not on QA clicking through.",
+      "Deleting the colour declaration is a no-op today, so a bug here would be invisible in a browser. It would only surface after a future dark-mode inversion recolours body, at which point the h1 would follow body either way -- which is the behaviour the deletion restores."
+    ]
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-09-25T17:39:55.187Z",
+  "validated_ac_changes": []
 }
