@@ -149,7 +149,10 @@
     "confidence": 92,
     "confidence_rationale": "The change is three tests in one file, and I wrote and probed all three before planning: each passes on the clean tree, each fails on the exact regression it exists to catch, and none fails on a benign variation such as attribute order. The finding-by-finding reproduction is confirmed against the actual commits, not taken from the issue. The 8 points of doubt are all about finding 3 — whether a human will accept that a reserved document is not this ticket's to fix, and whether the review stage will approve a deliberate class-name assertion — and neither changes what the implementer writes."
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "test/web/pages.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
