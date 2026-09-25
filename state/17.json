@@ -331,5 +331,24 @@
       "run": "36107233820",
       "at": "2026-09-25T07:28:36.941Z"
     }
+  },
+  "failure_packet": {
+    "issue": 17,
+    "pr": 29,
+    "head": "79cd58e2a180dda0f168b9087d12049e77b397ad",
+    "stage": "qa",
+    "attempt": 1,
+    "occurrences": 1,
+    "error_type": "schema-invalid",
+    "error_signature": "76cd1d55a86b314d",
+    "raw_excerpt": "sdlc: schema validation failed on something that cannot be mechanically fixed: `fixtures[0].kind`: must be one of [\"account\",\"org\",\"record\",\"file\",\"token\"], got \"tenant\"; `fixtures[1].kind`: must be one of [\"account\",\"org\",\"record\",\"file\",\"token\"], got \"tenant\"; `fixtures[2].kind`: must be one of [\"account\",\"org\",\"record\",\"file\",\"token\"], got \"tenant\"\nsdlc: the rejected qa-report is kept on issue #17's ledger as rejected_artifacts[\"qa-report\"]",
+    "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
+    "decision": "triage",
+    "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
+    "context": {
+      "work_order_version": 1,
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36107233820",
+      "prior_signatures": []
+    }
   }
 }
