@@ -176,6 +176,16 @@ A **pass** is checked file by file, because a pass is what merges:
 - **Every test a passing criterion cites lists at least one file under `$QA_EVIDENCE_DIR` in its
   `evidence`** — a screenshot of the state it asserted is enough. A test with an empty
   `evidence` proves nothing to anyone who was not there, and the whole report is rejected.
+  An API case has no screen, so its evidence is the exchange itself, saved as it happened:
+
+  ```bash
+  curl -sS -i -X POST "$PREVIEW_URL/v1/events" -H 'content-type: application/json' \
+    -d @payload.json | tee "$QA_EVIDENCE_DIR/T-8-response.txt"
+  ```
+
+  One file per case, request and response both — the status line is what the case asserted.
+  growth-os #17's QA passed every criterion and was rejected because its eight API cases,
+  checked by status code, cited nothing.
 - **At least one HAR under `$QA_EVIDENCE_DIR`** — the probe from step 3 counts. It is read by a
   script, not by you: every 5xx in it must appear in `network_failures`.
 

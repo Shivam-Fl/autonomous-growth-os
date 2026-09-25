@@ -445,8 +445,10 @@ jobs:
             in /tmp or elsewhere on this runner is destroyed with it, and a bug report whose
             evidence cannot be opened is just a claim. The run fails if you cite a path that
             is not there. A pass also fails unless every test a passing criterion cites lists
-            a file under $QA_EVIDENCE_DIR in its `evidence`, and a HAR is there too — record
-            it headless as step 3 of your pack shows, never with `playwright open`.
+            a file under $QA_EVIDENCE_DIR in its `evidence` — a screenshot for a browser case,
+            the saved request and response (`curl -i … | tee`) for an API case — and a HAR is
+            there too: record it headless as step 3 of your pack shows, never with
+            `playwright open`.
 
             The code under test is checked out in _pr/ at the exact commit under test
             (${{ needs.prepare.outputs.sha }}); the app is served from there. This repo root is
