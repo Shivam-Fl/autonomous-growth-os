@@ -1,5 +1,5 @@
 {
-  "source_sha": "c2cb35509052e7204cca5992d1ee697b4cbf8ccb",
+  "source_sha": "c807620aa07d17bf0aa3a8a35f7043796d827c9c",
   "source_repo": "Shivam-Fl/automated-ai-sdlc",
   "files": {
     ".github/workflows/ci-verify.yml": "e70d32c31bc0a09bfa049641664ea88027ffda2703b0058272ce14fa9ea250fd",
@@ -48,7 +48,7 @@
     ".sdlc/schemas/flow-plan.json": "fed7d323f6fa6e41196899b3d64bdec106c1c189630f6be91705e1b8ce750881",
     ".sdlc/schemas/plan-review.json": "7017282a8138ad1fadb33719ee2857f78c396a241df7dbe1e833ee7b1a5a792a",
     ".sdlc/schemas/project-brief.json": "462ae2ea71a363bf02b02ac06482238fd3857729b21e5704e835606b39b9be5e",
-    ".sdlc/schemas/qa-report.json": "2d56c0ba6a51bec436bfba0178b9feb0440dbfc4e364b13bf22951cba713941d",
+    ".sdlc/schemas/qa-report.json": "d783f899ae9eda02b3fc55c012ba377bbc45e7a7a8d8a11fcbf26d4e5fc1e160",
     ".sdlc/schemas/review-correctness.json": "e54e8ac152d2da5468519c639aae56464065f9fbdc89980d95f2e12046b2999c",
     ".sdlc/schemas/review-design.json": "490cb201820e5670d56a3d504a9d07229ac10955f91be9ce1997286a942693ad",
     ".sdlc/schemas/self-fix-consult.json": "58d3d862216621ff2ad0494ec31f65da283e6f4133cc9b1048c8bd269f770e52",

@@ -20,8 +20,13 @@ import {
 } from '../domain/measurement.js';
 import { validateEvent } from '../domain/events.js';
 import { utcNow } from '../data/db.js';
+import { FakeMetaAdsProvider, FAILURE_MODES } from '../integrations/meta_ads/fake.js';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// ?meta_error=quota|revoked drives the fake provider's failure injection for
+// simulation; anything else is ignored, exactly like an unknown ?state=.
+const META_ERROR_PARAMS = new Set([...FAILURE_MODES].filter((mode) => mode !== 'ok'));
 
 function packageVersion() {
   return JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
@@ -65,10 +70,21 @@ export function buildApp({ repositories }) {
   });
 
   for (const route of ['/', '/journal', '/opportunities', '/experiments', '/approvals']) {
-    app.get(route, (request, response) => {
+    app.get(route, async (request, response) => {
+      // A per-request provider: the fake holds no state across requests, so
+      // one browser tab cannot see another's simulated failure.
+      const metaError = META_ERROR_PARAMS.has(request.query.meta_error)
+        ? request.query.meta_error
+        : null;
+      const metaProvider = new FakeMetaAdsProvider({ failureMode: metaError ?? 'ok' });
       response
         .type('html')
-        .send(renderPage(route, { repositories, override: request.query.state ?? null }));
+        .send(await renderPage(route, {
+          repositories,
+          override: request.query.state ?? null,
+          metaProvider,
+          metaError,
+        }));
     });
   }
 
