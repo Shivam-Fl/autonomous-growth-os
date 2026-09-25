@@ -18,9 +18,9 @@
     "requested_at_head": null,
     "qa_run": "36085127613",
     "from": "qa",
-    "pr": "27",
-    "work_order_version": 1,
-    "at": "2026-09-25T02:22:27.178Z"
+    "pr": 27,
+    "work_order_version": 2,
+    "at": "2026-09-25T05:33:21.270Z"
   },
   "work_order": {
     "acceptance": [
@@ -626,7 +626,7 @@
     }
   ],
   "epic": 14,
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "feature",
     "confidence": 90,
@@ -635,7 +635,7 @@
     "councils": {},
     "decided_at": "2026-09-24T18:59:52.190Z"
   },
-  "stopped_at": "root-cause",
+  "stopped_at": null,
   "dispatched_stage": "root-cause",
   "validated_from": "plan",
   "validated_at": "2026-09-24T19:03:21.257Z",
