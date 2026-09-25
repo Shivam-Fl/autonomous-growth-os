@@ -182,7 +182,14 @@
   "on_complete": "merge",
   "artifacts": {},
   "failure_history": [],
-  "review_history": [],
+  "review_history": [
+    {
+      "criteria": [
+        "ac-2"
+      ],
+      "head": "f4a084bb67940bb863cadd545eb33775ca0bcc3a"
+    }
+  ],
   "review_root_caused": [],
   "created_at": "2026-09-25T20:33:08.537Z",
   "updated_at": "2026-09-25T21:01:27.796Z",
