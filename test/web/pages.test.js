@@ -1312,3 +1312,80 @@ test('the .page-title rule still carries the declarations the page title depends
   assert.match(rule[1], /font-size:\s*1\.4rem\s*;/, 'the page title keeps the display size');
   assert.match(rule[1], /line-height:\s*1\.25\s*;/, 'the page title keeps its line height');
 });
+
+// Issue #48: the narrow-viewport overflow is a layout constraint rather than a
+// styling choice, and a stylesheet is not observable from a rendered page — so
+// these two declarations are pinned here for the same reason the #main:focus
+// and .page-title rules above are. Delete either one and every page overflows
+// sideways again below ~1100px, with a green browser run to prove it.
+test('the narrow layout still carries the two declarations it depends on', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+
+  const itemRule = /#main\s*>\s*\*\s*\{([^}]*)\}/.exec(css);
+  assert.ok(itemRule, 'src/web/styles.css lifts the floor on the #main grid items');
+  assert.match(itemRule[1], /min-width:\s*0\s*;/, 'a grid item may shrink below its min-content width');
+
+  const regionRule = /\.table-scroll\s*\{([^}]*)\}/.exec(css);
+  assert.ok(regionRule, 'src/web/styles.css defines a .table-scroll rule');
+  assert.match(regionRule[1], /overflow-x:\s*auto\s*;/, 'a table wider than its column scrolls in its own region');
+});
+
+// The other half of the same fix. Lifting the floor stops one wide table from
+// sizing the column for every sibling, but the table itself is still wider than
+// the column, so it scrolls in a region of its own. The tabindex and the name
+// are not decoration: a scroll container that cannot take focus cannot be
+// scrolled by keyboard outside Chromium, which would trade a sideways-scrolling
+// page for a table whose last columns cannot be read at all.
+//
+// Like the .page-title test above, this couples to a class name on purpose and
+// says so: the wrapper is the only handle there is on the region, and asserting
+// it on a rendered page is what makes the keyboard contract checkable.
+test('every table the five routes render is wrapped in a keyboard-reachable, named region', async () => {
+  const repos = seededRepos('pages-table-scroll-');
+  const shells = [
+    ['/', { metaProvider: new FakeMetaAdsProvider() }],
+    ['/journal', {}],
+    // The error shell keeps the journal table (it is the record the failure
+    // preserved), so the region it scrolls in has to be there too.
+    ['/journal', { override: 'error' }],
+    ['/opportunities', {}],
+    ['/experiments', {}],
+    ['/approvals', {}],
+  ];
+  const labels = {};
+
+  for (const [route, options] of shells) {
+    const where = `${route}${options.override ? `?state=${options.override}` : ''}`;
+    const html = await renderPage(route, { repositories: repos, ...options });
+    const tables = html.match(/<table[\s>]/g) ?? [];
+    const wrappers = html.match(/<div class="table-scroll"[^>]*>/g) ?? [];
+    assert.equal(wrappers.length, tables.length, `${where}: every table has a region, and nothing else does`);
+
+    labels[where] = wrappers.map((tag) => /\baria-label="([^"]*)"/.exec(tag)[1]);
+    for (const [tag, label] of wrappers.map((w, i) => [w, labels[where][i]])) {
+      assert.match(tag, /\btabindex="0"/, `${where}: ${label} takes focus, or its last columns are unreachable by keyboard`);
+      assert.match(tag, /\brole="region"/, `${where}: ${label} is announced as a region`);
+      assert.notEqual(label, '', `${where}: the region has a non-empty accessible name`);
+    }
+  }
+
+  assert.ok(labels['/'].includes('Meta insights table'), 'the Meta panels name their table');
+  assert.ok(labels['/journal'].includes('Decision journal table'), 'the journal names its table');
+  assert.ok(labels['/journal?state=error'].includes('Decision journal table'), 'the preserved journal table is named too');
+  assert.ok(
+    labels['/approvals'].includes('Autonomy posture by action class table'),
+    'the approvals posture table names itself'
+  );
+});
+
+test('a page that renders no table renders no region, so the count above is not vacuous', async () => {
+  const empty = await renderPage('/', { repositories: freshRepos() });
+  assert.doesNotMatch(empty, /<table[\s>]/, 'the empty dashboard renders no table');
+  assert.doesNotMatch(empty, /table-scroll/, 'so it renders no region to put one in');
+
+  for (const route of ['/opportunities', '/experiments']) {
+    const html = await renderPage(route, { repositories: seededRepos(`pages-tablescroll-${route.slice(1)}-`) });
+    assert.doesNotMatch(html, /<table[\s>]/, `${route}: no table`);
+    assert.doesNotMatch(html, /table-scroll/, `${route}: no region`);
+  }
+});
