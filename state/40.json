@@ -301,9 +301,7 @@
   },
   "touch_paths": [
     "src/domain/opportunities.js",
-    "src/data/repositories.js",
     "src/api/routes.js",
-    "src/web/pages.js",
     "scripts/seed.js",
     "test/domain/opportunity-readability.test.js",
     "test/domain/opportunities.test.js",
