@@ -322,6 +322,14 @@
       "attempt": 2,
       "at": "2026-09-24T22:41:53.191Z",
       "digest": "The implement stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "ci",
+      "error_signature": "01495bc7d1165a48",
+      "error_type": "unknown",
+      "attempt": 4,
+      "at": "2026-09-25T01:11:10.142Z",
+      "digest": "The ci stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [],
