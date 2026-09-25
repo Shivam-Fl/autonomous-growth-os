@@ -7,7 +7,7 @@
 // read envelopes; ?meta_error=quota|revoked simulates a provider failure.
 
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
-
+import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
 import { formatMoney, fromMicros } from '../domain/money.js';
 
@@ -107,13 +107,13 @@ function skeletonRows(count, className = 'skeleton-row') {
   return `<div class="skeleton-stack" aria-hidden="true">${Array.from({ length: count ?? 3 }, () => `<div class="skeleton ${className}"></div>`).join('')}</div>`;
 }
 
-export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null } = {}) {
+export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null, filters = null } = {}) {
   if (!ROUTES.includes(route)) {
     throw new Error(`unknown page route ${route}`);
   }
   const state = resolveState(route, override, repositories);
   const tenant = firstTenant(repositories);
-  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError });
+  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError, filters });
   // The header must never disagree with the body: chrome follows the effective
   // (post-override) state, so ?state=empty reads 'No connected account' even
   // when the store holds a tenant.
@@ -399,42 +399,116 @@ function guardianPanel(state) {
   });
 }
 
-function journal(state, { repositories, tenant }) {
+// The decision journal (TR-15) reads the decisions repository, never the
+// frozen replay fixture: rows come from the journals table, the calibration
+// summary is computed live from the same rows, and the frozen-replay report
+// (0.70 precision over the CI fixtures) is deliberately absent — it belongs
+// to test runs, not to the page.
+
+const DECISION_SCENARIOS = ['replay-cpl-hold', 'replay-tracking-outage'];
+
+function percent(part) {
+  const value = Math.round(part * 100);
+  if (value === 0) {
+    return '0%';
+  }
+  const sign = value > 0 ? '+' : '−';
+  return `${sign}${Math.abs(value)}%`;
+}
+
+function expectedEffectOf(row) {
+  const selected = (row.alternatives ?? []).find((entry) => entry.action === row.selected_action);
+  if (!selected?.expected_outcomes) {
+    return '—';
+  }
+  const { mean, p10, p90 } = selected.expected_outcomes;
+  return `${percent(mean)} (${percent(p10)} … ${percent(p90)})`;
+}
+
+function decisionsOf(repositories, tenant) {
+  if (!tenant) {
+    return [];
+  }
+  return repositories.decisions?.list?.(tenant.id) ?? [];
+}
+
+function journalTable(rows, filters) {
+  const body = rows.length === 0
+    ? `<p class="empty-copy">No decisions match the current filters. Widen the class or status filter, or clear both, to see the full journal.</p>`
+    : `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
+${rows.map(journalRow).join('')}
+</tbody></table>`;
+  return panel({
+    title: `Decision journal · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
+    body,
+  });
+}
+
+function journalDrawerShell() {
+  // Empty, hidden server-side; client.js fills it from GET /v1/decisions/:id
+  // when a row is opened and moves focus in. Close returns focus to the row.
+  return `<aside id="journal-drawer" data-testid="journal-drawer" role="dialog" aria-modal="true" aria-labelledby="journal-drawer-title" hidden>
+<h2 id="journal-drawer-title">Decision detail</h2>
+<div class="journal-drawer-body" id="journal-drawer-body"></div>
+<button type="button" class="button" data-action="close-drawer">Close</button>
+</aside>`;
+}
+
+function journalCalibration(rows) {
+  const report = calibrationReport(rows);
+  const precision = report.precision === null
+    ? 'Precision — (no matured evaluations yet)'
+    : `Precision ${report.precision.toFixed(2)} over ${report.evaluated} matured decisions`;
+  const falseIntervention = report.falseInterventionRate === null
+    ? 'False-intervention rate — (no interventions evaluated yet)'
+    : `False-intervention rate ${report.falseInterventionRate.toFixed(2)} over ${report.interventions} interventions`;
+  return panel({
+    title: 'Calibration',
+    body: `<p data-testid="journal-precision">${escapeHtml(precision)}</p>
+<p data-testid="journal-false-intervention">${escapeHtml(falseIntervention)}</p>
+<p data-testid="journal-awaiting">${report.awaitingMaturity} awaiting maturity</p>`,
+  });
+}
+
+function journal(state, { repositories, tenant, filters }) {
   if (state === 'loading') {
     return `${panel({ title: 'Loading decisions', body: skeletonRows(4) })}
-${panel({ title: 'Calibration', body: `<p class="empty-copy">Cached last run — refreshing…</p>` })}`;
+${panel({ title: 'Calibration', body: `<p class="empty-copy" data-testid="journal-calibration-refreshing">Cached calibration — refreshing…</p>` })}`;
   }
 
+  // The error shell is a preview: it names the frozen scenario that failed,
+  // keeps every prior journal entry on screen (rows read live below the
+  // panel), and offers a Retry per scenario.
   if (state === 'error') {
-    return errorPanel({
-      failed: {
-        title: 'Replay evaluation failed',
-        detail: 'Scenario replay-2026-09-25 could not be evaluated: derived metrics unavailable (check: replay-runner).',
-      },
-      stillTrue: 'every prior journal entry is preserved and untouched.',
-      retryHref: '/journal',
-    });
+    const rows = decisionsOf(repositories, tenant);
+    return `<div class="banner banner-warn" role="status">Replay evaluation failed for scenario replay-tracking-outage. Every prior journal entry is preserved and untouched.</div>
+${rows.length > 0 ? journalTable(rows, filters) : `<section class="panel"><h2>Decision journal</h2><p class="empty-copy">Shadow mode has not started. Once it starts, every decision the system considers appears here, and a failed replay leaves prior entries untouched.</p></section>`}
+<div class="journal-retries">
+${DECISION_SCENARIOS.map((Scenario) => `<button type="button" class="button button-secondary" data-action="retry" data-retry-href="/journal">Retry replay evaluation for ${escapeHtml(Scenario)}</button>`).join('')}
+</div>
+${journalDrawerShell()}`;
   }
+
+  const rows = decisionsOf(repositories, tenant);
 
   if (state === 'partial') {
-    const decisions = eventsOf(repositories, tenant, 'decision.recorded');
-    return `${panel({
-      title: 'Awaiting maturity',
-      body: decisions.length === 0
-        ? `<p class="empty-copy">No recent decisions awaiting maturity. Once shadow mode runs, unevaluated decisions appear here with their expected evaluation dates.</p>`
-        : `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>
-${decisions.map((event) => `<tr>
-<td>${escapeHtml(event.occurred_at)}</td>
-<td>${escapeHtml(event.payload.class ?? 'unknown')}</td>
-<td>${escapeHtml(event.payload.expected ?? '—')}</td>
-<td>awaiting maturity · expected evaluation ${escapeHtml(event.payload.expected_evaluation ?? '2026-10-02')}</td>
-</tr>`).join('')}
-</tbody></table>`,
-    })}`;
+    const awaiting = rows.filter((row) => !row.evaluation);
+    return `<div class="banner banner-warn" role="status">Some recent decisions have not reached maturity yet, so they carry no evaluation.</div>
+${journalTable(rows, filters)}
+${panel({
+    title: 'Awaiting maturity',
+    body: awaiting.length === 0
+      ? `<p class="empty-copy">No recent decisions awaiting maturity. Once shadow mode runs, unevaluated decisions appear here with their expected evaluation dates.</p>`
+      : `<ul class="awaiting-list">${awaiting.map((row) => `<li data-decision-id="${escapeHtml(row.decision_id)}">
+<strong>${escapeHtml(row.decision_id)}</strong>
+<span>Awaiting maturity — expected evaluation ${escapeHtml(formatDate(row.expected_evaluation_at))}</span>
+</li>`).join('')}</ul>`,
+  })}
+${journalCalibration(rows)}
+${journalDrawerShell()}`;
   }
 
-  const decisions = eventsOf(repositories, tenant, 'decision.recorded');
-  if (state === 'empty' || decisions.length === 0) {
+  if (state === 'empty' || rows.length === 0) {
     return emptyState({
       title: 'Shadow mode has not started',
       message: 'Before shadow mode starts this journal is empty. Once it starts, every decision the system considers appears here: the alternatives it weighed (including do-nothing), the expected effect, and how the matured outcome compared.',
@@ -443,18 +517,68 @@ ${decisions.map((event) => `<tr>
     });
   }
 
-  return panel({
-    title: `Decision journal · ${decisions.length} rows`,
-    body: `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
-${decisions.map((event) => `<tr>
-<td>${escapeHtml(event.occurred_at)}</td>
-<td>${escapeHtml(event.payload.class ?? 'unknown')}</td>
-<td>${escapeHtml(event.payload.expected ?? '—')}</td>
-<td>${escapeHtml(event.payload.matured ?? 'pending')}</td>
-<td>${escapeHtml(event.payload.status ?? 'shadow')}</td>
-</tr>`).join('')}
-</tbody></table>`,
+  // Ideal: filter form, journal table and live calibration read from the
+  // decisions repository. The frozen replay's aggregate never reaches here.
+  const filtered = repositories.decisions.list(tenant.id, {
+    class: DECISION_CLASSES.includes(filters?.class) ? filters.class : null,
+    status: ['awaiting-maturity', 'matured'].includes(filters?.status) ? filters.status : null,
   });
+  return `${journalFilters(filters)}
+${journalTable(filtered, filters)}
+${journalCalibration(rows)}
+${journalDrawerShell()}`;
+}
+
+function formatDate(iso) {
+  if (!iso) {
+    return '—';
+  }
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) {
+    return iso;
+  }
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
+  return `${at.getUTCDate()} ${months[at.getUTCMonth()]} ${at.getUTCFullYear()}`;
+}
+
+
+function journalFilters(filters) {
+  // Two native selects with a GET submit: the browser does the filtering, so
+  // no JS is required. Unknown values degrade to the unfiltered options.
+  const classValue = DECISION_CLASSES.includes(filters?.class) ? filters.class : '';
+  const statusValue = ['awaiting-maturity', 'matured'].includes(filters?.status) ? filters.status : '';
+  return `<form class="journal-filters" method="get" action="/journal" data-testid="journal-filters">
+<div class="journal-filter-control">
+<label for="journal-filter-class">Action class</label>
+<select id="journal-filter-class" name="class">
+<option value="">All classes</option>
+${DECISION_CLASSES.map((cls) => `<option value="${cls}"${cls === classValue ? ' selected' : ''}>${escapeHtml(cls.replaceAll('-', ' '))}</option>`).join('')}
+</select>
+</div>
+<div class="journal-filter-control">
+<label for="journal-filter-status">Status</label>
+<select id="journal-filter-status" name="status">
+<option value="">All statuses</option>
+<option value="awaiting-maturity"${statusValue === 'awaiting-maturity' ? ' selected' : ''}>awaiting maturity</option>
+<option value="matured"${statusValue === 'matured' ? ' selected' : ''}>matured</option>
+</select>
+</div>
+<button type="submit" class="button button-secondary">Apply filters</button>
+</form>`;
+}
+
+function journalRow(row, index) {
+  return `<tr class="journal-row" data-decision-id="${escapeHtml(row.decision_id)}">
+<td>
+<button type="button" class="button button-secondary journal-open" data-action="open-decision" data-decision-id="${escapeHtml(row.decision_id)}" aria-haspopup="dialog" aria-label="Open decision detail for ${escapeHtml(row.decision_id)}">Open</button>
+</td>
+<td>${escapeHtml(row.decided_at)}</td>
+<td>${escapeHtml(row.action_class.replaceAll('-', ' '))}</td>
+<td>${escapeHtml(row.selected_action.replaceAll('_', ' '))}</td>
+<td>${escapeHtml(expectedEffectOf(row))}</td>
+<td>${row.evaluation ? 'evaluated' : 'pending'}</td>
+<td>${escapeHtml(row.status ?? 'shadow')}</td>
+</tr>`;
 }
 
 function opportunities(state, { repositories, tenant }) {

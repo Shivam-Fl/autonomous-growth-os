@@ -105,6 +105,61 @@ BEGIN
   SELECT RAISE(ABORT, 'audit_events is append-only: DELETE denied');
 END;`,
   },
+  {
+    name: '003_journal_tables',
+    sql: `
+CREATE TABLE IF NOT EXISTS state_snapshots (
+  tenant_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  kpis TEXT NOT NULL,
+  budgets TEXT NOT NULL,
+  funnel TEXT NOT NULL,
+  health TEXT NOT NULL,
+  memories TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, snapshot_id)
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+  tenant_id TEXT NOT NULL,
+  decision_id TEXT NOT NULL,
+  state_snapshot_id TEXT NOT NULL,
+  action_class TEXT NOT NULL,
+  selected_action TEXT NOT NULL,
+  record TEXT NOT NULL,
+  decided_at TEXT NOT NULL,
+  expected_evaluation_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, decision_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS state_snapshots_immutable_update
+BEFORE UPDATE ON state_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'state_snapshots are immutable: UPDATE denied');
+END;
+
+CREATE TRIGGER IF NOT EXISTS state_snapshots_immutable_delete
+BEFORE DELETE ON state_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'state_snapshots are immutable: DELETE denied');
+END;
+
+CREATE TRIGGER IF NOT EXISTS decisions_append_only_update
+BEFORE UPDATE ON decisions
+BEGIN
+  SELECT RAISE(ABORT, 'decisions are append-only: UPDATE denied');
+END;
+
+CREATE TRIGGER IF NOT EXISTS decisions_append_only_delete
+BEFORE DELETE ON decisions
+BEGIN
+  SELECT RAISE(ABORT, 'decisions are append-only: DELETE denied');
+END;
+
+CREATE INDEX IF NOT EXISTS decisions_status_idx
+ON decisions (tenant_id, status, decided_at);`,
+  },
 ];
 
 /** Open the database at dbPath, applying any migrations not yet recorded. */
