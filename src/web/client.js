@@ -28,4 +28,11 @@
       window.location.replace(stripPreviewOverride(button.dataset.retryHref || window.location.href));
     });
   });
+
+  // An error panel moves focus to its retry action, so keyboard users are not
+  // left at the top of a page whose data just failed to load.
+  var failedRetry = document.querySelector('.panel-error [data-action="retry"]');
+  if (failedRetry) {
+    failedRetry.focus();
+  }
 })();
