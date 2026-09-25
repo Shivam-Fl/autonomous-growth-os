@@ -16,14 +16,25 @@ import { rememberRejected } from './lib/artifact.js';
 import { unansweredSplitCriteria } from './lib/issue-body.js';
 
 const issue = process.env.ISSUE;
+if (!issue && process.env.PREFLIGHT) {
+  process.stdout.write('split criteria: not checked here (no issue number) — the job checks them after you\n');
+  process.exit(0);
+}
 const raw = readFileSync('work-order.json', 'utf8');
-const issueBody = await ghJson(['issue', 'view', issue, '--json', 'body']).then((d) => d.body ?? '');
+const issueBody = await ghJson(['issue', 'view', issue, '--json', 'body']).then((d) => d.body ?? '').catch((e) => {
+  // An agent's session may have no GitHub access; that is not a defect in its plan.
+  if (!process.env.PREFLIGHT) throw e;
+  process.stdout.write(`split criteria: not checked here (${String(e.message).split('\n')[0]}) — the job checks them after you\n`);
+  process.exit(0);
+});
 const { ids, message } = unansweredSplitCriteria(JSON.parse(raw), issueBody);
 if (!ids.length) {
   process.stdout.write(`issue #${issue}: every split criterion is answered or deferred\n`);
   process.exit(0);
 }
 
+// A preflight is the agent checking its own work before it finishes: it says, and writes nothing.
+if (process.env.PREFLIGHT) die(message);
 await updateLedger(repoOf(), Number(issue), (l) => {
   if (!l || !(l.approved_work_order || l.validated_work_order)) return null;
   const next = { ...l };
