@@ -271,5 +271,23 @@
   "work_order_version": 1,
   "work_order_posted_at": "2026-09-25T16:34:15.618Z",
   "work_order_from": "plan",
-  "work_order_comment": "5835889333"
+  "work_order_comment": "5835889333",
+  "failure_packet": {
+    "issue": 42,
+    "head": null,
+    "stage": "implement",
+    "attempt": 1,
+    "occurrences": 1,
+    "error_type": "unknown",
+    "error_signature": "579deb4dd9afbdd0",
+    "raw_excerpt": "--- job: prepare ---\nnode .sdlc/bin/sdlc-ctl.mjs guard\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n  SDLC_ENABLED: \n##[endgroup]\nenabled\n##[group]Run COLLIDES=$(node .sdlc/bin/sdlc-ctl.mjs collisions --issue \"$ISSUE\" | sed -n 's/^collides_with=//p')\nCOLLIDES=$(node .sdlc/bin/sdlc-ctl.mjs collisions --issue \"$ISSUE\" | sed -n 's/^collides_with=//p')\nif [ -n \"$COLLIDES\" ]; then\n  gh issue comment \"$ISSUE\" --body \"Heads up: issue(s) #${COLLIDES} are changing some of the same files. Proceeding anyway — this is worth knowing at review time, not a reason to wait.\"\nfi\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n  GH_TOKEN: ***\n##[endgroup]\nhttps://github.com/Shivam-Fl/autonomous-growth-os/issues/42#issuecomment-5835898113\n##[group]Run node .sdlc/bin/sdlc-ctl.mjs lock --issue \"$ISSUE\" --agent implementer\nnode .sdlc/bin/sdlc-ctl.mjs lock --issue \"$ISSUE\" --agent implementer\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n  GH_TOKEN: ***\n##[endgroup]\nlocked=true\n##[group]Run node .sdlc/bin/sdlc-ctl.mjs attempt --issue \"$ISSUE\" --stage ci\nnode .sdlc/bin/sdlc-ctl.mjs attempt --issue \"$ISSUE\" --stage ci\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n  GH_TOKEN: ***\n##[endgroup]\nattempt=1\nexceeded=false\n##[group]Run node .sdlc/bin/sdlc-ctl.mjs advance --issue \"$ISSUE\" --to implementing --agent implementer\nnode .sdlc/bin/sdlc-ctl.mjs advance --issue \"$ISSUE\" --to implementing --agent implementer\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n  GH_TOKEN: ***\n##[endgroup]\nissue #42 -> implementing\n##[group]Run node .sdlc/bin/fetch-work-order.mjs > work-order.json\nnode .sdlc/bin/fetch-work-order.mjs > work-order.json\necho \"version=$(node -p 'require(\"./work-order.json\").version ?? 1')\" >> \"$GITHUB_OUTPUT\"\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n  GH_TOKEN: ***\n##[endgroup]\n##[group]Run node .sdlc/bin/check-forbidden.mjs --file work-order.json\nnode .sdlc/bin/check-forbidden.mjs --file work-order.json\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 42\n##[endgroup]\nsdlc: work order touches reserved paths:\n  .sdlc/memory/qa/selectors.md  (matched .sdlc/memory/**)\nA human must approve this.\n##[error]Process completed with exit code 1.\nPost job cleanup.\n[command]/usr/bin/git version\ngit version 2.55.0\nTemporarily overriding HOME='/home/runner/work/_temp/145f87ea-fbe3-4d39-9109-4fdc525c386c' before making global git config changes\nAdding repository directory to the temporary git global config as a safe directory\n[command]/usr/bin/git config --global --add safe.directory /home/runner/work/autonomous-growth-os/autonomous-growth-os\n[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand\n[command]/usr/bin/git submodule foreach --recursive sh -c \"git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\"\n[command]/usr/bin/git config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader\n[command]/usr/bin/git submodule foreach --recursive sh -c \"git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\"\n[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\.gitdir:\n[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url\nEvaluate and set job outputs\nSet output 'version'\n\nstep \"Refuse work orders that touch forbidden paths\" failed in job \"prepare\" (conclusion: failure)",
+    "digest": "The implement stage failed and no known error pattern matched. The raw output is below.",
+    "decision": "triage",
+    "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
+    "context": {
+      "work_order_version": 1,
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36161626092",
+      "prior_signatures": []
+    }
+  }
 }
