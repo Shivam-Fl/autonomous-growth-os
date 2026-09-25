@@ -732,5 +732,39 @@
       "run": "36082089833"
     }
   ],
-  "implemented_version": 1
+  "implemented_version": 1,
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 3,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7",
+      "AC-8",
+      "AC-9",
+      "AC-10"
+    ],
+    "sha": "adc2939e23da9792466da3bf1e1c08af9e5c9828",
+    "run_id": "36085127613",
+    "work_order_version": 1,
+    "at": "2026-09-25T02:22:21.913Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-1",
+      "title": "?state=empty override leaves the header tenant-name out of sync with the body"
+    },
+    {
+      "id": "BUG-2",
+      "title": "/v1 error envelope drops the /v1 prefix from the path it reports"
+    },
+    {
+      "id": "BUG-3",
+      "title": "sdlc:ready ignores $PORT and always probes localhost:3000"
+    }
+  ]
 }
