@@ -68,5 +68,95 @@
     "decided_at": "2026-09-25T08:52:00.144Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Dashboard Qualified CPL card shows only the tenant-currency spend: with one INR 3,000,000,000 spend row, one USD 3,000,000,000 legacy spend row and one lead_qualified row, the card reads ₹3,000.00 (not ₹6,000.00), matching GET /v1/metrics for the same tenant",
+        "how_to_verify": "Seed a fresh DB, insert the mixed-currency legacy rows directly through rawEvents.append (ingest would 400 the USD row), GET / and read the Qualified CPL kpi-card; compare with GET /v1/metrics qualified_cpl_micros",
+        "id": "AC-1",
+        "source": "TR-9",
+        "verify": "browser"
+      },
+      {
+        "check": "src/data/repositories.js no longer defines latestTimestamp (nor its latestForTenant statement) and the full node:test suite passes",
+        "how_to_verify": "Grep latestTimestamp across the repo returns zero hits; run npm run sdlc:verify (covers test/data and test/web suites)",
+        "id": "AC-2",
+        "verify": "test"
+      },
+      {
+        "check": "The cross-tenant funnel test uses identical event_ids on two different tenant_ids (with tenant_id set on every row) and asserts qualified_volume 6, while the same-tenant duplicate batch still asserts volume 3 — proving the dedup key is tenant_id:event_id",
+        "how_to_verify": "Run node --test test/domain/measurement.test.js; the 'same event_id on two tenants' and 'duplicate event_id inside a batch' cases both pass",
+        "id": "AC-3",
+        "source": "TR-26",
+        "verify": "test"
+      }
+    ],
+    "approach": "Fix each finding at its root with the smallest possible diff. (1) kpiStrip in src/web/pages.js reads the tenant row already (it formats money with tenant.currency) but calls computeFunnel(rows) without the second argument, while GET /v1/metrics passes the tenant currency — pass tenant.currency ?? 'INR' so both surfaces share the identical tenant-wide rule. (2) latestTimestamp on the raw-event repository has zero callers (dataThrough over listByTypes serves staleness everywhere) — delete the method and its now-unused latestForTenant prepared statement. (3) journeyRows in test/domain/measurement.test.js destructures tenantId but never stamps it on rows, and the cross-tenant test additionally varies event_ids via suffix so it passes for the wrong reason — stamp tenant_id on every row and use identical event_ids across the two tenants so the test proves tenant-keyed dedup.",
+    "confidence": 90,
+    "confidence_rationale": "All three findings were verified line-by-line against current main: the unguarded computeFunnel call, the caller-free method, and the tenantId parameter that is destructured and dropped. Each fix is a one-to-three-line change following an existing in-repo pattern (routes.js already passes the currency; dataThrough already replaces the method).",
+    "evidence": [
+      "src/web/pages.js:341 computeFunnel(rows) with no currency while src/api/routes.js:142 passes tenantCurrency from the tenant row",
+      "src/web/pages.js:352 already reads tenant.currency for formatting, so the tenant row (with currency) is available at the call site",
+      "repo-wide grep for latestTimestamp returns only its definition at src/data/repositories.js:101 plus the latestForTenant statement at :63; dataThrough is what pages.js and routes.js actually call",
+      "test/domain/measurement.test.js:21 journeyRows destructures tenantId but returned rows carry no tenant_id field; the cross-tenant test at :80-82 additionally uses suffix '_x' so event_ids differ and volume 6 follows with or without tenant isolation",
+      "src/domain/measurement.js:183 dedup key is tenant_id:event_id, confirming what the fixed test must exercise"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "In kpiStrip, change `const funnel = computeFunnel(rows);` to `const funnel = computeFunnel(rows, tenant.currency ?? 'INR');` so the dashboard applies the same tenant-currency exclusion GET /v1/metrics applies (src/api/routes.js:141-142). Default INR matches the API fallback when the tenant row is absent. No other change in this file.",
+        "path": "src/web/pages.js",
+        "why": "This is the root cause of finding 1: the dashboard summed foreign-currency legacy rows the API excludes, so the two surfaces disagreed on CPL."
+      },
+      {
+        "action": "edit",
+        "change": "Delete the latestTimestamp method (currently lines 100-103) from createRawEventRepository and delete the now-unused latestForTenant prepared statement (currently line 63). Leave count, list, listByTypes and append untouched.",
+        "path": "src/data/repositories.js",
+        "why": "Dead code with no callers; dataThrough over listByTypes is the staleness mechanism both call sites use."
+      }
+    ],
+    "issue": 31,
+    "kind": "bug",
+    "out_of_scope": [
+      "Migrating or deleting legacy mixed-currency rows already stored in dev databases — ingest already rejects them (CURRENCY_MISMATCH) and both read surfaces now exclude them; no backfill in this change",
+      "Removing or repurposing repositories.rawEvents.count — it has callers (used in pages.test.js override assertion) and is not dead",
+      "Google Ads or any new platform surface (per PRD deliberately-not-doing)"
+    ],
+    "qa_script": [
+      "npm run sdlc:verify — full node:test suite must pass",
+      "Boot the app (npm run sdlc:serve), seed, and open http://localhost:3000/ — dashboard shows ideal state with Qualified CPL, Meta tables and decision feed",
+      "Directly append one USD spend row plus one INR spend row and one lead_qualified row for the demo tenant via a node one-liner through the repository layer, reload / and confirm the CPL card moves only by the INR amount; confirm GET /v1/metrics agrees"
+    ],
+    "reproduced": false,
+    "risks": [
+      "kpiStrip change alters the displayed CPL on dirty pre-fix databases only; clean databases (single currency) compute byte-identical results because currency-less rows are treated as tenant-currency in both call paths",
+      "Deleting latestTimestamp could break a dynamic caller grep cannot see (e.g. string-indexed access); mitigated by the full test suite plus a repo-wide grep in the implementer step",
+      "Touching journeyRows affects every test in test/domain/measurement.test.js that uses it; the same-tenant duplicate test must still pass unchanged (identical tenant_id + event_ids still dedup to one)"
+    ],
+    "root_cause": "(1) kpiStrip passed raw rows to computeFunnel without the tenantCurrency argument that GET /v1/metrics passes, so the dashboard summed foreign-currency legacy spend the API excludes. (2) latestTimestamp is leftover from before dataThrough-over-listByTypes became the staleness mechanism; nothing calls it. (3) The journeyRows helper accepts tenantId but never writes it onto rows, and the cross-tenant test varies event_ids with suffix '_x', so volume 6 follows from distinct ids alone and tenant-keyed dedup is never exercised.",
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "same event_id on two tenants are distinct events: identical event_ids with tenant_demo vs tenant_other yield qualified_volume 6 and spend summed across both tenants",
+          "duplicate event_id inside one tenant batch still counts once (existing case, must keep passing after tenant_id is stamped on rows)",
+          "legacy dot-spelled lead.qualified rows still excluded; non-positive spend rows still skipped (existing cases, regression cover)"
+        ],
+        "path": "test/domain/measurement.test.js"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "dashboard KPI excludes foreign-currency legacy spend: tenant INR with one INR 3,000,000,000 spend row, one USD 3,000,000,000 legacy spend row (inserted via rawEvents.append to simulate the append-only legacy batch) and one lead_qualified row renders Qualified CPL ₹3,000.00, equal to GET /v1/metrics qualified_cpl_micros for the same tenant"
+        ],
+        "path": "test/web/pages.test.js"
+      }
+    ],
+    "understanding": "Issue #31 carries three non-blocking review findings from #29, each explicitly requiring re-verification before planning since that PR kept moving. I verified all three against current main and all three still reproduce: (1) the dashboard KPI strip (src/web/pages.js:341) calls computeFunnel(rows) without the tenant currency while GET /v1/metrics (src/api/routes.js:142) passes it, so pre-fix mixed-currency legacy rows corrupt dashboard CPL while the API excludes them; (2) latestTimestamp in src/data/repositories.js:101 has zero callers anywhere in the repo (staleness goes through dataThrough); (3) journeyRows in test/domain/measurement.test.js:21 accepts tenantId but never stamps tenant_id on rows, and the cross-tenant test additionally gives the second tenant different event_ids (suffix _x), so its volume-6 assertion passes with or without tenant-keyed dedup. No human decisions are recorded in plan/brief.md and no prior plan was rejected.",
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-09-25T08:55:48.980Z",
+  "validated_ac_changes": []
 }
