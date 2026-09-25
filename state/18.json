@@ -1,7 +1,7 @@
 {
   "issue": 18,
   "pr": null,
-  "state": "blocked",
+  "state": "triage",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -24,7 +24,13 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:37.557Z",
-  "updated_at": "2026-09-24T18:56:37.557Z",
-  "history": [],
+  "updated_at": "2026-09-25T06:39:43.620Z",
+  "history": [
+    {
+      "at": "2026-09-25T06:39:43.620Z",
+      "agent": "watchdog",
+      "action": "-> triage"
+    }
+  ],
   "epic": 14
 }
