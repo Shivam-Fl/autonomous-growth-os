@@ -242,7 +242,24 @@
     "understanding": "Issue #21 builds the research-plus-memory knowledge layer: a model-router abstraction (TR-12), a layered research mesh with evidence tiers and claim lifecycle (TR-17), learning records with scope plus evidence refs plus effect intervals plus confidence plus status lifecycle with embeddings as retrieval assistance only (TR-10), and a prompt-injection boundary treating external web content as untrusted data isolated from the Executor (TR-11). The UI face adds no top-level screen: research observations feed the existing opportunities queue and evidence refs surface inside journal entries. Covers S-12, S-20, S-7, S-8. Binding owner decision from plan/brief.md: Meta Ads first, Google Ads after, which overrides the Google-first argument in spec section 37 — so this plan adds no Google provider. src/memory, src/research, and src/strategy do not exist yet; contracts are greenfield on established patterns (pure domain modules like measurement.js, fake-provider contract suites from the Meta adapter, tenant-bound repositories, five-state server-rendered pages). v1 was rejected because AC-6/AC-7 asserted seeded-boot visibility that no file produced: seed writes decision.recorded x2 with no refs, one prose learning.recorded, zero opportunity.scored rows (scripts/seed.js:64-86), while runResearch/ModelRouter have no callers (verified by grep); v2 fixes this by writing the asserted fixtures in scripts/seed.js and pinning both criteria to those exact ids.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/strategy/router.js",
+    "src/research/search.js",
+    "src/research/sanitize.js",
+    "src/research/mesh.js",
+    "src/memory/learnings.js",
+    "src/data/db.js",
+    "src/data/repositories.js",
+    "scripts/seed.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "test/research/search.test.js",
+    "test/research/sanitize.test.js",
+    "test/research/mesh.test.js",
+    "test/memory/learnings.test.js",
+    "test/strategy/router.test.js",
+    "test/api/learnings.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
