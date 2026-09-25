@@ -257,6 +257,7 @@ jobs:
 
       # --- single agent -------------------------------------------------------
       - name: Plan (single agent)
+        id: plan_single
         if: needs.prepare.outputs.mode == 'single'
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
@@ -340,8 +341,18 @@ jobs:
       # each following its pack from this tree: a proposer that edited the critic's pack would
       # be followed by it. So the tree is compared to the commit it started from after each one.
       - name: The framework is untouched — Plan (single agent)
+        id: fw_single
         if: needs.prepare.outputs.mode == 'single'
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # What the planner did, reduced to a summary that travels with the plan: tool calls, each
+      # Write and whether it failed, how the last turn ended, and its final reply — in which a
+      # work order it never wrote to a file is recovered by the gate job (agent-transcript.mjs).
+      # jq, not node: this is the agent's job, after it had a shell.
+      - name: What the planner did
+        if: always() && steps.fw_single.outcome == 'success'
+        env: { EXEC: "${{ steps.plan_single.outputs.execution_file }}" }
+        run: if [ -f "$EXEC" ]; then mkdir -p plan && jq -s -f .sdlc/bin/transcript-summary.jq "$EXEC" > plan/transcript-summary.json || true; fi
 
       # --- council: propose, attack, judge -------------------------------------
       # Three passes because the expensive mistake is a confident wrong plan: it costs an
@@ -421,6 +432,7 @@ jobs:
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
 
       - name: Council 3/3 — arbitrate
+        id: plan_arbiter
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
         timeout-minutes: 45
@@ -477,8 +489,16 @@ jobs:
 
       # The same framework check, after this agent too.
       - name: The framework is untouched — Council 3/3 — arbitrate
+        id: fw_arbiter
         if: needs.prepare.outputs.mode == 'council'
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # growth-os #20: the arbiter reported success and wrote no file, and the hidden output left
+      # nothing to say why. See "What the planner did".
+      - name: What the arbiter did
+        if: always() && steps.fw_arbiter.outcome == 'success'
+        env: { EXEC: "${{ steps.plan_arbiter.outputs.execution_file }}" }
+        run: if [ -f "$EXEC" ]; then mkdir -p plan && jq -s -f .sdlc/bin/transcript-summary.jq "$EXEC" > plan/transcript-summary.json || true; fi
 
       # What this run wrote, kept past the runner — also when an agent failed. A rerun, a person
       # or root-cause reading why a plan failed had only a log: the council's proposal and
@@ -553,6 +573,12 @@ jobs:
           for f in work-order.json stop.json; do
             if [ -f "_agent/$f" ]; then cp "_agent/$f" "$f"; fi
           done
+
+      # What the planner did, from the summary its job handed over — and a work order (or stop) it
+      # left in its reply instead of a file, recovered here and validated below like any other.
+      - name: What the planner did, and a plan left in its reply
+        if: needs.plan.result == 'success'
+        run: node .sdlc/bin/agent-transcript.mjs _agent/plan/transcript-summary.json --recover work-order.json,stop.json
 
       # An agent that cannot honestly plan says so in stop.json instead of a work order. That is
       # the contract working, so it is posted and parked here — it used to fail the validation

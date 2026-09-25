@@ -42,7 +42,10 @@ wo.version = Math.max(nextWorkOrderVersion(ledger), (ledger?.implemented_version
 // instruction. It is posted, read and argued with; nothing builds it. Marked here rather
 // than asked of the agent, because the agent does not know the route and an instruction a
 // model can satisfy in more than one way is eventually satisfied the other way.
-if ((ledger?.on_complete ?? 'merge') === 'comment-only') wo.mode = 'proposal';
+// Both ways: the schema says the agent never sets it, and an agent that wrote "proposal" into a
+// work order for a merge route had it posted as "routed as a question — nothing implements it"
+// on an issue the pipeline was about to build (growth-os #40).
+wo.mode = (ledger?.on_complete ?? 'merge') === 'comment-only' ? 'proposal' : 'committed';
 
 // Every criterion the split gave this issue is answered or deferred, by id.
 //

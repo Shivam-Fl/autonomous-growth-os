@@ -705,7 +705,7 @@ function opportunities(state, { repositories, tenant }) {
   if (state === 'error') {
     return errorPanel({
       failed: {
-        title: 'Failed to fetch experiments',
+        title: 'Opportunity fetch failed',
         detail: 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.',
       },
       stillTrue: 'drafted hypotheses and their score components are preserved.',
