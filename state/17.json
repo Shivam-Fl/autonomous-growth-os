@@ -18,7 +18,153 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
+  "work_order": {
+    "acceptance": [
+      {
+        "check": "Tenant-wide aggregation: POSTing the canonical 10-event click-to-revenue journey (1 click + 1 spend.observed of INR 7200 as amount_micros 7200000000 + 3 lead_created + 3 lead_qualified + 1 opportunity_created + 1 deal_won) to a fresh tenant resolves to qualified_cpl_micros 2400000000 exactly (7200000000 / 3), and the seeded tenant_demo dashboard shows Qualified CPL ₹2,400.00 from the same tenant-wide rule",
+        "how_to_verify": "Run qa_script steps 1-3 (POST 10-event journey to tenant_qa, GET /v1/metrics for tenant_qa and tenant_demo, open /); CI runs the test/api/events.test.js journey case asserting qualified_cpl_micros 2400000000",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "api"
+      },
+      {
+        "check": "Dashboard KPI strip shows maturity bars with data-through timestamps on metrics inside the lag window and a gating note naming that strategic actions are blocked below the 0.90 band",
+        "how_to_verify": "Boot, seed, open / and /?state=partial; run test/domain/measurement.test.js maturity-band cases",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "POSTing the same event_id twice returns 202 both times but the second is marked duplicate and qualified volume and spend do not move",
+        "how_to_verify": "POST same body twice per qa_script step 4, then GET /v1/metrics; CI runs test/api/events.test.js duplicate-delivery case",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "api"
+      },
+      {
+        "check": "With stale provider data the dashboard keeps matured KPI values visible and renders a banner naming the age, e.g. 'Provider data is stale — last good sync 26h ago'",
+        "how_to_verify": "Open /?state=partial on a seeded DB and read the banner; matured KPI cards remain visible above the feed",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "check": "Dashboard KPI strip shows owned qualified CPL, qualified volume and maturity coverage with maturity badges (immature/protective/moderate/strategic per TR-7 bands) instead of platform CPL",
+        "how_to_verify": "Open / on seeded DB; CI runs test/domain/measurement.test.js band-label cases",
+        "id": "AC-5",
+        "source": "TR-7",
+        "verify": "browser"
+      },
+      {
+        "check": "Funnel uses downstream quality stages (lead_created to lead_qualified to opportunity/order/margin) so a cheap low-quality campaign never outranks an expensive high-quality one on qualified CPL",
+        "how_to_verify": "CI runs test/domain/measurement.test.js cheap-vs-profitable campaign case",
+        "id": "AC-6",
+        "source": "TR-9",
+        "verify": "test"
+      }
+    ],
+    "approach": "Build one vertical slice with a single pinned aggregation convention: qualified CPL is tenant-wide, computed on read as (sum of ALL spend.observed amount_micros for the tenant) / (count of ALL lead_qualified underscore events for the tenant), exact integer division, null when volume is zero — matching how the existing dashboard already sums spend and counts qualified rows. The seeded demo is the single source of the INR 7200/3 figure: the seed file drops the three legacy spend rows and the two dot-spelled lead.qualified rows and writes one canonical 10-event journey whose single spend row IS the tenant spend, so fresh databases hold exactly one spend source and seeded dashboard, POSTed QA journey and GET /v1/metrics all read 2400000000 micros from the same rule. Legacy dot-spelled lead.qualified is a pre-measurement type that the funnel never counts. A pure measurement domain (funnel + maturity + policy bands) is consumed by POST /v1/events ingest and GET /v1/metrics, rendered by the dashboard KPI strip with maturity bars and a stale banner. Dashboard ideal shows qualified CPL/volume/coverage with badges; partial shows the stale banner plus maturity bars with data-through timestamps; loading skeleton and error panel already exist and are kept. The owner decision (Meta first, Google later, plan/brief.md) does not change this slice: measurement stays platform-agnostic and no adapter code is touched; dashboard setup copy keeps the existing connect-Meta checklist. Seam: any 4xx from POST surfaces inline field errors and never writes; dashboard read failures render the existing error panel naming the failing check with last-good timestamp and a Retry button.",
+    "assumptions": [
+      "Single-operator v1: tenant resolves from optional tenant_id field (auto-creating the tenant row when unknown), else the sole existing tenant, else tenant_demo; no auth layer in this slice",
+      "Default lag model p50 48h / p90 120h via piecewise-linear maturityFor until per-account learning arrives in a later epic",
+      "Stale threshold 24h past last good sync; thresholds are constants in the measurement module",
+      "QA and CI boot a clean database, so the seed replacement yields exactly one spend source; pre-existing dev databases are covered in risks"
+    ],
+    "confidence": 84,
+    "confidence_rationale": "Foundation already provides envelope validation, idempotent raw_events, derived spend replay and all five dashboard shells; the slice adds pure math plus two routes with no migration and no new dependency, and the v1 rejection is answered point by point: one tenant-wide convention, one spend source, 10-event count everywhere, borrowed allocation phrase removed, qa_script list identical to the seed list.",
+    "files": [
+      {
+        "action": "create",
+        "change": "Create src/domain/measurement.js as pure domain with no IO. GROWTH_EVENTS allowlist uses internal types: click, spend.observed, lead_created, lead_qualified (underscore only; legacy dot-spelled lead.qualified is pre-measurement and never counted), demo_booked, opportunity_created, deal_won, purchase, refund, subscription_renewed, churned, gross_margin_finalized. normaliseGrowthEvent(body, tenantId) maps event_name 1:1 to event_type for allowlisted names (unknown name yields UNKNOWN_EVENT), maps integer value+currency to payload.amount_micros (non-safe-integer value yields INVALID_MONEY), carries user/session/order references into payload while dropping raw PII fields email and phone, and requires a UTC ISO-8601 occurred_at. computeFunnel(events) aggregates tenant-wide: spend_micros is the exact integer sum of all spend.observed amount_micros, qualified_volume is the count of all lead_qualified events, qualified_cpl_micros is exact integer division spend/volume and null when volume is 0. maturityFor(ageHours) is piecewise linear through (0,0), (48,0.5), (120,1.0), clamped 0..1 (so 6h gives 0.0625). policyBand(m) maps <0.35 emergency-only, 0.35-0.70 protective, 0.70-0.90 moderate, >=0.90 strategic with a gated flag true for the strategic class below 0.90. coverageOf(events) is the share of lead_qualified events carrying a session_id or user_id reference (0 when volume 0). dataThrough(events) is max occurred_at or null. isStale(now, dataThrough, 24h) plus age copy. linkJourney(events) groups by session/user/order references only.",
+        "path": "src/domain/measurement.js",
+        "why": "All funnel math and maturity gating in one testable pure module the API and pages share, with the tenant-wide convention stated in code"
+      },
+      {
+        "action": "edit",
+        "change": "In src/api/routes.js add express.json() middleware, POST /v1/events (validate the growth shape via normaliseGrowthEvent then validateEvent on the normalised envelope; 202 {receipt: event_id, appended, duplicate: !appended} on success with unknown tenant_id auto-creating the tenant row; 400 {code,message,details} with stable codes MISSING_EVENT_ID/MISSING_EVENT_NAME/UNKNOWN_EVENT/BAD_OCCURRED_AT/NON_UTC_OCCURRED_AT/INVALID_MONEY, never a stack trace; idempotent on (tenant_id, event_id) via rawEvents.append INSERT OR IGNORE), and GET /v1/metrics?tenant_id= returning {tenant_id, spend_micros, qualified_volume, qualified_cpl_micros, maturity, band, gated_strategic, maturity_coverage, data_through, stale, stale_age} computed tenant-wide from measurement.js over rawEvents; keep the generic /v1 404 envelope for all other paths.",
+        "path": "src/api/routes.js",
+        "why": "Contract face: ingest plus readable measurement truth for the dashboard and QA under one aggregation rule"
+      },
+      {
+        "action": "edit",
+        "change": "In src/web/pages.js upgrade kpiStrip to count lead_qualified (underscore), replacing the lead.qualified lookup, and render Qualified CPL via formatMoney(fromMicros(cpl, 'INR')) or em-dash when volume 0, Qualified volume, Maturity coverage with maturity badges and per-card maturity bars (reuse maturityBar helper) showing data-through timestamps, plus a gating line 'Strategic actions blocked until maturity passes 0.90' when gated; upgrade dashboard partial to render banner 'Provider data is stale — last good sync <dataThrough>' with role=status while keeping matured KPI cards visible; keep skeleton loading and error panel unchanged; preserve theme tokens, aria-live region, keyboard order and data-testid hooks. The dashboard is read-only so there is no primary action and no destructive path; maturity bars keep role=img with aria-labels and the banner is announced through the existing live region.",
+        "path": "src/web/pages.js",
+        "why": "UI face: owned qualified CPL with maturity states per docs/ui.md dashboard spec, counting the same qualified type as the funnel"
+      },
+      {
+        "action": "edit",
+        "change": "In src/data/repositories.js add funnel helpers on the raw-event repository: listByTypes(tenantId, types[]) filtered server-side with tenant binding and deterministic ORDER BY occurred_at, event_id, and latestTimestamp(tenantId) returning max occurred_at for data-through/stale computation; no schema change, no update/delete surface, tenant isolation on every query.",
+        "path": "src/data/repositories.js",
+        "why": "Avoid loading full event lists into the domain for funnel and staleness reads"
+      },
+      {
+        "action": "edit",
+        "change": "In scripts/seed.js replace the seed EVENTS: delete the three legacy spend rows (evt_seed_spend_c1_1, evt_seed_spend_c1_2, evt_seed_spend_c2_1) and the two dot-spelled qualified rows (evt_seed_qualified_1, evt_seed_qualified_2), and write one canonical 10-event click-to-revenue journey for tenant_demo with fixed ids evt_seed_journey_click_1, evt_seed_journey_spend_1 (spend.observed, campaign search-brand, amount_micros 7200000000, currency INR — this single row IS the tenant spend), evt_seed_journey_lead_created_1..3, evt_seed_journey_lead_qualified_1..3 (lead_id lead_seed_j1..j3), evt_seed_journey_opp_1 (opportunity_created), evt_seed_journey_deal_1 (deal_won), all sharing session_id sess_seed_journey_1 and one occurred_at set to 6h before seed run time (UTC ISO, inside the lag window so maturity is ~0.06 and strategic actions gate); keep the existing decision and learning rows untouched; all writes go through validateEvent plus rawEvents.append so reruns stay idempotent. A fresh database then holds exactly spend 7200000000 and qualified volume 3, i.e. qualified CPL 2400000000 micros = Rs 2,400.00 under the tenant-wide rule.",
+        "path": "scripts/seed.js",
+        "why": "Demo tenant exhibits qualified CPL INR 2400.00 from a single spend source with an immature window for QA and screenshots"
+      }
+    ],
+    "issue": 17,
+    "kind": "feature",
+    "out_of_scope": [
+      "Platform adapter reads (Meta or Google) — later epic reuses this measurement layer per owner Meta-first decision",
+      "Shadow decisions, calibration, approvals and any ad mutation"
+    ],
+    "qa_script": [
+      "rm -f ./data/app.db; npm run sdlc:serve & sleep 2; npm run sdlc:seed",
+      "POST the canonical 10-event journey to tenant_qa (same types and payloads as the seed journey in scripts/seed.js, only ids evt_qa_journey_* tenant tenant_qa session sess_qa_journey_1 differ: 1 click + 1 spend.observed value 7200000000 currency INR + 3 lead_created + 3 lead_qualified + 1 opportunity_created + 1 deal_won, occurred_at current UTC): each POST /v1/events returns 202; then GET /v1/metrics?tenant_id=tenant_qa shows spend_micros 7200000000, qualified_volume 3, qualified_cpl_micros 2400000000",
+      "GET /v1/metrics for tenant_demo shows qualified_cpl_micros 2400000000, and open http://localhost:3000/ to confirm the KPI strip shows Qualified CPL Rs 2,400.00, volume 3, coverage 1.00 with badges, maturity bars with data-through timestamps and the strategic-gating line",
+      "Re-POST one evt_qa_journey_* body and confirm 202 with duplicate true and appended false, then GET /v1/metrics?tenant_id=tenant_qa unchanged",
+      "Open http://localhost:3000/?state=partial and confirm the stale banner names the age while matured KPIs stay visible; open ?state=loading and confirm skeleton cards with no layout shift"
+    ],
+    "risks": [
+      "Money-adjacent funnel math decides what later slices may act on; integer-micros division and volume-zero handling are covered by unit tests but review must confirm no float path",
+      "POST /v1/events changes the existing 404-for-/v1/events test expectation; the paired test edit is part of this work order",
+      "No migration is planned; if reviewers prefer persisted maturity snapshots that is a follow-up, not this slice",
+      "Dev databases seeded with the pre-#17 8-row seed still carry the three legacy spend rows and two dot-spelled qualified rows because raw_events is append-only; the funnel excludes dot-spelled qualified but counts all spend.observed, so such databases read high until reset with rm -f ./data/app.db && npm run sdlc:seed — CI and QA always boot clean so verification is unaffected"
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "tenant-wide funnel over the canonical 10-event journey (INR 7200 spend, 3 qualified) resolves to qualified CPL micros 2400000000 exactly",
+          "legacy dot-spelled lead.qualified rows are excluded from qualified volume even when present alongside underscore rows",
+          "volume-zero returns null CPL without dividing by zero",
+          "duplicate event_id in a batch counts once",
+          "maturity bands map 0.2 emergency-only, 0.5 protective, 0.8 moderate, 0.95 strategic with strategic gating below 0.90",
+          "6-hour-old funnel data is gated (maturity about 0.06 under p50 48h / p90 120h)",
+          "cheap low-quality campaign loses to expensive high-quality campaign on qualified CPL",
+          "stale detection flags data-through older than 24h with age copy and keeps matured values",
+          "journey linker drops raw email/phone PII and groups only on reference ids"
+        ],
+        "path": "test/domain/measurement.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "POST valid lead_qualified returns 202 with receipt event_id and appended true",
+          "POST same event_id twice returns duplicate on second with unchanged metrics (never double-counts)",
+          "POST missing event_id returns 400 MISSING_EVENT_ID with {code,message} and no stack",
+          "POST non-UTC occurred_at returns 400 NON_UTC_OCCURRED_AT",
+          "POST float value returns 400 INVALID_MONEY",
+          "full 10-event journey on an isolated tenant resolves via GET /v1/metrics to qualified_cpl_micros 2400000000 with volume 3",
+          "GET /v1/metrics on a just-posted journey returns maturity below 0.35 with gated_strategic true and data_through timestamp"
+        ],
+        "path": "test/api/events.test.js"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "unknown /v1 path still returns the {code,message} envelope without a stack",
+          "POST /v1/events is now a real route and is excluded from the 404 assertion",
+          "the five pages still render as HTML"
+        ],
+        "path": "test/api/health.test.js"
+      }
+    ],
+    "understanding": "Issue #17 is the measurement-truth slice of epic #14: growth leads see owned qualified CPL against platform CPL with maturity badges instead of the system acting on immature conversions. The foundation (#16, done) already gives raw_events with (tenant_id, event_id) idempotency, UTC envelope validation, money micros, append-only audit and dashboard shells whose KPI strip today shows spend/qualified counts with hardcoded 0.00 coverage. Missing is the contract face (POST /v1/events for lead-through-margin growth events, privacy-aware journey graph, downstream quality funnel) and the UI face upgrade (qualified CPL/volume/coverage with maturity 0..1, lag distributions, TR-7 policy bands, maturity bars with data-through timestamps, stale banner, strategic-action gating). Out of scope: adapter reads, shadow/calibration, ad mutation. Aggregation convention pinned after the v1 rejection: qualified CPL is tenant-wide (sum of all spend.observed amount_micros divided by count of all underscore lead_qualified events, exact integer division, null at zero volume); the seed drops its legacy spend and dot-spelled qualified rows so one 10-event journey is the single INR 7200/3 source on a fresh database.",
+    "version": 1
+  },
   "touch_paths": [],
   "acceptance": [],
   "planned_route": [
@@ -91,299 +237,9 @@
   "validated_from": "plan",
   "validated_at": "2026-09-25T06:56:45.045Z",
   "validated_ac_changes": [],
-  "validated_work_order": {
-    "acceptance": [
-      {
-        "check": "Tenant-wide aggregation: POSTing the canonical 10-event click-to-revenue journey (1 click + 1 spend.observed of INR 7200 as amount_micros 7200000000 + 3 lead_created + 3 lead_qualified + 1 opportunity_created + 1 deal_won) to a fresh tenant resolves to qualified_cpl_micros 2400000000 exactly (7200000000 / 3), and the seeded tenant_demo dashboard shows Qualified CPL ₹2,400.00 from the same tenant-wide rule",
-        "how_to_verify": "Run qa_script steps 1-3 (POST 10-event journey to tenant_qa, GET /v1/metrics for tenant_qa and tenant_demo, open /); CI runs the test/api/events.test.js journey case asserting qualified_cpl_micros 2400000000",
-        "id": "AC-1",
-        "source": "IAC-1",
-        "verify": "api"
-      },
-      {
-        "check": "Dashboard KPI strip shows maturity bars with data-through timestamps on metrics inside the lag window and a gating note naming that strategic actions are blocked below the 0.90 band",
-        "how_to_verify": "Boot, seed, open / and /?state=partial; run test/domain/measurement.test.js maturity-band cases",
-        "id": "AC-2",
-        "source": "IAC-2",
-        "verify": "browser"
-      },
-      {
-        "check": "POSTing the same event_id twice returns 202 both times but the second is marked duplicate and qualified volume and spend do not move",
-        "how_to_verify": "POST same body twice per qa_script step 4, then GET /v1/metrics; CI runs test/api/events.test.js duplicate-delivery case",
-        "id": "AC-3",
-        "source": "IAC-3",
-        "verify": "api"
-      },
-      {
-        "check": "With stale provider data the dashboard keeps matured KPI values visible and renders a banner naming the age, e.g. 'Provider data is stale — last good sync 26h ago'",
-        "how_to_verify": "Open /?state=partial on a seeded DB and read the banner; matured KPI cards remain visible above the feed",
-        "id": "AC-4",
-        "source": "IAC-4",
-        "verify": "browser"
-      },
-      {
-        "check": "Dashboard KPI strip shows owned qualified CPL, qualified volume and maturity coverage with maturity badges (immature/protective/moderate/strategic per TR-7 bands) instead of platform CPL",
-        "how_to_verify": "Open / on seeded DB; CI runs test/domain/measurement.test.js band-label cases",
-        "id": "AC-5",
-        "source": "TR-7",
-        "verify": "browser"
-      },
-      {
-        "check": "Funnel uses downstream quality stages (lead_created to lead_qualified to opportunity/order/margin) so a cheap low-quality campaign never outranks an expensive high-quality one on qualified CPL",
-        "how_to_verify": "CI runs test/domain/measurement.test.js cheap-vs-profitable campaign case",
-        "id": "AC-6",
-        "source": "TR-9",
-        "verify": "test"
-      }
-    ],
-    "approach": "Build one vertical slice with a single pinned aggregation convention: qualified CPL is tenant-wide, computed on read as (sum of ALL spend.observed amount_micros for the tenant) / (count of ALL lead_qualified underscore events for the tenant), exact integer division, null when volume is zero — matching how the existing dashboard already sums spend and counts qualified rows. The seeded demo is the single source of the INR 7200/3 figure: the seed file drops the three legacy spend rows and the two dot-spelled lead.qualified rows and writes one canonical 10-event journey whose single spend row IS the tenant spend, so fresh databases hold exactly one spend source and seeded dashboard, POSTed QA journey and GET /v1/metrics all read 2400000000 micros from the same rule. Legacy dot-spelled lead.qualified is a pre-measurement type that the funnel never counts. A pure measurement domain (funnel + maturity + policy bands) is consumed by POST /v1/events ingest and GET /v1/metrics, rendered by the dashboard KPI strip with maturity bars and a stale banner. Dashboard ideal shows qualified CPL/volume/coverage with badges; partial shows the stale banner plus maturity bars with data-through timestamps; loading skeleton and error panel already exist and are kept. The owner decision (Meta first, Google later, plan/brief.md) does not change this slice: measurement stays platform-agnostic and no adapter code is touched; dashboard setup copy keeps the existing connect-Meta checklist. Seam: any 4xx from POST surfaces inline field errors and never writes; dashboard read failures render the existing error panel naming the failing check with last-good timestamp and a Retry button.",
-    "assumptions": [
-      "Single-operator v1: tenant resolves from optional tenant_id field (auto-creating the tenant row when unknown), else the sole existing tenant, else tenant_demo; no auth layer in this slice",
-      "Default lag model p50 48h / p90 120h via piecewise-linear maturityFor until per-account learning arrives in a later epic",
-      "Stale threshold 24h past last good sync; thresholds are constants in the measurement module",
-      "QA and CI boot a clean database, so the seed replacement yields exactly one spend source; pre-existing dev databases are covered in risks"
-    ],
-    "confidence": 84,
-    "confidence_rationale": "Foundation already provides envelope validation, idempotent raw_events, derived spend replay and all five dashboard shells; the slice adds pure math plus two routes with no migration and no new dependency, and the v1 rejection is answered point by point: one tenant-wide convention, one spend source, 10-event count everywhere, borrowed allocation phrase removed, qa_script list identical to the seed list.",
-    "files": [
-      {
-        "action": "create",
-        "change": "Create src/domain/measurement.js as pure domain with no IO. GROWTH_EVENTS allowlist uses internal types: click, spend.observed, lead_created, lead_qualified (underscore only; legacy dot-spelled lead.qualified is pre-measurement and never counted), demo_booked, opportunity_created, deal_won, purchase, refund, subscription_renewed, churned, gross_margin_finalized. normaliseGrowthEvent(body, tenantId) maps event_name 1:1 to event_type for allowlisted names (unknown name yields UNKNOWN_EVENT), maps integer value+currency to payload.amount_micros (non-safe-integer value yields INVALID_MONEY), carries user/session/order references into payload while dropping raw PII fields email and phone, and requires a UTC ISO-8601 occurred_at. computeFunnel(events) aggregates tenant-wide: spend_micros is the exact integer sum of all spend.observed amount_micros, qualified_volume is the count of all lead_qualified events, qualified_cpl_micros is exact integer division spend/volume and null when volume is 0. maturityFor(ageHours) is piecewise linear through (0,0), (48,0.5), (120,1.0), clamped 0..1 (so 6h gives 0.0625). policyBand(m) maps <0.35 emergency-only, 0.35-0.70 protective, 0.70-0.90 moderate, >=0.90 strategic with a gated flag true for the strategic class below 0.90. coverageOf(events) is the share of lead_qualified events carrying a session_id or user_id reference (0 when volume 0). dataThrough(events) is max occurred_at or null. isStale(now, dataThrough, 24h) plus age copy. linkJourney(events) groups by session/user/order references only.",
-        "path": "src/domain/measurement.js",
-        "why": "All funnel math and maturity gating in one testable pure module the API and pages share, with the tenant-wide convention stated in code"
-      },
-      {
-        "action": "edit",
-        "change": "In src/api/routes.js add express.json() middleware, POST /v1/events (validate the growth shape via normaliseGrowthEvent then validateEvent on the normalised envelope; 202 {receipt: event_id, appended, duplicate: !appended} on success with unknown tenant_id auto-creating the tenant row; 400 {code,message,details} with stable codes MISSING_EVENT_ID/MISSING_EVENT_NAME/UNKNOWN_EVENT/BAD_OCCURRED_AT/NON_UTC_OCCURRED_AT/INVALID_MONEY, never a stack trace; idempotent on (tenant_id, event_id) via rawEvents.append INSERT OR IGNORE), and GET /v1/metrics?tenant_id= returning {tenant_id, spend_micros, qualified_volume, qualified_cpl_micros, maturity, band, gated_strategic, maturity_coverage, data_through, stale, stale_age} computed tenant-wide from measurement.js over rawEvents; keep the generic /v1 404 envelope for all other paths.",
-        "path": "src/api/routes.js",
-        "why": "Contract face: ingest plus readable measurement truth for the dashboard and QA under one aggregation rule"
-      },
-      {
-        "action": "edit",
-        "change": "In src/web/pages.js upgrade kpiStrip to count lead_qualified (underscore), replacing the lead.qualified lookup, and render Qualified CPL via formatMoney(fromMicros(cpl, 'INR')) or em-dash when volume 0, Qualified volume, Maturity coverage with maturity badges and per-card maturity bars (reuse maturityBar helper) showing data-through timestamps, plus a gating line 'Strategic actions blocked until maturity passes 0.90' when gated; upgrade dashboard partial to render banner 'Provider data is stale — last good sync <dataThrough>' with role=status while keeping matured KPI cards visible; keep skeleton loading and error panel unchanged; preserve theme tokens, aria-live region, keyboard order and data-testid hooks. The dashboard is read-only so there is no primary action and no destructive path; maturity bars keep role=img with aria-labels and the banner is announced through the existing live region.",
-        "path": "src/web/pages.js",
-        "why": "UI face: owned qualified CPL with maturity states per docs/ui.md dashboard spec, counting the same qualified type as the funnel"
-      },
-      {
-        "action": "edit",
-        "change": "In src/data/repositories.js add funnel helpers on the raw-event repository: listByTypes(tenantId, types[]) filtered server-side with tenant binding and deterministic ORDER BY occurred_at, event_id, and latestTimestamp(tenantId) returning max occurred_at for data-through/stale computation; no schema change, no update/delete surface, tenant isolation on every query.",
-        "path": "src/data/repositories.js",
-        "why": "Avoid loading full event lists into the domain for funnel and staleness reads"
-      },
-      {
-        "action": "edit",
-        "change": "In scripts/seed.js replace the seed EVENTS: delete the three legacy spend rows (evt_seed_spend_c1_1, evt_seed_spend_c1_2, evt_seed_spend_c2_1) and the two dot-spelled qualified rows (evt_seed_qualified_1, evt_seed_qualified_2), and write one canonical 10-event click-to-revenue journey for tenant_demo with fixed ids evt_seed_journey_click_1, evt_seed_journey_spend_1 (spend.observed, campaign search-brand, amount_micros 7200000000, currency INR — this single row IS the tenant spend), evt_seed_journey_lead_created_1..3, evt_seed_journey_lead_qualified_1..3 (lead_id lead_seed_j1..j3), evt_seed_journey_opp_1 (opportunity_created), evt_seed_journey_deal_1 (deal_won), all sharing session_id sess_seed_journey_1 and one occurred_at set to 6h before seed run time (UTC ISO, inside the lag window so maturity is ~0.06 and strategic actions gate); keep the existing decision and learning rows untouched; all writes go through validateEvent plus rawEvents.append so reruns stay idempotent. A fresh database then holds exactly spend 7200000000 and qualified volume 3, i.e. qualified CPL 2400000000 micros = Rs 2,400.00 under the tenant-wide rule.",
-        "path": "scripts/seed.js",
-        "why": "Demo tenant exhibits qualified CPL INR 2400.00 from a single spend source with an immature window for QA and screenshots"
-      }
-    ],
-    "issue": 17,
-    "kind": "feature",
-    "out_of_scope": [
-      "Platform adapter reads (Meta or Google) — later epic reuses this measurement layer per owner Meta-first decision",
-      "Shadow decisions, calibration, approvals and any ad mutation"
-    ],
-    "qa_script": [
-      "rm -f ./data/app.db; npm run sdlc:serve & sleep 2; npm run sdlc:seed",
-      "POST the canonical 10-event journey to tenant_qa (same types and payloads as the seed journey in scripts/seed.js, only ids evt_qa_journey_* tenant tenant_qa session sess_qa_journey_1 differ: 1 click + 1 spend.observed value 7200000000 currency INR + 3 lead_created + 3 lead_qualified + 1 opportunity_created + 1 deal_won, occurred_at current UTC): each POST /v1/events returns 202; then GET /v1/metrics?tenant_id=tenant_qa shows spend_micros 7200000000, qualified_volume 3, qualified_cpl_micros 2400000000",
-      "GET /v1/metrics for tenant_demo shows qualified_cpl_micros 2400000000, and open http://localhost:3000/ to confirm the KPI strip shows Qualified CPL Rs 2,400.00, volume 3, coverage 1.00 with badges, maturity bars with data-through timestamps and the strategic-gating line",
-      "Re-POST one evt_qa_journey_* body and confirm 202 with duplicate true and appended false, then GET /v1/metrics?tenant_id=tenant_qa unchanged",
-      "Open http://localhost:3000/?state=partial and confirm the stale banner names the age while matured KPIs stay visible; open ?state=loading and confirm skeleton cards with no layout shift"
-    ],
-    "risks": [
-      "Money-adjacent funnel math decides what later slices may act on; integer-micros division and volume-zero handling are covered by unit tests but review must confirm no float path",
-      "POST /v1/events changes the existing 404-for-/v1/events test expectation; the paired test edit is part of this work order",
-      "No migration is planned; if reviewers prefer persisted maturity snapshots that is a follow-up, not this slice",
-      "Dev databases seeded with the pre-#17 8-row seed still carry the three legacy spend rows and two dot-spelled qualified rows because raw_events is append-only; the funnel excludes dot-spelled qualified but counts all spend.observed, so such databases read high until reset with rm -f ./data/app.db && npm run sdlc:seed — CI and QA always boot clean so verification is unaffected"
-    ],
-    "tests": [
-      {
-        "action": "create",
-        "cases": [
-          "tenant-wide funnel over the canonical 10-event journey (INR 7200 spend, 3 qualified) resolves to qualified CPL micros 2400000000 exactly",
-          "legacy dot-spelled lead.qualified rows are excluded from qualified volume even when present alongside underscore rows",
-          "volume-zero returns null CPL without dividing by zero",
-          "duplicate event_id in a batch counts once",
-          "maturity bands map 0.2 emergency-only, 0.5 protective, 0.8 moderate, 0.95 strategic with strategic gating below 0.90",
-          "6-hour-old funnel data is gated (maturity about 0.06 under p50 48h / p90 120h)",
-          "cheap low-quality campaign loses to expensive high-quality campaign on qualified CPL",
-          "stale detection flags data-through older than 24h with age copy and keeps matured values",
-          "journey linker drops raw email/phone PII and groups only on reference ids"
-        ],
-        "path": "test/domain/measurement.test.js"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "POST valid lead_qualified returns 202 with receipt event_id and appended true",
-          "POST same event_id twice returns duplicate on second with unchanged metrics (never double-counts)",
-          "POST missing event_id returns 400 MISSING_EVENT_ID with {code,message} and no stack",
-          "POST non-UTC occurred_at returns 400 NON_UTC_OCCURRED_AT",
-          "POST float value returns 400 INVALID_MONEY",
-          "full 10-event journey on an isolated tenant resolves via GET /v1/metrics to qualified_cpl_micros 2400000000 with volume 3",
-          "GET /v1/metrics on a just-posted journey returns maturity below 0.35 with gated_strategic true and data_through timestamp"
-        ],
-        "path": "test/api/events.test.js"
-      },
-      {
-        "action": "edit",
-        "cases": [
-          "unknown /v1 path still returns the {code,message} envelope without a stack",
-          "POST /v1/events is now a real route and is excluded from the 404 assertion",
-          "the five pages still render as HTML"
-        ],
-        "path": "test/api/health.test.js"
-      }
-    ],
-    "understanding": "Issue #17 is the measurement-truth slice of epic #14: growth leads see owned qualified CPL against platform CPL with maturity badges instead of the system acting on immature conversions. The foundation (#16, done) already gives raw_events with (tenant_id, event_id) idempotency, UTC envelope validation, money micros, append-only audit and dashboard shells whose KPI strip today shows spend/qualified counts with hardcoded 0.00 coverage. Missing is the contract face (POST /v1/events for lead-through-margin growth events, privacy-aware journey graph, downstream quality funnel) and the UI face upgrade (qualified CPL/volume/coverage with maturity 0..1, lag distributions, TR-7 policy bands, maturity bars with data-through timestamps, stale banner, strategic-action gating). Out of scope: adapter reads, shadow/calibration, ad mutation. Aggregation convention pinned after the v1 rejection: qualified CPL is tenant-wide (sum of all spend.observed amount_micros divided by count of all underscore lead_qualified events, exact integer division, null at zero volume); the seed drops its legacy spend and dot-spelled qualified rows so one 10-event journey is the single INR 7200/3 source on a fresh database.",
-    "version": 2
-  },
-  "approved_work_order": {
-    "acceptance": [
-      {
-        "check": "Tenant-wide aggregation: POSTing the canonical 10-event click-to-revenue journey (1 click + 1 spend.observed of INR 7200 as amount_micros 7200000000 + 3 lead_created + 3 lead_qualified + 1 opportunity_created + 1 deal_won) to a fresh tenant resolves to qualified_cpl_micros 2400000000 exactly (7200000000 / 3), and the seeded tenant_demo dashboard shows Qualified CPL ₹2,400.00 from the same tenant-wide rule",
-        "how_to_verify": "Run qa_script steps 1-3 (POST 10-event journey to tenant_qa, GET /v1/metrics for tenant_qa and tenant_demo, open /); CI runs the test/api/events.test.js journey case asserting qualified_cpl_micros 2400000000",
-        "id": "AC-1",
-        "source": "IAC-1",
-        "verify": "api"
-      },
-      {
-        "check": "Dashboard KPI strip shows maturity bars with data-through timestamps on metrics inside the lag window and a gating note naming that strategic actions are blocked below the 0.90 band",
-        "how_to_verify": "Boot, seed, open / and /?state=partial; run test/domain/measurement.test.js maturity-band cases",
-        "id": "AC-2",
-        "source": "IAC-2",
-        "verify": "browser"
-      },
-      {
-        "check": "POSTing the same event_id twice returns 202 both times but the second is marked duplicate and qualified volume and spend do not move",
-        "how_to_verify": "POST same body twice per qa_script step 4, then GET /v1/metrics; CI runs test/api/events.test.js duplicate-delivery case",
-        "id": "AC-3",
-        "source": "IAC-3",
-        "verify": "api"
-      },
-      {
-        "check": "With stale provider data the dashboard keeps matured KPI values visible and renders a banner naming the age, e.g. 'Provider data is stale — last good sync 26h ago'",
-        "how_to_verify": "Open /?state=partial on a seeded DB and read the banner; matured KPI cards remain visible above the feed",
-        "id": "AC-4",
-        "source": "IAC-4",
-        "verify": "browser"
-      },
-      {
-        "check": "Dashboard KPI strip shows owned qualified CPL, qualified volume and maturity coverage with maturity badges (immature/protective/moderate/strategic per TR-7 bands) instead of platform CPL",
-        "how_to_verify": "Open / on seeded DB; CI runs test/domain/measurement.test.js band-label cases",
-        "id": "AC-5",
-        "source": "TR-7",
-        "verify": "browser"
-      },
-      {
-        "check": "Funnel uses downstream quality stages (lead_created to lead_qualified to opportunity/order/margin) so a cheap low-quality campaign never outranks an expensive high-quality one on qualified CPL",
-        "how_to_verify": "CI runs test/domain/measurement.test.js cheap-vs-profitable campaign case",
-        "id": "AC-6",
-        "source": "TR-9",
-        "verify": "test"
-      }
-    ],
-    "approach": "Build one vertical slice with a single pinned aggregation convention: qualified CPL is tenant-wide, computed on read as (sum of ALL spend.observed amount_micros for the tenant) / (count of ALL lead_qualified underscore events for the tenant), exact integer division, null when volume is zero — matching how the existing dashboard already sums spend and counts qualified rows. The seeded demo is the single source of the INR 7200/3 figure: the seed file drops the three legacy spend rows and the two dot-spelled lead.qualified rows and writes one canonical 10-event journey whose single spend row IS the tenant spend, so fresh databases hold exactly one spend source and seeded dashboard, POSTed QA journey and GET /v1/metrics all read 2400000000 micros from the same rule. Legacy dot-spelled lead.qualified is a pre-measurement type that the funnel never counts. A pure measurement domain (funnel + maturity + policy bands) is consumed by POST /v1/events ingest and GET /v1/metrics, rendered by the dashboard KPI strip with maturity bars and a stale banner. Dashboard ideal shows qualified CPL/volume/coverage with badges; partial shows the stale banner plus maturity bars with data-through timestamps; loading skeleton and error panel already exist and are kept. The owner decision (Meta first, Google later, plan/brief.md) does not change this slice: measurement stays platform-agnostic and no adapter code is touched; dashboard setup copy keeps the existing connect-Meta checklist. Seam: any 4xx from POST surfaces inline field errors and never writes; dashboard read failures render the existing error panel naming the failing check with last-good timestamp and a Retry button.",
-    "assumptions": [
-      "Single-operator v1: tenant resolves from optional tenant_id field (auto-creating the tenant row when unknown), else the sole existing tenant, else tenant_demo; no auth layer in this slice",
-      "Default lag model p50 48h / p90 120h via piecewise-linear maturityFor until per-account learning arrives in a later epic",
-      "Stale threshold 24h past last good sync; thresholds are constants in the measurement module",
-      "QA and CI boot a clean database, so the seed replacement yields exactly one spend source; pre-existing dev databases are covered in risks"
-    ],
-    "confidence": 84,
-    "confidence_rationale": "Foundation already provides envelope validation, idempotent raw_events, derived spend replay and all five dashboard shells; the slice adds pure math plus two routes with no migration and no new dependency, and the v1 rejection is answered point by point: one tenant-wide convention, one spend source, 10-event count everywhere, borrowed allocation phrase removed, qa_script list identical to the seed list.",
-    "files": [
-      {
-        "action": "create",
-        "change": "Create src/domain/measurement.js as pure domain with no IO. GROWTH_EVENTS allowlist uses internal types: click, spend.observed, lead_created, lead_qualified (underscore only; legacy dot-spelled lead.qualified is pre-measurement and never counted), demo_booked, opportunity_created, deal_won, purchase, refund, subscription_renewed, churned, gross_margin_finalized. normaliseGrowthEvent(body, tenantId) maps event_name 1:1 to event_type for allowlisted names (unknown name yields UNKNOWN_EVENT), maps integer value+currency to payload.amount_micros (non-safe-integer value yields INVALID_MONEY), carries user/session/order references into payload while dropping raw PII fields email and phone, and requires a UTC ISO-8601 occurred_at. computeFunnel(events) aggregates tenant-wide: spend_micros is the exact integer sum of all spend.observed amount_micros, qualified_volume is the count of all lead_qualified events, qualified_cpl_micros is exact integer division spend/volume and null when volume is 0. maturityFor(ageHours) is piecewise linear through (0,0), (48,0.5), (120,1.0), clamped 0..1 (so 6h gives 0.0625). policyBand(m) maps <0.35 emergency-only, 0.35-0.70 protective, 0.70-0.90 moderate, >=0.90 strategic with a gated flag true for the strategic class below 0.90. coverageOf(events) is the share of lead_qualified events carrying a session_id or user_id reference (0 when volume 0). dataThrough(events) is max occurred_at or null. isStale(now, dataThrough, 24h) plus age copy. linkJourney(events) groups by session/user/order references only.",
-        "path": "src/domain/measurement.js",
-        "why": "All funnel math and maturity gating in one testable pure module the API and pages share, with the tenant-wide convention stated in code"
-      },
-      {
-        "action": "edit",
-        "change": "In src/api/routes.js add express.json() middleware, POST /v1/events (validate the growth shape via normaliseGrowthEvent then validateEvent on the normalised envelope; 202 {receipt: event_id, appended, duplicate: !appended} on success with unknown tenant_id auto-creating the tenant row; 400 {code,message,details} with stable codes MISSING_EVENT_ID/MISSING_EVENT_NAME/UNKNOWN_EVENT/BAD_OCCURRED_AT/NON_UTC_OCCURRED_AT/INVALID_MONEY, never a stack trace; idempotent on (tenant_id, event_id) via rawEvents.append INSERT OR IGNORE), and GET /v1/metrics?tenant_id= returning {tenant_id, spend_micros, qualified_volume, qualified_cpl_micros, maturity, band, gated_strategic, maturity_coverage, data_through, stale, stale_age} computed tenant-wide from measurement.js over rawEvents; keep the generic /v1 404 envelope for all other paths.",
-        "path": "src/api/routes.js",
-        "why": "Contract face: ingest plus readable measurement truth for the dashboard and QA under one aggregation rule"
-      },
-      {
-        "action": "edit",
-        "change": "In src/web/pages.js upgrade kpiStrip to count lead_qualified (underscore), replacing the lead.qualified lookup, and render Qualified CPL via formatMoney(fromMicros(cpl, 'INR')) or em-dash when volume 0, Qualified volume, Maturity coverage with maturity badges and per-card maturity bars (reuse maturityBar helper) showing data-through timestamps, plus a gating line 'Strategic actions blocked until maturity passes 0.90' when gated; upgrade dashboard partial to render banner 'Provider data is stale — last good sync <dataThrough>' with role=status while keeping matured KPI cards visible; keep skeleton loading and error panel unchanged; preserve theme tokens, aria-live region, keyboard order and data-testid hooks. The dashboard is read-only so there is no primary action and no destructive path; maturity bars keep role=img with aria-labels and the banner is announced through the existing live region.",
-        "path": "src/web/pages.js",
-        "why": "UI face: owned qualified CPL with maturity states per docs/ui.md dashboard spec, counting the same qualified type as the funnel"
-      },
-      {
-        "action": "edit",
-        "change": "In src/data/repositories.js add funnel helpers on the raw-event repository: listByTypes(tenantId, types[]) filtered server-side with tenant binding and deterministic ORDER BY occurred_at, event_id, and latestTimestamp(tenantId) returning max occurred_at for data-through/stale computation; no schema change, no update/delete surface, tenant isolation on every query.",
-        "path": "src/data/repositories.js",
-        "why": "Avoid loading full event lists into the domain for funnel and staleness reads"
-      },
-      {
-        "action": "edit",
-        "change": "In scripts/seed.js replace the seed EVENTS: delete the three legacy spend rows (evt_seed_spend_c1_1, evt_seed_spend_c1_2, evt_seed_spend_c2_1) and the two dot-spelled qualified rows (evt_seed_qualified_1, evt_seed_qualified_2), and write one canonical 10-event click-to-revenue journey for tenant_demo with fixed ids evt_seed_journey_click_1, evt_seed_journey_spend_1 (spend.observed, campaign search-brand, amount_micros 7200000000, currency INR — this single row IS the tenant spend), evt_seed_journey_lead_created_1..3, evt_seed_journey_lead_qualified_1..3 (lead_id lead_seed_j1..j3), evt_seed_journey_opp_1 (opportunity_created), evt_seed_journey_deal_1 (deal_won), all sharing session_id sess_seed_journey_1 and one occurred_at set to 6h before seed run time (UTC ISO, inside the lag window so maturity is ~0.06 and strategic actions gate); keep the existing decision and learning rows untouched; all writes go through validateEvent plus rawEvents.append so reruns stay idempotent. A fresh database then holds exactly spend 7200000000 and qualified volume 3, i.e. qualified CPL 2400000000 micros = Rs 2,400.00 under the tenant-wide rule.",
-        "path": "scripts/seed.js",
-        "why": "Demo tenant exhibits qualified CPL INR 2400.00 from a single spend source with an immature window for QA and screenshots"
-      }
-    ],
-    "issue": 17,
-    "kind": "feature",
-    "out_of_scope": [
-      "Platform adapter reads (Meta or Google) — later epic reuses this measurement layer per owner Meta-first decision",
-      "Shadow decisions, calibration, approvals and any ad mutation"
-    ],
-    "qa_script": [
-      "rm -f ./data/app.db; npm run sdlc:serve & sleep 2; npm run sdlc:seed",
-      "POST the canonical 10-event journey to tenant_qa (same types and payloads as the seed journey in scripts/seed.js, only ids evt_qa_journey_* tenant tenant_qa session sess_qa_journey_1 differ: 1 click + 1 spend.observed value 7200000000 currency INR + 3 lead_created + 3 lead_qualified + 1 opportunity_created + 1 deal_won, occurred_at current UTC): each POST /v1/events returns 202; then GET /v1/metrics?tenant_id=tenant_qa shows spend_micros 7200000000, qualified_volume 3, qualified_cpl_micros 2400000000",
-      "GET /v1/metrics for tenant_demo shows qualified_cpl_micros 2400000000, and open http://localhost:3000/ to confirm the KPI strip shows Qualified CPL Rs 2,400.00, volume 3, coverage 1.00 with badges, maturity bars with data-through timestamps and the strategic-gating line",
-      "Re-POST one evt_qa_journey_* body and confirm 202 with duplicate true and appended false, then GET /v1/metrics?tenant_id=tenant_qa unchanged",
-      "Open http://localhost:3000/?state=partial and confirm the stale banner names the age while matured KPIs stay visible; open ?state=loading and confirm skeleton cards with no layout shift"
-    ],
-    "risks": [
-      "Money-adjacent funnel math decides what later slices may act on; integer-micros division and volume-zero handling are covered by unit tests but review must confirm no float path",
-      "POST /v1/events changes the existing 404-for-/v1/events test expectation; the paired test edit is part of this work order",
-      "No migration is planned; if reviewers prefer persisted maturity snapshots that is a follow-up, not this slice",
-      "Dev databases seeded with the pre-#17 8-row seed still carry the three legacy spend rows and two dot-spelled qualified rows because raw_events is append-only; the funnel excludes dot-spelled qualified but counts all spend.observed, so such databases read high until reset with rm -f ./data/app.db && npm run sdlc:seed — CI and QA always boot clean so verification is unaffected"
-    ],
-    "tests": [
-      {
-        "action": "create",
-        "cases": [
-          "tenant-wide funnel over the canonical 10-event journey (INR 7200 spend, 3 qualified) resolves to qualified CPL micros 2400000000 exactly",
-          "legacy dot-spelled lead.qualified rows are excluded from qualified volume even when present alongside underscore rows",
-          "volume-zero returns null CPL without dividing by zero",
-          "duplicate event_id in a batch counts once",
-          "maturity bands map 0.2 emergency-only, 0.5 protective, 0.8 moderate, 0.95 strategic with strategic gating below 0.90",
-          "6-hour-old funnel data is gated (maturity about 0.06 under p50 48h / p90 120h)",
-          "cheap low-quality campaign loses to expensive high-quality campaign on qualified CPL",
-          "stale detection flags data-through older than 24h with age copy and keeps matured values",
-          "journey linker drops raw email/phone PII and groups only on reference ids"
-        ],
-        "path": "test/domain/measurement.test.js"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "POST valid lead_qualified returns 202 with receipt event_id and appended true",
-          "POST same event_id twice returns duplicate on second with unchanged metrics (never double-counts)",
-          "POST missing event_id returns 400 MISSING_EVENT_ID with {code,message} and no stack",
-          "POST non-UTC occurred_at returns 400 NON_UTC_OCCURRED_AT",
-          "POST float value returns 400 INVALID_MONEY",
-          "full 10-event journey on an isolated tenant resolves via GET /v1/metrics to qualified_cpl_micros 2400000000 with volume 3",
-          "GET /v1/metrics on a just-posted journey returns maturity below 0.35 with gated_strategic true and data_through timestamp"
-        ],
-        "path": "test/api/events.test.js"
-      },
-      {
-        "action": "edit",
-        "cases": [
-          "unknown /v1 path still returns the {code,message} envelope without a stack",
-          "POST /v1/events is now a real route and is excluded from the 404 assertion",
-          "the five pages still render as HTML"
-        ],
-        "path": "test/api/health.test.js"
-      }
-    ],
-    "understanding": "Issue #17 is the measurement-truth slice of epic #14: growth leads see owned qualified CPL against platform CPL with maturity badges instead of the system acting on immature conversions. The foundation (#16, done) already gives raw_events with (tenant_id, event_id) idempotency, UTC envelope validation, money micros, append-only audit and dashboard shells whose KPI strip today shows spend/qualified counts with hardcoded 0.00 coverage. Missing is the contract face (POST /v1/events for lead-through-margin growth events, privacy-aware journey graph, downstream quality funnel) and the UI face upgrade (qualified CPL/volume/coverage with maturity 0..1, lag distributions, TR-7 policy bands, maturity bars with data-through timestamps, stale banner, strategic-action gating). Out of scope: adapter reads, shadow/calibration, ad mutation. Aggregation convention pinned after the v1 rejection: qualified CPL is tenant-wide (sum of all spend.observed amount_micros divided by count of all underscore lead_qualified events, exact integer division, null at zero volume); the seed drops its legacy spend and dot-spelled qualified rows so one 10-event journey is the single INR 7200/3 source on a fresh database.",
-    "version": 2
-  },
-  "approved_too_high": false
+  "approved_too_high": false,
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-09-25T07:01:39.146Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5828314629"
 }
