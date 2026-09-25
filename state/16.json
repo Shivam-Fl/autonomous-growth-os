@@ -755,7 +755,7 @@
       "run": "36082089833"
     }
   ],
-  "implemented_version": 1,
+  "implemented_version": 3,
   "qa": {
     "verdict": "fail",
     "introduced_bugs": 3,
