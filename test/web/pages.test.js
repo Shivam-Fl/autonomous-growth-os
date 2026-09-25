@@ -112,6 +112,101 @@ test('without an override the header still follows the store, exactly as before'
   assert.match(empty, /data-testid="tenant-name">No connected account</);
 });
 
+// Mixed-currency legacy rows (QA BUG-2 on the dashboard side): raw_events is
+// append-only, so a pre-fix INR tenant can still hold a USD spend row that
+// ingest today would 400 as CURRENCY_MISMATCH. kpiStrip must exclude it the
+// same way GET /v1/metrics does, or the two surfaces disagree on CPL.
+test('a legacy mixed-currency batch on an otherwise empty tenant reads ₹3,000.00 on the card and the API agrees', async () => {
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  const occurredAt = '2026-09-25T08:00:00.000Z';
+  const envelope = (event_id, event_type, payload) => {
+    const validated = validateEvent({
+      event_id, event_type, tenant_id: 'tenant_demo', schema_version: '1', occurred_at: occurredAt, payload,
+    });
+    assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
+    return validated.event;
+  };
+  // Ingest would 400 the USD row against the INR tenant (CURRENCY_MISMATCH),
+  // so the only way a live database holds both is the repository route:
+  // a pre-fix legacy batch appended straight into the append-only table.
+  const legacy = [
+    envelope('evt_ac_inr_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'INR' }),
+    envelope('evt_ac_usd_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'USD' }),
+    envelope('evt_ac_qualified', 'lead_qualified', { campaign: 'legacy', lead_id: 'lead_ac', session_id: 'sess_ac' }),
+  ];
+  for (const event of legacy) {
+    repos.rawEvents.append(event);
+  }
+
+  const html = await renderPage('/', { repositories: repos });
+  const cplCard = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
+  const cplText = cplCard.match(/kpi-value">([^<]+)</)[1];
+  assert.equal(cplText, '₹3,000.00', `dashboard CPL must exclude the USD row, got ${cplText}`);
+
+  const app = buildApp({ repositories: repos });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  try {
+    const metrics = await (await fetch(`http://127.0.0.1:${port}/v1/metrics`)).json();
+    assert.equal(metrics.qualified_cpl_micros, 3_000_000_000, 'API CPL excludes the USD row too');
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
+test('the dashboard KPI strip excludes foreign-currency legacy spend like the metrics API does', async () => {
+  const repos = seededRepos('pages-mixed-currency-');
+  // The demo tenant is INR with one 7_200_000_000 INR spend and 3 qualified
+  // leads after the seed, so the legacy batch adds: an INR spend of exactly
+  // 3_000_000_000 (matching the AC's amount), a USD spend of 3_000_000_000
+  // that must never enter either surface's sum, and one more qualified lead.
+  const occurredAt = '2026-09-25T08:00:00.000Z';
+  const envelope = (event_id, event_type, payload) => {
+    const validated = validateEvent({
+      event_id, event_type, tenant_id: 'tenant_demo', schema_version: '1', occurred_at: occurredAt, payload,
+    });
+    assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
+    return validated.event;
+  };
+  const legacy = [
+    envelope('evt_legacy_inr_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'INR' }),
+    envelope('evt_legacy_usd_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'USD' }),
+    envelope('evt_legacy_qualified', 'lead_qualified', { campaign: 'legacy', lead_id: 'lead_legacy', session_id: 'sess_legacy' }),
+  ];
+  // Directly through rawEvents.append: ingest would 400 the USD row today,
+  // so the repository layer is the only way a pre-fix database looks like this.
+  const bar = [];
+  for (const event of legacy) {
+    const { appended } = repos.rawEvents.append(event);
+    bar.push(appended);
+  }
+  assert.deepEqual(bar, [true, true, true], 'fixture: all three legacy rows appended');
+
+  const html = await renderPage('/', { repositories: repos });
+  const cplCard = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
+  const cplText = cplCard.match(/kpi-value">([^<]+)</)[1];
+  // Only the INR rows enter the sum: (7_200 + 3_000) / 4 = 2_550_000_000 = ₹2,550.00.
+  assert.equal(cplText, '₹2,550.00', `dashboard CPL must exclude the USD row, got ${cplText}`);
+
+  // The API computes the same tenant from the same rows and must agree.
+  const app = buildApp({ repositories: repos });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  try {
+    const metrics = await (await fetch(`http://127.0.0.1:${port}/v1/metrics`)).json();
+    assert.equal(metrics.qualified_cpl_micros, 2_550_000_000, 'API CPL excludes the USD row too');
+    assert.equal(metrics.spend_micros, 10_200_000_000, 'API spend is the INR rows only');
+    assert.equal(metrics.qualified_volume, 4);
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 test('skeleton shells keep a fixed height so data arriving causes no layout shift', async () => {
   const repos = freshRepos();
   const loading = await renderPage('/', { repositories: repos, override: 'loading' });
