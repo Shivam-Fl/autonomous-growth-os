@@ -69,5 +69,199 @@
     "decided_at": "2026-09-25T15:12:01.989Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "issue": 37,
+    "version": 1,
+    "kind": "bug",
+    "understanding": "#37 collects five non-blocking findings from the review of #36. Four are live code defects in the opportunity/experiment surface and are fixed here; the fifth is a PR-hygiene action on an already-merged commit and is answered in out_of_scope. Finding 1 (opportunity money stored in raw currency units, not micros) is the root cause and finding 2 (unguarded expectedContribution) is closed at the same time by the same change, because requiring value/cost to be safe-integer micros removes the overflow entirely. Findings 3 and 4 are independent one-line honesty fixes in the evaluate response and the experiment card. This is a pre-release, local-first app whose money invariant is stated twice (conventions.md and TR-1/TR-20) and whose experiments table already names money in micros (max_spend_micros), so the opportunities record is the outlier and should be brought in line. I (the arbiter) re-derived all four pinned scores and both pinned contributions by hand and confirmed they are preserved exactly by the micros rename (the score is scale-free and the x1e6 in the contribution cancels).",
+    "root_cause": "The opportunities record was modelled with value and cost as bare floats in raw major currency units, converted to micros only inside expectedContribution via a hardcoded x1e6. That single float unit is the shared cause of two findings: it violates the micros invariant (TR-1/TR-20, conventions.md, money.js header), and because a validated float can be as large as ~1.8e308, expectedContribution multiplies it by 1e6 with no bound and returns Infinity, which JSON-serialises as null on the wire — the exact overflow the score guards against two functions above but the contribution does not. Fixing the unit (safe-integer micros) removes the conversion, bounds the arithmetic, and renders the two screens consistently. The remaining two findings are independent: the evaluate route discards evaluations.append's return value, and the experiment card emits its caps twice.",
+    "approach": "Four changes, all in the opportunity/experiment surface already covered by #36.\n\n(1) Opportunity money -> integer micros (fixes finding 1, and the value half of finding 2). In src/domain/opportunities.js rename the two money components value->value_micros and cost->cost_micros, matching the max_spend_micros naming already in the experiments record. The score is scale-free because value_micros/cost_micros equals value/cost, so all four pinned scores are preserved exactly (GENERIC 2.16, EXPENSIVE 0.9208, CHEAP 0.40, LOW 0.01). The one subtlety: the cost divisor floor must scale with the unit — it was DIVISOR_FLOOR=1 raw unit, it becomes MICROS_PER_UNIT=1_000_000 (one currency unit in micros) so the zero-cost case still scores 216 (432_000_000/1_000_000/2/1). downside and delay are dimensionless multipliers, not money, so their floors stay at 1. Rewrite scoreOpportunity's floor line to floor cost_micros at MICROS_PER_UNIT and downside/delay at 1 (no longer a uniform DIVISORS.map). In validateOpportunity, value_micros and cost_micros are validated as non-negative safe integers under OPP_BAD_MONEY (instead of 'finite float, non-negative'), while the other six components keep their finite-number check. The existing numerator-product finite guard is kept and stays reachable (a safe-integer value_micros times an unbounded infoValue still overflows).\n\n(2) expectedContribution is total (closes finding 2). With micros stored, the x1e6 line disappears entirely: expectedContribution = trunc(value_micros * pSuccess) - cost_micros. The expensive/cheap contributions are unchanged (1_700_000_000 and 300_000_000). Because a validated value_micros is a safe integer (<= 9.007e15) and pSuccess <= 1, the product can never overflow, so the wire value is never null. As defence-in-depth for direct callers that bypass validation (mirroring scoreOpportunity's existing 'unscorable record returns 0' guard), expectedContribution returns 0 when the result is not a finite safe integer.\n\n(3) Evaluate response surfaces the append result (fixes finding 3). In src/api/routes.js capture the {appended} returned by repositories.evaluations.append (currently discarded) and add appended and duplicate: !appended to the evaluate response, mirroring the raw-events POST precedent ({appended, duplicate: !appended}). The mutable experiments row is still rewritten regardless, but the append-only evaluation record is no longer silently dropped without a word on the wire.\n\n(4) Experiment card renders caps once (fixes finding 4). In src/web/pages.js put data-testid=\"caps\" on the prose span and delete the redundant div immediately below it. The test currently passes against either copy, so a new assertion counts the occurrences inside a single card and pins it to exactly one.\n\nReadability half of finding 1: the opportunity row rendered components through a bare String(), so a reader could not tell 1900 from micros. In the same pages.js change, the two money components (value_micros, cost_micros) render through the existing money() helper as rupee amounts (the helper at pages.js:188-190 renders the U+20B9 sign, so the rendered value is e.g. ₹6000.00); the six dimensionless components stay as plain numbers. IMPORTANT: preserve the existing `?? '—'` fallback for the two money components — render `row.components[key] == null ? '—' : money(row.components[key])` — so a legacy-shaped or missing component shows the '—' placeholder rather than '₹NaN' (money(undefined) would otherwise produce '₹NaN', and a pre-existing local DB row that still carries value/cost has components.value_micros === undefined). The web test asserts ₹6000.00 / ₹1900.00 appear, the bare 6000000000 does not, and a legacy-shaped component renders '—'.\n\nCallers found by grep (all updated): validateOpportunity/scoreOpportunity in src/api/routes.js (POST /v1/opportunities) and scripts/seed.js; expectedContribution in src/api/routes.js only; the components object is built in src/data/repositories.js shape() and consumed by src/web/pages.js opportunityRow and the GET /v1/opportunities response; the record is stored as an opaque JSON column (opportunities.record TEXT), so no SQL migration is needed and the experiments record already names caps in micros.",
+    "files": [
+      {
+        "path": "src/domain/opportunities.js",
+        "action": "edit",
+        "change": "Rename value->value_micros and cost->cost_micros across COMPONENTS, validateOpportunity, numeratorProduct and scoreOpportunity. Validate the two money components as non-negative safe integers (OPP_BAD_MONEY) instead of finite floats; keep the finite-number check for the other six and keep the numerator-product overflow guard. In scoreOpportunity floor cost_micros at MICROS_PER_UNIT (1_000_000) and downside/delay at 1 so the score stays scale-free and the zero-cost case still scores 216. Rewrite expectedContribution as trunc(value_micros * pSuccess) - cost_micros with no x1e6, guarded to return 0 when the result is not a finite safe integer. Update the module header and comments to state that money is integer micros.",
+        "why": "Root cause of findings 1 and 2: the raw-unit storage and the unguarded contribution overflow both live here."
+      },
+      {
+        "path": "src/data/repositories.js",
+        "action": "edit",
+        "change": "In createOpportunityRepository shape(), rename the components keys value->value_micros and cost->cost_micros so the read surface matches the domain record.",
+        "why": "The components object is the stored record's read shape; it is what GET /v1/opportunities returns and what the page renders."
+      },
+      {
+        "path": "src/api/routes.js",
+        "action": "edit",
+        "change": "In the evaluate handler, capture the {appended} result of repositories.evaluations.append (currently discarded) and include appended and duplicate: !appended in the response, following the raw-events POST precedent.",
+        "why": "Fixes finding 3: the append-only evaluation row is the honest record of a settlement and must never be dropped without the wire saying so."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "Update COMPONENT_LABELS to the value_micros / cost_micros keys. Render the two money components through the existing money() helper (which renders the U+20B9 rupee sign) so the opportunity row shows money unambiguously, but KEEP the existing `?? '—'` fallback: render `row.components[key] == null ? '—' : money(row.components[key])` so a missing or legacy-shaped component shows '—' rather than '₹NaN'. Keep the six dimensionless components as plain numbers. In experimentCard, put data-testid=\"caps\" on the prose span and delete the duplicated div below it so the caps render exactly once.",
+        "why": "Fixes the readability half of finding 1 (unambiguous money units) and finding 4 (caps rendered twice), while preserving the deliberate '—' placeholder for absent components."
+      },
+      {
+        "path": "scripts/seed.js",
+        "action": "edit",
+        "change": "Convert the three SEED_OPPORTUNITIES fixtures to micros (value_micros 6_000_000_000 / 2_000_000_000 / 1_000_000_000 and cost_micros 1_900_000_000 / 100_000_000 / 500_000_000). The pinned scores and contribution micros in the surrounding comment are unchanged.",
+        "why": "Seed fixtures feed validateOpportunity/scoreOpportunity and must supply safe-integer micros under the new contract."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/domain/opportunities.test.js",
+        "action": "edit",
+        "cases": [
+          "Convert the EXPENSIVE/CHEAP/LOW/GENERIC fixtures to value_micros / cost_micros and assert the four pinned scores are byte-identical (2.16, 0.9208, 0.40, 0.01).",
+          "Zero-cost case asserts the MICROS_PER_UNIT floor still yields score 216.",
+          "A value_micros or cost_micros that is not a non-negative safe integer (fractional, negative, or > MAX_SAFE_INTEGER) rejects with OPP_BAD_MONEY.",
+          "The numerator-product overflow guard still fires for a safe-integer value_micros times an unbounded infoValue (rejected OPP_BAD_COMPONENT), and scoreOpportunity on that record by hand returns 0.",
+          "expectedContribution on the pinned fixtures still returns 1_700_000_000 and 300_000_000 with no x1e6 conversion.",
+          "expectedContribution called directly on a hand-built overflowing record (value_micros 1e303, bypassing validation) returns 0, never Infinity or NaN.",
+          "The stored-record shape test asserts the eight keys are value_micros and cost_micros."
+        ]
+      },
+      {
+        "path": "test/api/opportunities.test.js",
+        "action": "edit",
+        "cases": [
+          "POST /v1/opportunities response components deep-equals value_micros / cost_micros keys and expected_contribution_micros is unchanged (1_700_000_000 for the expensive fixture).",
+          "GET /v1/opportunities rows still carry eight components per row and the same stored-score order.",
+          "POST evaluate returns appended: true and duplicate: false on the first evaluation.",
+          "A repository-level test appends the same (tenant, experiment, evaluated_at) twice and asserts the second returns appended: false, which is the value the route now forwards onto the wire.",
+          "Update the idempotent re-post test (currently asserts repost.components.value === 6000 at test/api/opportunities.test.js:300) to assert repost.components.value_micros === 6_000_000_000, keeping the stored-score and contribution assertions unchanged, so the test still proves the response describes the stored row and not the discarded body."
+        ]
+      },
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "The ranked-opportunities row test matches data-component for value_micros and cost_micros (and the other six).",
+          "The winning opportunity row renders ₹6000.00 and ₹1900.00 via money() (the U+20B9 sign the helper emits) and does not contain the bare 6000000000 / 1900000000 micros.",
+          "A component-less or legacy-shaped row (components.value_micros undefined) renders the '—' placeholder and does not contain '₹NaN'.",
+          "The experiment card asserts the caps (₹500.00) appear exactly once inside a single card, so the duplicated div cannot be reintroduced."
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "Opportunity value and cost are stored and returned as integer micros (value_micros, cost_micros), never as raw-unit floats, and the domain carries no x1e6 fudge.",
+        "how_to_verify": "Read src/domain/opportunities.js: no 1_000_000 multiplication remains, components are named *_micros, and the module header states money is integer micros.",
+        "source": "TR-1",
+        "verify": "test"
+      },
+      {
+        "id": "AC-2",
+        "check": "The score is unchanged by the unit change: the four pinned fixtures score 2.16, 0.9208, 0.40, 0.01, the zero-cost case still scores 216, and the AC-1/AC-3 stored-score ordering is preserved.",
+        "how_to_verify": "node --test test/domain/opportunities.test.js",
+        "source": "TR-18",
+        "verify": "test"
+      },
+      {
+        "id": "AC-3",
+        "check": "expectedContribution returns the same pinned micros (1_700_000_000 and 300_000_000) and can never return Infinity or null on the wire: a non-safe-integer value_micros is rejected at validation, and a direct overflowing call returns 0.",
+        "how_to_verify": "node --test test/domain/opportunities.test.js and test/api/opportunities.test.js; POST an opportunity with a huge value_micros and confirm it is rejected rather than returning expected_contribution_micros: null.",
+        "source": "TR-1",
+        "verify": "test"
+      },
+      {
+        "id": "AC-4",
+        "check": "The evaluate response surfaces appended and duplicate, following the raw-events precedent, so a collided append-only evaluation row is reported rather than silently dropped.",
+        "how_to_verify": "node --test test/api/opportunities.test.js; POST /v1/experiments/:id/evaluate and confirm the JSON body carries appended and duplicate.",
+        "source": "TR-20",
+        "verify": "api"
+      },
+      {
+        "id": "AC-5",
+        "check": "The experiment card renders its caps exactly once, with data-testid=\"caps\" on the surviving element.",
+        "how_to_verify": "node --test test/web/pages.test.js; open /experiments and confirm one caps line per card.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-6",
+        "check": "The opportunity row renders the two money components through money() as unambiguous rupee amounts (₹6000.00 / ₹1900.00), not bare micros, and a missing or legacy-shaped component still shows the '—' placeholder rather than '₹NaN'.",
+        "how_to_verify": "node --test test/web/pages.test.js; open /opportunities and confirm the expensive row shows ₹6000.00 and ₹1900.00.",
+        "source": "TR-21",
+        "verify": "browser"
+      }
+    ],
+    "qa_script": [
+      "npm ci --no-audit --no-fund",
+      "node --test  (full suite green; the four pinned scores and both pinned contributions unchanged)",
+      "PORT=3000 DB_PATH=./data/app.db node scripts/seed.js  (re-seed on a fresh DB; seed is idempotent by fixed id)",
+      "PORT=3000 node src/index.js, then GET /health",
+      "Open /opportunities: the three ranked rows appear in stored-score order 0.9208 > 0.40 > 0.01; the expensive row shows value ₹6000.00 and cost ₹1900.00 (AC-2, AC-6).",
+      "Open /experiments: each card shows its caps line exactly once with the Inconclusive / Running badge (AC-5).",
+      "curl -s -X POST localhost:3000/v1/opportunities -H 'content-type: application/json' -d '{\"opportunity_id\":\"opp_qa\",\"tenant_id\":\"tenant_alpha\",\"value_micros\":6000000000,\"pSuccess\":0.6,\"fit\":0.9,\"infoValue\":1.2,\"reversibility\":0.9,\"cost_micros\":1900000000,\"downside\":2,\"delay\":1}' — expect 201, score 0.9208, expected_contribution_micros 1700000000 (AC-1, AC-3).",
+      "Same POST with a fractional or huge value_micros — expect 400 OPP_BAD_MONEY, never a null contribution (AC-3).",
+      "curl -s -X POST localhost:3000/v1/experiments/exp_seed_running/evaluate -H 'content-type: application/json' -d '{\"tenant_id\":\"tenant_alpha\",\"control_conversions\":10,\"control_exposures\":1000,\"treatment_conversions\":12,\"treatment_exposures\":1000,\"min_sample\":100}' — expect the body to carry appended and duplicate (AC-4).",
+      "GET /v1/experiments?tenant_id=tenant_alpha — state rewritten to inconclusive, matching the appended evaluation row."
+    ],
+    "risks": [
+      "Renaming value/cost to value_micros/cost_micros is a breaking change to the POST /v1/opportunities request body and to the stored opportunity JSON record. This is acceptable in v1 (local-first, no external consumers, API introduced in #36), but the acceptance must run against a fresh DB.",
+      "The cost divisor floor changing from 1 to 1_000_000 is the one non-obvious part of the unit change; getting it wrong silently rescales the zero-cost score away from the pinned 216. The zero-cost test guards it.",
+      "expectedContribution returning 0 for a direct overflowing call is a display-field sentinel, matching scoreOpportunity's existing unscorable-returns-0 convention; it is never a sort key."
+    ],
+    "out_of_scope": [
+      "Finding 5 (drive-by change to test/api/decisions.test.js): the fix is already present in main — maturedBody derives decided_at and evaluation.evaluated_at from one sampled instant, exactly as the reviewer recommended, and the flake it fixes is real. The reviewer's only action was to split commit 55ffb5c out of #36's diff as a separate PR for review hygiene. #36 is already merged into main (04730fc), and the fix arrived in that squash, so there is no commit left to split and rewriting merged history to split it is not appropriate. The correct fix is retained; no code change is made for this finding.",
+      "Adding a SQL migration for the opportunities table: the money lives inside the opaque opportunities.record JSON column, not in typed columns, so the unit change is purely in the domain/record shape and needs no ALTER TABLE.",
+      "Converting the opportunities seed to a backfill for pre-existing databases: this is a pre-release local-first app; operators re-seed on a fresh DB (see risks)."
+    ],
+    "confidence": 88,
+    "confidence_rationale": "I re-derived every load-bearing number by hand rather than trusting the proposal: the four scores (2.16, 0.9208, 0.40, 0.01) are preserved because value_micros/cost_micros equals value/cost; the zero-cost score stays 216 because the cost floor scales to 1_000_000 micros (432_000_000/1_000_000/2/1 = 216); both contributions (1_700_000_000, 300_000_000) are preserved because the x1e6 cancels. I read the full domain file and confirmed the proposal's description of it is exact (raw floats, the x1e6 fudge, the uniform DIVISOR_FLOOR=1 map, the unguarded contribution). Finding 2 was reproduced live (expectedContribution -> Infinity -> JSON null). Findings 1, 3, 4 were confirmed by reading the exact code and the full caller set was grepped. I verified all three of the critique's findings against the source myself and found each one founded, so the plan going into implementation has no known unhandled execution break. The number is not 90+ because two non-load-bearing unknowns remain: the breaking record-shape change requires a fresh DB (mitigated by the kept '—' guard so stale rows degrade gracefully rather than showing ₹NaN), and the rename of the request/record keys is a judgement call I have made in the issue body's favour but that a human could reasonably reverse — the score and contribution values are identical either way, so nothing load-bearing rests on it.",
+    "reproduced": true,
+    "evidence": [
+      "src/domain/opportunities.js:128-131 expectedContribution multiplies value by 1_000_000 with no bound (read directly).",
+      "Reproduced live: validateOpportunity({value:1e303,...}) returns ok with score 5e+302; expectedContribution returns Infinity; JSON.stringify({expected_contribution_micros: that}) === {\"expected_contribution_micros\":null}.",
+      "src/data/db.js:225-232 opportunities stores money inside the record JSON column; the experiments record uses max_spend_micros (seed.js:300), confirming the unit mismatch.",
+      "src/api/routes.js:459 repositories.evaluations.append(...) is called without inspecting its {appended} return; src/api/routes.js:160-162 is the raw-events precedent that does surface it.",
+      "src/web/pages.js:188-190 money() renders the U+20B9 sign (₹), not 'Rs'; grep for 'Rs[0-9]' across src/ and test/ returns nothing (critique finding 1 confirmed).",
+      "src/web/pages.js:655 opportunityRow renders components through `String(row.components[key] ?? '—')`; the `?? '—'` fallback is real, and money(undefined) evaluates to '₹NaN' (critique finding 3 confirmed).",
+      "test/api/opportunities.test.js:300 asserts repost.components.value === 6000; the value->value_micros rename breaks this and the plan's tests[] did not list it (critique finding 2 confirmed).",
+      "src/web/pages.js:728-729 the caps span and the following div render identical values, and test/web/pages.test.js:436 passes against either copy.",
+      "test/api/decisions.test.js maturedBody already derives both timestamps from one sampled instant; the finding-5 fix is in main (04730fc)."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Keep opportunity value/cost in raw currency units and only document that choice in the module header, formatting the opportunity row with money().",
+        "rejected_because": "This is the reviewer's fallback, but it leaves opportunities holding money in a unit no other table uses, in direct conflict with conventions.md (\"Money, timestamps and identifiers follow the invariants: micros\"), TR-1/TR-20, and money.js's explicit \"Floats never enter storage, APIs and this module\". It also leaves expectedContribution's x1e6 conversion and its overflow exposure in place, so findings 1 and 2 both stay half-open. Since the score is provably scale-free, the clean fix costs nothing in correctness."
+      },
+      {
+        "approach": "Add a validation guard to expectedContribution returning 0 on overflow, without changing the stored unit (treat finding 2 as a standalone one-line fix).",
+        "rejected_because": "Hides the symptom without fixing the root cause: raw-unit float storage still violates the micros invariant (finding 1) and still allows values above ~1.8e302 that the guard would mask as 0 rather than reject. Fixing the unit closes both findings at the source with fewer moving parts than a guard plus a rename."
+      },
+      {
+        "approach": "Reject the overflowing input in validateOpportunity (extend the existing numerator-product guard to the contribution) rather than making expectedContribution total.",
+        "rejected_because": "A safe-integer value_micros times pSuccess <= 1 can no longer overflow, so there is nothing left to reject once the unit is fixed, and a guard on a computation that cannot overflow is dead code. The return-0 fallback is kept only for direct callers that bypass validation, mirroring scoreOpportunity's existing unscorable-returns-0 convention."
+      },
+      {
+        "approach": "Split the four code findings into separate work orders / PRs.",
+        "rejected_because": "Findings 1 and 2 share a single root cause and a single change in src/domain/opportunities.js; splitting them would either duplicate the unit change or split a coherent fix. Findings 3 and 4 touch the same files (routes.js, pages.js) as the read surface of finding 1, and each is one line. One work order is the smaller honest change."
+      }
+    ],
+    "assumptions": [
+      "Renaming the request-body and record fields value/cost to value_micros/cost_micros is acceptable for a v1 local-first API with no external consumers (introduced in #36); the issue body's own fix recommendation names value_micros/cost_micros to match max_spend_micros.",
+      "downside and delay are dimensionless multipliers, not money, so only value and cost become micros. This is inferred from the fixtures (downside 2, delay 1) and from the spec formula, which lists them as separate score components alongside money.",
+      "The opportunities.record column is opaque JSON, so no SQL migration and no column-level money typing is required; the unit change is confined to the domain and the record shape.",
+      "The existing numerator-product finite guard remains correct and necessary after the unit change, because infoValue is an unbounded multiplier and a safe-integer value_micros times a huge infoValue can still overflow.",
+      "A pre-existing local app.db will hold stale-shaped opportunity records after this change, and re-seeding on a fresh DB is the supported path; the kept '—' guard means a stale row degrades to a placeholder rather than '₹NaN'."
+    ],
+    "unknowns": [
+      "Whether any external consumer (none in this repo) reads the opportunity value/cost keys; only src/api/routes.js, src/data/repositories.js, src/web/pages.js and scripts/seed.js were found by grep.",
+      "The exact reproduction frequency of the finding-3 same-millisecond collision was not measured; the defect (discarded return value) is confirmed by code reading regardless."
+    ],
+    "debate_summary": "The critique was right on all three of its findings and I folded every one in; I found nothing to dismiss. I re-checked each against the source myself rather than accepting it. Finding 1 (Rs vs the U+20B9 sign): confirmed — money() at pages.js:188-190 renders ₹, grep finds no 'Rs' anywhere in src/ or test/, and the proposal's AC-6, web test and qa_script all said 'Rs', so taken literally those verification steps would have failed against the code the plan told the implementer to write. I corrected the plan's text to the rupee sign throughout rather than touching money(), which is correct. Finding 2 (the re-post assertion): confirmed — test/api/opportunities.test.js:300 asserts repost.components.value === 6000, which the value->value_micros rename breaks, and the proposal's test list never mentioned the re-post test; I added an explicit case to update it to value_micros === 6_000_000_000. Finding 3 (the lost '—' guard): confirmed and the subtlest of the three — the current opportunityRow deliberately renders `row.components[key] ?? '—'`, and routing the two money components through money() would replace that placeholder with '₹NaN' (money(undefined) === '₹NaN', verified) for exactly the legacy-shaped rows the plan's own assumption says will exist on a pre-existing local DB. I specified the guard explicitly in the pages.js change and added a test. Where I disagree with the plan is only on one framing: the proposal recorded as an unknown whether the rename should happen at all; the issue body itself recommends value_micros/cost_micros to match max_spend_micros, so I settled it in the rename's favour and dropped that unknown. The proposal's diagnosis, root cause, and four-part approach I re-derived independently and they hold — the four pinned scores, the zero-cost 216 (which depends on the subtle cost-floor rescale to 1_000_000 micros, and which I recomputed as 432_000_000/1_000_000/2/1), and both pinned contributions are all preserved. The three findings are execution and verification errors, not a wrong diagnosis, exactly as the critique itself said, so the plan's spine is unchanged and only its text and its test list grew. net: the critique made this work order correct on three real points without changing what the work is.",
+    "residual_risks": [
+      "The request-body and stored-record key rename is a breaking change for any pre-existing local app.db; QA must run against a fresh, freshly-seeded DB (the qa_script does this).",
+      "The one genuinely load-bearing subtlety is the cost divisor floor rescaling to MICROS_PER_UNIT (1_000_000) in scoreOpportunity; if it is missed, the zero-cost score silently leaves 216 and the EXPENSIVE/CHEAP/LOW scores shift. The zero-cost and four-pinned-score tests in test/domain/opportunities.test.js are the guard — QA should check those first.",
+      "The evaluate appended/duplicate addition was checked by the critique and is sound on every path (evaluateExperiment always returns a truthy outcome on the non-error path, so the append always runs before the 200 and the two new fields are always present); there is no falsy-outcome case to handle."
+    ]
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-09-25T15:23:11.295Z",
+  "validated_ac_changes": []
 }
