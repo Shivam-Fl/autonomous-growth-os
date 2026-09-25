@@ -17,14 +17,14 @@
     "run": "36174232674"
   },
   "pending": {
-    "stage": "root-cause",
+    "stage": "implement",
     "rework": null,
-    "requested_at_head": null,
-    "qa_run": "36173058058",
-    "from": "qa",
-    "pr": "43",
-    "work_order_version": 2,
-    "at": "2026-09-25T18:33:53.711Z"
+    "requested_at_head": "df0b3cd2c25feab5011d68a60da8a0fa4141b0c1",
+    "qa_run": null,
+    "from": null,
+    "pr": 43,
+    "work_order_version": 3,
+    "at": "2026-09-25T18:53:56.106Z"
   },
   "work_order": {
     "issue": 40,
@@ -505,7 +505,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "bug",
     "confidence": 85,
@@ -519,8 +519,8 @@
     },
     "decided_at": "2026-09-25T15:59:37.623Z"
   },
-  "stopped_at": "root-cause",
-  "dispatched_stage": "root-cause",
+  "stopped_at": null,
+  "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-25T16:19:00.685Z",
   "validated_ac_changes": [],
