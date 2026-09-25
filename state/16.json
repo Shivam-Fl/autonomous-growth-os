@@ -767,6 +767,11 @@
         "qa:unknown:1cb3813330792f30",
         "qa:unknown:edb6676b869cad00"
       ]
+    },
+    "triage": {
+      "verdict": "escalate",
+      "diagnosis": "QA stage failed its own evidence gate, not the product: check-evidence.mjs rejected a pass-shaped report because 15 tests proving passing criteria (T-2, T-40, T-17, T-41, T-11, T-12, T-13, T-14, T-15, T-16, T-43, T-31, T-35, T-39) cite no evidence file and no HAR exists under qa-evidence. The QA agent ran 156 turns over ~11 min and completed normally, so nothing crashed; it simply did not follow qa.md sections 6/7b (HAR always, cite $QA_EVIDENCE_DIR paths). This is the second consecutive run with this exact shape: the previous triage already chose resume on run 36100122514 (20 uncited passing tests, no HAR at 8500986) and the resumed attempt reproduced the failure at 8623fa4, so 'QA again on the same commit' is a tested-and-falsified remedy. The product work survives and is not implicated: PR #27 is OPEN at 8623fa4 with all three v3 fixes verified on the branch (pages.js derives tenantName from effective state, sdlc:ready honours ${PORT:-3000}, /v1 catch-all reports baseUrl+path) plus test/ops/ready-script.test.js. No transient cause, no project-code defect proven, no plan defect.",
+      "evidence": "failed-run.log judge job 'Did the evidence survive?': 'T-2, T-40, T-17, T-41, T-11, T-12, T-13, T-14, T-15, T-16, T-43, T-31, T-35, T-39 prove a passing criterion and cite no evidence file' + 'no HAR under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence' (exit 1, lines 2113-2117; same gate at 1816-1820); issue #16 comment 2026-09-25T06:04:20Z documents the prior identical resume; gh pr view 27: OPEN, head 8623fa44a1f893369b1955ad19719ad739dcb2d6; branch content verified: src/web/pages.js:112, package.json sdlc:ready, src/api/routes.js:44"
     }
   },
   "triage_history": [
@@ -809,6 +814,14 @@
       "confidence": 85,
       "diagnosis": "The QA agent returned verdict pass / next_action merge for PR #27 @ 8500986 with 20 passing tests citing no evidence file, no HAR under qa-evidence, and 6 tests referencing BUG-1..3 while bugs[] is empty -- a report-shape failure, not a product failure. The work survived: branch sdlc/issue-16 @ 8500986 is pushed, PR #27 is open and mergeable with CI green (ci-verify), and the rejected report with reasons is kept on issue #16's ledger as rejected_artifacts[\"qa-report\"] for the next QA attempt to ",
       "run": "36100122514"
+    },
+    {
+      "at": "2026-09-25T06:21:43.070Z",
+      "stage": "qa",
+      "verdict": "escalate",
+      "confidence": 82,
+      "diagnosis": "QA stage failed its own evidence gate, not the product: check-evidence.mjs rejected a pass-shaped report because 15 tests proving passing criteria (T-2, T-40, T-17, T-41, T-11, T-12, T-13, T-14, T-15, T-16, T-43, T-31, T-35, T-39) cite no evidence file and no HAR exists under qa-evidence. The QA agent ran 156 turns over ~11 min and completed normally, so nothing crashed; it simply did not follow qa.md sections 6/7b (HAR always, cite $QA_EVIDENCE_DIR paths). This is the second consecutive run wit",
+      "run": "36101243475"
     }
   ],
   "implemented_version": 3,
