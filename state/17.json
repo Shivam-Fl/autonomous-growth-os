@@ -165,7 +165,16 @@
     "understanding": "Issue #17 is the measurement-truth slice of epic #14: growth leads see owned qualified CPL against platform CPL with maturity badges instead of the system acting on immature conversions. The foundation (#16, done) already gives raw_events with (tenant_id, event_id) idempotency, UTC envelope validation, money micros, append-only audit and dashboard shells whose KPI strip today shows spend/qualified counts with hardcoded 0.00 coverage. Missing is the contract face (POST /v1/events for lead-through-margin growth events, privacy-aware journey graph, downstream quality funnel) and the UI face upgrade (qualified CPL/volume/coverage with maturity 0..1, lag distributions, TR-7 policy bands, maturity bars with data-through timestamps, stale banner, strategic-action gating). Out of scope: adapter reads, shadow/calibration, ad mutation. Aggregation convention pinned after the v1 rejection: qualified CPL is tenant-wide (sum of all spend.observed amount_micros divided by count of all underscore lead_qualified events, exact integer division, null at zero volume); the seed drops its legacy spend and dot-spelled qualified rows so one 10-event journey is the single INR 7200/3 source on a fresh database.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/domain/measurement.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "src/data/repositories.js",
+    "scripts/seed.js",
+    "test/domain/measurement.test.js",
+    "test/api/events.test.js",
+    "test/api/health.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
