@@ -318,5 +318,23 @@
   "work_order_version": 1,
   "work_order_posted_at": "2026-09-25T10:06:06.487Z",
   "work_order_from": "plan",
-  "work_order_comment": "5830593782"
+  "work_order_comment": "5830593782",
+  "failure_packet": {
+    "issue": 19,
+    "head": "60d8a3d1866ee8338947f4599dabc0b530cd7bb1",
+    "stage": "implement",
+    "attempt": 1,
+    "occurrences": 1,
+    "error_type": "timeout",
+    "error_signature": "7fe4bc19de887920",
+    "raw_excerpt": "--- job: build ---\nGit authentication configured successfully\nInstalling Claude Code v2.1.274...\nInstallation attempt 1...\nSetting up Claude Code...\n\nChecking installation status...\nInstalling Claude Code native build 2.1.274...\nSetting up launcher and shell integration...\n✔ Claude Code successfully installed!\n\n  Version: 2.1.274\n\n  Location: ~/.local/bin/claude\n\n\n  Next: Run claude --help to get started\n\n✅ Installation complete!\n\nClaude Code installed successfully\nSetting up Claude settings at: /home/runner/.claude/settings.json\nCreating .claude directory...\nNo existing settings file found, creating new one\nProcessing settings input...\nParsed settings input as JSON\nMerged settings with input settings\nUpdated settings with enableAllProjectMcpServers: true\nSettings saved successfully\nNo marketplaces specified, skipping marketplace setup\nNo plugins specified, skipping plugins installation\nRunning Claude Code via SDK (full output hidden for security)...\nRerun in debug mode or enable `show_full_output: true` in your workflow file for full output.\nRunning Claude with prompt from file: /home/runner/work/_temp/claude-prompts/claude-prompt.txt\nSDK options: {\n  \"model\": \"glm-5.3-flash\",\n  \"allowedTools\": [\n    \"Bash\",\n    \"Read\",\n    \"Edit\",\n    \"Write\",\n    \"Grep\",\n    \"Glob\"\n  ],\n  \"systemPrompt\": {\n    \"type\": \"preset\",\n    \"preset\": \"claude_code\"\n  },\n  \"pathToClaudeCodeExecutable\": \"/home/runner/.local/bin/claude\",\n  \"settingSources\": [\n    \"user\",\n    \"project\",\n    \"local\"\n  ]\n}\n{\n  \"type\": \"system\",\n  \"subtype\": \"init\",\n  \"message\": \"Claude Code initialized\",\n  \"model\": \"glm-5.3-flash\"\n}\n##[error]The action has timed out.\n##[end-action id=__anthropics_claude-code-action.run;outcome=failure;conclusion=failure;duration_ms=5410660]\n##[start-action display=Re-prepend system bin dirs to PATH;id=__anthropics_claude-code-action.__run_6]\n##[end-action id=__anthropics_claude-code-action.__run_6;outcome=skipped;conclusion=skipped;duration_ms=0]\n##[start-action display=Cleanup SSH signing key;id=__anthropics_claude-code-action.__run_7]\n##[end-action id=__anthropics_claude-code-action.__run_7;outcome=skipped;conclusion=skipped;duration_ms=0]\n##[start-action display=Post buffered inline comments;id=__anthropics_claude-code-action.__run_8]\n##[group]Run BUN_BIN=\"${GITHUB_ACTION_PATH}/bin/bun\"\nBUN_BIN=\"${GITHUB_ACTION_PATH}/bin/bun\"\n[ -x \"$BUN_BIN\" ] || BUN_BIN=\"bun\"\n# No --tsconfig-override: see the \"Run Claude Code Action\" step above.\n\"$BUN_BIN\" --no-env-file \\\n  --config=\"${GITHUB_ACTION_PATH}/bunfig.toml\" \\\n  run ${GITHUB_ACTION_PATH}/src/entrypoints/post-buffered-inline-comments.ts\nshell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}\nenv:\n  ISSUE: 19\n  BRANCH: sdlc/issue-19\n  BASE: main\n  FRESH: \n  ANTHROPIC_BASE_URL: http://127.0.0.1:4000\n  ANTHROPIC_CUSTOM_HEADERS: \n  PREVIEW_URL: http://localhost:3000\n  REWORK: \n  GITHUB_TOKEN: ***\n  REPO_OWNER: Shivam-Fl\n  REPO_NAME: autonomous-growth-os\n  PR_NUMBER: \n  ANTHROPIC_API_KEY: ***\n##[endgroup]\n##[error]The action has timed out.\n##[end-action id=__anthropics_claude-code-action.__run_8;outcome=failure;conclusion=failure;duration_ms=12]\n##[start-action display=Revoke app token;id=__anthropics_claude-code-action.__run_9]\n##[end-action id=__anthropics_claude-code-action.__run_9;outcome=skipped;conclusion=skipped;duration_ms=0]\n##[group]Run [ -f /tmp/devapp.pid ] && kill \"$(cat /tmp/devapp.pid)\" || true\n[ -f /tmp/devapp.pid ] && kill \"$(cat /tmp/devapp.pid)\" || true\nshell: /usr/bin/bash -e {0}\nenv:\n  ISSUE: 19\n  BRANCH: sdlc/issue-19\n  BASE: main\n  FRESH: \n##[endgroup]\n##[group]Run mkdir -p \"$RUNNER_TEMP/out\"\nmkdir -p \"$RUNNER_TEMP/out\"\n\nstep \"Implement\" failed in job \"build\" (conclusion: failure)",
+    "digest": "The implement stage failed and no known error pattern matched. The raw output is below.",
+    "decision": "triage",
+    "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
+    "context": {
+      "work_order_version": 1,
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36122142187",
+      "prior_signatures": []
+    }
+  }
 }
