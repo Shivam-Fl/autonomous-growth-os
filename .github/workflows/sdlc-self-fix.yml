@@ -85,7 +85,7 @@ jobs:
   fix:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     # No id-token: the action asks for one only when it is NOT given github_token.
     permissions:
       contents: read
@@ -161,7 +161,8 @@ jobs:
 
       - name: Fix the framework
         id: fix
-        timeout-minutes: 45
+        # A hang detector, sized like the implementer's: it runs on the same model.
+        timeout-minutes: 120
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
