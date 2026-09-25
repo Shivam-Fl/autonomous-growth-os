@@ -340,7 +340,14 @@
       "digest": "The qa stage failed and no known error pattern matched. The raw output is below."
     }
   ],
-  "review_history": [],
+  "review_history": [
+    {
+      "criteria": [
+        "ac-9"
+      ],
+      "head": "abe2f20a5c451b525f8205a990c6d3524772a5f0"
+    }
+  ],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:29.465Z",
   "updated_at": "2026-09-25T01:45:47.478Z",
