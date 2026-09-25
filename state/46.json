@@ -274,5 +274,24 @@
   "work_order_posted_at": "2026-09-25T17:43:04.787Z",
   "work_order_from": "plan",
   "work_order_comment": "5836827931",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "failure_packet": {
+    "issue": 46,
+    "pr": 50,
+    "head": "9029e8249cadaa092aa11925a0d926accbcf6e1c",
+    "stage": "qa",
+    "attempt": 1,
+    "occurrences": 1,
+    "error_type": "unknown",
+    "error_signature": "02725665f6f81762",
+    "raw_excerpt": "sdlc: the QA report's evidence does not hold up:\n  - T-3, T-4 prove a passing criterion and cite no evidence file\n  - cited but not under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence: shells/root-ideal.png, shells/journal-error.png, shells/approvals-partial.png, shells/opportunities-error.png, shells/approvals-partial.png, shells/root-ideal.png, shells/journal-error.png, a11y/gap-measured.png, edge/-state-fancy.png, edge/-journal-state-partial-class-not-a-class.png, video/error-retry.mp4, a11y/keyboard-journal-partial.png, video/keyboard-journal.mp4, a11y/narrow-root.png, a11y/narrow-journal.png\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.\nsdlc: the QA report's evidence does not hold up:\n  - T-3, T-4 prove a passing criterion and cite no evidence file\n  - cited but not under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence: shells/root-ideal.png, shells/journal-error.png, shells/approvals-partial.png, shells/opportunities-error.png, shells/approvals-partial.png, shells/root-ideal.png, shells/journal-error.png, a11y/gap-measured.png, edge/-state-fancy.png, edge/-journal-state-partial-class-not-a-class.png, video/error-retry.mp4, a11y/keyboard-journal-partial.png, video/keyboard-journal.mp4, a11y/narrow-root.png, a11y/narrow-journal.png\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.",
+    "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
+    "decision": "triage",
+    "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
+    "context": {
+      "work_order_version": 1,
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36170701585",
+      "prior_signatures": []
+    }
+  }
 }
