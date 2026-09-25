@@ -460,6 +460,11 @@
       "prior_signatures": [
         "qa:schema-invalid:76cd1d55a86b314d"
       ]
+    },
+    "triage": {
+      "verdict": "resume",
+      "diagnosis": "The QA agent returned verdict pass with all 8 acceptance criteria claimed pass, but its 8 API-level tests (T-1 for AC-1, T-4 for AC-3, T-8/T-9/T-10/T-11 for AC-7, T-12/T-13 for AC-8) cite no evidence file, so check-evidence.mjs correctly rejected the report at the last gate. No project-code defect was proven: BUG-1 and BUG-2 both retest fixed, no new bugs were filed, and the browser ACs (AC-2/AC-4/AC-5) do carry screenshots plus HARs. The implement fix survives untouched on the PR branch, so QA must run again and re-capture the API criteria with response bodies and HARs saved under QA_EVIDENCE_DIR and cited per test, as the previous-output feedback already instructs.",
+      "evidence": "failed-run.log check-evidence.mjs: 'T-1, T-4, T-8, T-9, T-10, T-11, T-12, T-13 prove a passing criterion and cite no evidence file' (files=18); qa-report.json from artifact 10853243570: verdict=pass, next_action=merge, evidence:[] on exactly those 8 tests, retest BUG-1/BUG-2 fixed, bugs:[]; schema validation printed 'valid'; prior_signatures=[qa:schema-invalid] is a different signature; gh pr view 29: OPEN at fd7c4d96c004ef6172acb8c6f687f0de37a666ee."
     }
   },
   "triage_history": [
@@ -470,6 +475,14 @@
       "confidence": 90,
       "diagnosis": "QA testing completed but the QA agent wrote qa-report.json with fixtures[0..2].kind set to \"tenant\", which the qa-report schema rejects (allowed: account, org, record, file, token). The judge validation step failed on shape, not on test results; project code and work-order plan are unaffected. First occurrence (prior_signatures empty). Tenants map to kind \"account\" with ref tenant_demo/tenant_qa.",
       "run": "36107233820"
+    },
+    {
+      "at": "2026-09-25T08:20:18.895Z",
+      "stage": "qa",
+      "verdict": "resume",
+      "confidence": 85,
+      "diagnosis": "The QA agent returned verdict pass with all 8 acceptance criteria claimed pass, but its 8 API-level tests (T-1 for AC-1, T-4 for AC-3, T-8/T-9/T-10/T-11 for AC-7, T-12/T-13 for AC-8) cite no evidence file, so check-evidence.mjs correctly rejected the report at the last gate. No project-code defect was proven: BUG-1 and BUG-2 both retest fixed, no new bugs were filed, and the browser ACs (AC-2/AC-4/AC-5) do carry screenshots plus HARs. The implement fix survives untouched on the PR branch, so QA ",
+      "run": "36111460449"
     }
   ],
   "qa": {
