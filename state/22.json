@@ -478,6 +478,11 @@
       "prior_signatures": [
         "ci:unknown:8585c515b6416cdc"
       ]
+    },
+    "triage": {
+      "verdict": "rerun",
+      "diagnosis": "The qa agent did not fail — it succeeded (45 turns, ~6 min, 25 evidence files, 24 cited and all present). The failure is in the separate judge job: `sdlc-ctl.mjs validate --schema qa-report` rejected the report because tests[10] (the 11th of 12 test entries) omits the required `status` field. `status` is a required per-test property with enum pass|fail|blocked|skipped and no default, so — unlike the 12 cosmetic `steps` scalar-to-array slips the validator auto-repaired on the same pass — a missing verdict is a semantic fact the validator cannot invent; the tester alone knows whether that test passed. The report, not the testing, is the broken artifact, so there is nothing to resume: the browser evidence lives only in this run's `qa-evidence` artifact and is not rehydrated into the next runner's QA_EVIDENCE_DIR, and the pipeline explicitly tells the rerun to re-test rather than copy its results. The work order (AC-1..AC-6) and the app under test are sound — no test failed and no app bug surfaced, so nothing to repair or replan. This is a non-deterministic model-output slip on a first occurrence (the only prior signature on this issue, ci:unknown:8585c515b6416cdc, is a different type), and the next qa run is not a blind repeat: previous-output.json now carries the rejected report and this exact reason, so the agent is told precisely what to correct. Not a network flake or outage — 'transient' here means a one-off agent-formatting error that the corrective-feedback rerun is designed to clear.",
+      "evidence": "failed-run.log:2101-2102 `Schema validation failed on something that cannot be mechanically fixed: - \\`tests[10]\\`: missing required property \"status\"`; :2088-2100 shows the same pass auto-repaired 12 cosmetic `tests[N].steps: a single value wrapped into a list of one` issues including tests[10], isolating the missing verdict as the sole non-mechanical fault; :1750-1751 `\"is_error\": false` and :1765 `##[end-action ...conclusion=success;duration_ms=367360`; :1812 `evidence: 25 file(s) collected, 24 cited, all present`; :2103 `The rejected qa-report is kept on issue #22's ledger as rejected_artifacts[\"qa-report\"], for the rerun to correct`; .sdlc/schemas/qa-report.json tests.items.required=['id','title','type','priority','source','status'] with status enum [pass,fail,blocked,skipped]; failure-packet.json prior_signatures=['ci:unknown:8585c515b6416cdc'] and occurrences=1, distinct from this run's error_type=schema-invalid / signature=38ca9512ba0c079e."
     }
   },
   "triage_history": [
@@ -488,6 +493,14 @@
       "confidence": 93,
       "diagnosis": "Not #22's code. The red step was the last one ('Fail if any check failed'), but the real failure is a flaky test from issue #19: test/api/decisions.test.js:184-193 (test 10, 'GET /v1/calibration returns the LIVE repository aggregate'). The test builds evaluation.evaluated_at = Date.now() - 80h inside the caller's argument object, and maturedBody (test/api/decisions.test.js:63) then builds decided_at = Date.now() - 200h, so decided_at is sampled a few microseconds AFTER evaluated_at. The maturity",
       "run": "36145154825"
+    },
+    {
+      "at": "2026-09-25T15:01:17.952Z",
+      "stage": "qa",
+      "verdict": "rerun",
+      "confidence": 90,
+      "diagnosis": "The qa agent did not fail — it succeeded (45 turns, ~6 min, 25 evidence files, 24 cited and all present). The failure is in the separate judge job: `sdlc-ctl.mjs validate --schema qa-report` rejected the report because tests[10] (the 11th of 12 test entries) omits the required `status` field. `status` is a required per-test property with enum pass|fail|blocked|skipped and no default, so — unlike the 12 cosmetic `steps` scalar-to-array slips the validator auto-repaired on the same pass — a missin",
+      "run": "36150204775"
     }
   ],
   "rejected_artifacts": {
