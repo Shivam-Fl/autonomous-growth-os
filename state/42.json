@@ -175,7 +175,7 @@
   "touch_paths": [
     "src/web/pages.js",
     "src/web/styles.css",
-    ".sdlc/memory/qa/selectors.md",
+    "test/web/pages.test.js",
     "test/web/pages.test.js"
   ],
   "acceptance": [],
