@@ -1,0 +1,24 @@
+{
+  "$id": "self-fix-consult",
+  "title": "The maintainer's answer on a self-fix",
+  "description": "Whether the project's maintainer allows a fix the pipeline wrote to its own framework. Read by self-fix-land.mjs, which merges nothing without allow: true.",
+  "type": "object",
+  "required": ["allow", "reason"],
+  "additionalProperties": false,
+  "properties": {
+    "allow": {
+      "type": "boolean",
+      "description": "true only when the change fixes the diagnosed defect, nothing else, and loosens no rule, gate, trust check, permission or prompt."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 20,
+      "description": "Why, for the person reading the PR or the refusal: what the fix changes and whether it is only the defect."
+    },
+    "concerns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Anything the maintainer of the framework should look at when the upstream PR arrives, even on an allow."
+    }
+  }
+}

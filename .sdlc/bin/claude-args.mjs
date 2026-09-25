@@ -24,6 +24,9 @@ export const TOOLS = {
   plan_reviewer:     'Bash,Read,Grep,Glob,Write',
   debug:             'Bash,Read,Grep,Glob,Write',
   implement:         'Bash,Read,Edit,Write,Grep,Glob',
+  // Edits a checkout of the framework, never this repository's: its change leaves the job as a
+  // patch, and a script decides from that whether it is inside what may change (lib/self-fix.js).
+  self_fix:          'Bash,Read,Edit,Write,Grep,Glob',
   // Write for its own review/review.md, like the council's: it posted with `gh`, and it runs
   // with a token that only reads now. Still no Edit.
   review:            'Bash,Read,Grep,Glob,Write',
@@ -59,7 +62,7 @@ export const TOOLS = {
 
 const DEFAULT_TURNS = {
   plan: 40, plan_proposer: 40, plan_critic: 40, plan_arbiter: 40, plan_reviewer: 30,
-  debug: 60, implement: 60,
+  debug: 60, implement: 60, self_fix: 60,
   review: 40, review_correctness: 40, review_design: 40,
   qa: 120, root_cause: 40, triage: 40, librarian: 50, release: 25, maintainer: 60, router: 15, project: 50,
 };
@@ -69,6 +72,7 @@ const DEFAULT_TURNS = {
 const PARENT = {
   plan_proposer: 'plan', plan_critic: 'plan', plan_arbiter: 'plan', plan_reviewer: 'plan',
   review_correctness: 'review', review_design: 'review',
+  self_fix: 'implement',
 };
 
 /** Every configurable step. doctor and the config generators read this list, not a copy of it. */
@@ -151,7 +155,7 @@ export async function probe(cfg, env = process.env) {
   }
   if (env.ANTHROPIC_API_KEY) headers['x-api-key'] = env.ANTHROPIC_API_KEY;
 
-  // A key pasted from a page that masks it — "sk-HAOhL•••••" — is not a key. fetch refused it as
+  // A key pasted from a page that masks it — "sk-abcd1•••••" — is not a key. fetch refused it as
   // "Cannot convert argument to a ByteString because the character at index 8 has a value of
   // 8226", four times over, which names neither the secret nor the fix. No API key or header
   // value holds a character outside printable ASCII, so say which one does, and where, without

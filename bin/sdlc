@@ -956,6 +956,7 @@ const run = {
     if (i === -1) { process.stdout.write('usage: sdlc install --target <path-to-repo> [--force]\n'); process.exit(1); }
     await foreground('.sdlc/bin/install.mjs', process.argv.slice(3));
   },
+  contribute: () => foreground('.sdlc/bin/contribute.mjs', process.argv.slice(3)),
   status: async () => {
     const repo = await currentRepo();
     await foreground('.sdlc/bin/sdlc-ctl.mjs', ['status'], { ...process.env, GITHUB_REPOSITORY: repo });
@@ -963,7 +964,7 @@ const run = {
 }[command];
 
 if (!run) {
-  process.stdout.write('usage: sdlc <setup|install|init|doctor|status|halt|resume>\n\n' +
+  process.stdout.write('usage: sdlc <setup|install|init|doctor|status|halt|resume|contribute>\n\n' +
     '  setup                     interactive: scan this repo and write its config\n' +
     '  install --target <repo>   copy the framework into another repository\n' +
     '  init                      labels and state branch (run inside the repo)\n' +
@@ -971,7 +972,8 @@ if (!run) {
     '                            (--live: one real request per model, from the runner)\n' +
     '  status                    show every issue in flight\n' +
     '  halt                      disable every pipeline workflow and cancel its runs\n' +
-    '  resume                    enable them again, and restart what the halt cancelled\n');
+    '  resume                    enable them again, and restart what the halt cancelled\n' +
+    '  contribute <project> <run>  open a self-fix on the framework, from a clone of it\n');
   // Asking for the usage is a success; an unknown command is not.
   process.exit(['--help', '-h', 'help'].includes(command) ? 0 : 1);
 }

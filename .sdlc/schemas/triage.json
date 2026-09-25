@@ -33,11 +33,11 @@
     },
     "framework_defect": {
       "type": "object",
-      "description": "A defect in the pipeline itself. Reported, never applied — an agent that edits its own rules to make its own failure go away leaves no auditable failure behind.",
+      "description": "A defect in the pipeline itself. Never applied by triage: plumbing goes to the bounded self-fix stage (lib/self-fix.js decides from `file`), a rule or a prompt to a person.",
       "required": ["file", "what", "fix"],
       "additionalProperties": false,
       "properties": {
-        "file": { "type": "string" },
+        "file": { "type": "string", "description": "The exact path of the file that is wrong, e.g. .sdlc/bin/lib/actions.js — it decides whether the pipeline may fix it itself." },
         "what": { "type": "string" },
         "fix":  { "type": "string" }
       }

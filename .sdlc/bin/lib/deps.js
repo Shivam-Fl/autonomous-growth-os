@@ -196,7 +196,7 @@ export const IN_FLIGHT = new Set([
 /** Labels that mean an issue is deliberately not running, and nothing should start it. */
 export const PARKED = new Set([
   'sdlc:needs-human', 'sdlc:budget-exceeded', 'sdlc:merged', 'sdlc:done',
-  'sdlc:deferred', 'sdlc:ignore', 'sdlc:coverage',
+  'sdlc:deferred', 'sdlc:ignore', 'sdlc:coverage', 'sdlc:self-fix',
 ]);
 
 // Every label that states where an issue is in the pipeline.

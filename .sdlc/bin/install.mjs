@@ -114,6 +114,18 @@ if (refusals.length) {
   process.exit(1);
 }
 
+// Fixes the pipeline made to its own copy (self-fix-land.mjs). The manifest recorded them as
+// installed, so --force replaces them without asking; say which this version already carries and
+// which it takes back out, so a defect coming back after a sync is never a surprise.
+for (const fix of previous?.self_fixes ?? []) {
+  for (const [rel, fixed] of Object.entries(fix.files ?? {})) {
+    const incoming = plan.find((p) => p.rel === rel);
+    if (!incoming) continue;
+    if (sha(incoming.from) === fixed) note(`${rel}: this version carries the pipeline's own fix from #${fix.issue}`);
+    else note(`${rel}: replacing the pipeline's own fix from #${fix.issue}${fix.upstream ? ` (${fix.upstream})` : ''} — the defect returns unless this version fixes it another way`);
+  }
+}
+
 let copied = 0;
 for (const { from, rel } of plan) {
   const dest = join(target, rel);
@@ -125,9 +137,13 @@ for (const { from, rel } of plan) {
 if (FORCE) for (const rel of retired) { rmSync(join(target, rel)); note(`removed ${rel} — no longer part of the framework`); }
 
 const sourceSha = await exec('git', ['-C', SRC, 'rev-parse', 'HEAD']).then((r) => r.stdout.trim()).catch(() => null);
+// Where this came from, so the pipeline can fix a defect in it at the source (sdlc-self-fix).
+const sourceRepo = await exec('git', ['-C', SRC, 'remote', 'get-url', 'origin'])
+  .then((r) => /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(r.stdout.trim())?.[1] ?? null).catch(() => null);
 mkdirSync(dirname(MANIFEST), { recursive: true });
 writeFileSync(MANIFEST, `${JSON.stringify({
   source_sha: sourceSha,
+  ...(sourceRepo ? { source_repo: sourceRepo } : {}),
   files: Object.fromEntries(plan.map(({ from, rel }) => [rel, sha(from)])),
 }, null, 2)}\n`);
 ok(`${copied} files copied, ${plan.length - copied} already current · .sdlc/manifest.json records this version`);
@@ -329,6 +345,7 @@ runtime:
     plan_reviewer:      claude-opus-5
     debug:              claude-opus-5
     implement:          ""
+    self_fix:           ""   # fixes the pipeline's own plumbing; empty inherits implement
     review:             claude-opus-5
     review_correctness: ""
     review_design:      ""
@@ -443,6 +460,13 @@ gates:
   qa_files_issues:   true   # QA opens issues for bugs outside this PR's scope
   min_route_confidence: 70   # a ROUTE below this reaches a human, absent counts as below
   max_route_risk:       70   # and so does a route through something this expensive to get wrong
+
+# A defect in the framework's plumbing is fixed by the pipeline itself, proven, consented to by
+# the maintainer agent, merged here and raised on the framework (README: "The pipeline fixes its
+# own bugs"). Never a rule or a prompt. A private framework needs the SDLC_FRAMEWORK_TOKEN secret.
+self_fix:
+  enabled: true
+  per_day: 3               # self-fix runs started in any 24 hours
 
 limits:
   attempts: 10

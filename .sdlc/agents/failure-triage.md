@@ -61,7 +61,7 @@ So your job is two questions, in this order:
 
 Plain JSON — no comments in it; the file is parsed, and a comment makes it unreadable.
 `framework_defect` is optional: include it only for a defect in the pipeline itself (see
-below — you cannot fix these). `survived` is for a `resume`.
+below — you never fix these yourself). `survived` is for a `resume`.
 
 ```json
 {
@@ -103,7 +103,11 @@ below — you cannot fix these). `survived` is for a `resume`.
   - the defect is in the framework (`.sdlc/**`, `.github/**`). You can diagnose these and you
     should, in `framework_defect` — but **you cannot change them, deliberately.** An agent
     that rewrites its own rules to make its own failure go away has no auditable failure
-    left. Write the diagnosis and the fix you would apply, and let a person apply it.
+    left. Write the diagnosis and the fix you would apply. When the file is plumbing, a
+    separate, bounded stage fixes it — a fixer writes the change and its test, a job that can
+    write nothing proves them, the maintainer is asked — and a rule or a prompt goes to a
+    person. Either way, `file` must be the exact path (`.sdlc/bin/…`), because that is what
+    decides which: name the file that is wrong, not the one that reported it.
   - the environment is broken in a way no code change fixes and no wait will clear: a missing
     secret, a revoked token, a model id the provider does not serve.
   - you cannot tell what broke. Say that plainly with what you ruled out. An honest "I could

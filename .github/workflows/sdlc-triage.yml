@@ -179,8 +179,9 @@ jobs:
 
             You cannot change `.sdlc/**` or `.github/**`, and you have no Edit tool. That is
             deliberate, not an oversight. If the defect is in the framework, diagnose it in
-            `framework_defect` — file, what is wrong, and the fix you would apply — and
-            escalate so a person applies it.
+            `framework_defect` — the exact file path, what is wrong, and the fix you would
+            apply — and escalate. Plumbing is then fixed by a separate, bounded stage; a rule
+            or a prompt goes to a person.
 
             Write `triage.json`, validated against .sdlc/schemas/triage.json. Never `rerun` a
             failure you could not explain: if the answer is "try again and see", the answer is

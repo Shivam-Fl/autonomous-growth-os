@@ -20,6 +20,7 @@ import { loadArtifact } from './lib/artifact.js';
 import { resolveStage, rerunTarget, retryHint } from './lib/flow-graph.js';
 import { readWorkOrder } from './lib/work-order.js';
 import { parkForCooldown, waitTries, mergeOnlyStage } from './lib/failure.js';
+import { fixable, selfFixConfig } from './lib/self-fix.js';
 
 const exec = promisify(execFile);
 const repo = repoOf();
@@ -91,12 +92,32 @@ if (verdict === 'rerun' && !t.transient) {
   override = 'a `rerun` verdict has to name a transient cause — nothing about the repository ' +
              'changed, so re-running an unexplained failure spends an attempt to learn nothing';
 }
-// A framework defect is diagnosed here and fixed by a person, always. An agent that repairs
-// its own rules to make its own failure go away leaves no auditable failure behind.
+// A framework defect is never this agent's to fix, and never a re-run: the next run would hit it
+// again. Plumbing goes to the bounded self-fix stage (lib/self-fix.js); a rule, a prompt, or
+// anything past the stage's own limits goes to a person, as every framework defect once did.
 if (t.framework_defect && verdict !== 'escalate') {
   verdict = 'escalate';
-  override = 'the defect is in the pipeline itself, which no agent here may change — the ' +
-             'diagnosis and the proposed fix are above, for a person to apply';
+  override = 'the defect is in the pipeline itself, which no triage may change';
+}
+const selfFix = t.framework_defect && verdict === 'escalate' ? await selfFixable(t.framework_defect) : null;
+
+/** Can the self-fix stage take this defect? `{ ok }`, or `{ ok: false, why }` for the comment. */
+async function selfFixable(defect) {
+  const sf = selfFixConfig(cfg);
+  if (!sf.enabled) return { ok: false, why: '`self_fix.enabled` is false in .sdlc/config.yml' };
+  if (merging) return { ok: false, why: 'it failed the merge of a PR QA already passed, which waits at `qa-pass` for a person' };
+  const can = fixable(defect.file);
+  if (!can.ok) return can;
+  const { ledger: record } = await readLedger(repo, 'self-fix').catch(() => ({ ledger: null }));
+  const fixes = record?.fixes ?? [];
+  const file = String(defect.file).replace(/^\.\//, '').replace(/:\d+(:\d+)?$/, '');
+  // Once per defect per issue. A second failure on the same file after a fix means the fix did
+  // not hold, or the self-fix itself never finished; either way a person should look.
+  const before = fixes.find((f) => f.issue === issue && f.stage === stage && String(f.file ?? '').replace(/:\d+(:\d+)?$/, '') === file);
+  if (before) return { ok: false, why: `the pipeline already tried to fix \`${file}\` for \`${stage}\` on this issue (${before.status})` };
+  const today = fixes.filter((f) => Date.now() - Date.parse(f.at) < 24 * 3600_000).length;
+  if (today >= sf.perDay) return { ok: false, why: `${today} self-fixes have run in the last 24 hours, which is \`self_fix.per_day\`` };
+  return { ok: true };
 }
 // A repair is a change to the code, and before a pull request exists there is no code to
 // change: what a planning stage's defect can be repaired with is a better plan.
@@ -132,9 +153,13 @@ const body = [
     '',
     `**The fix it would apply:** ${t.framework_defect.fix}`,
     '',
-    '_No agent here can change `.sdlc/**` or `.github/**`. That is deliberate: an agent that ' +
-    'rewrites its own rules to make its own failure go away leaves nothing behind to audit. ' +
-    'This is a diagnosis for a person to act on._',
+    selfFix?.ok
+      ? '_This is plumbing, so the pipeline fixes it itself: a fixer writes the fix and a regression ' +
+        'test, a job that can write nothing proves them, the maintainer is asked, and only then does ' +
+        'it merge — then `' + stage + '` runs again. It may not touch a rule or a prompt; if it cannot ' +
+        'land the fix, this stops for a person._'
+      : `_Not something the pipeline may fix itself: ${selfFix?.why ?? 'no file was named'}. This is a ` +
+        'diagnosis for a person to act on._',
   ].join('\n') : null,
   override ? `\n_Overridden to \`${verdict}\`: ${override}._` : null,
   '',
@@ -174,6 +199,38 @@ await updateLedger(repo, issue, (l) => {
 setOutput('verdict', verdict);
 
 // --- act ----------------------------------------------------------------------
+if (verdict === 'escalate' && selfFix?.ok) {
+  // Parked like a cooldown, with the self-fix run as its wake-up: needs-human frees the slot, and
+  // the `retry_after` is a backstop — if the self-fix dies without landing or refusing, the
+  // watchdog runs the stage again, it fails the same way, and the once-per-defect rule above
+  // stops it for a person.
+  const parked = await updateLedger(repo, issue, (l) => (l && !l.halted ? {
+    ...l, retry_after: new Date(Date.now() + 4 * 3600_000).toISOString(), retry_stage: stage, parked_at: new Date().toISOString(),
+  } : null)).then((w) => !w.skipped).catch(() => false);
+  const started = parked && await updateLedger(repo, 'self-fix', (rec) => ({ ...(rec ?? {}), fixes: [...(rec?.fixes ?? []), {
+    id: `${issue}-${failedRun}`, at: new Date().toISOString(), issue, stage, failed_run: failedRun,
+    file: t.framework_defect.file, what: t.framework_defect.what, fix: t.framework_defect.fix,
+    diagnosis: t.diagnosis, evidence: t.evidence, status: 'dispatched',
+  }].slice(-200) })).then(() => gh(['workflow', 'run', 'sdlc-self-fix.yml', '-f', `issue=${issue}`, '-f', `stage=${stage}`,
+    '-f', `failed_run=${failedRun}`, ...(pr ? ['-f', `pr=${pr}`] : [])])).then(() => true)
+    .catch((e) => { process.stdout.write(`::warning::could not start the self-fix: ${e.message}\n`); return false; });
+  if (started) {
+    await markResume(repo, issue, resolveStage(stage, { issue, pr })?.stage ?? stage, 'retry');
+    await advance(issue, 'needs-human', { agent: 'triage' });
+    process.stdout.write(`issue #${issue}: framework defect in ${t.framework_defect.file} — self-fix started\n`);
+    process.exit(0);
+  }
+  // The comment above promised a self-fix; say that it did not start, rather than going quiet.
+  await updateLedger(repo, issue, (l) => {
+    if (!l?.retry_after) return null;
+    const next = { ...l };
+    delete next.retry_after; delete next.retry_stage; delete next.parked_at;
+    return next;
+  }).catch(() => {});
+  await stop('The self-fix could not be started, so this waits for a person to apply the fix above. ' +
+    `${retryHint(stage)} runs \`${stage}\` again once it is in.`);
+  process.exit(0);
+}
 if (verdict === 'escalate') {
   await stop();
   process.stdout.write(`issue #${issue}: escalated — ${t.diagnosis}\n`);

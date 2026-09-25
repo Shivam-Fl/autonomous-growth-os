@@ -66,6 +66,28 @@ jobs:
       - name: Merge the memory pull requests nobody else will
         run: node .sdlc/bin/merge-memory-prs.mjs
 
+  # The day's self-fixes, on their tracking issue. Its own job: it comments, and nothing else
+  # tonight needs to.
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read      # the self-fix record on sdlc-state
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+      - name: Say what the pipeline fixed about itself
+        run: node .sdlc/bin/self-fix-digest.mjs
+
   distil:
     # After the merge, whatever it did: tonight's distillation starts from the memory it merged,
     # so tonight's PR is cut from a base that already has last night's, and does not conflict

@@ -32,6 +32,7 @@
 - { name: "sdlc:ignore",          color: "ffffff", description: "Not for the pipeline — nothing starts it" }
 - { name: "sdlc:deferred",        color: "d4c5f9", description: "Split out of an epic and deliberately left for later" }
 - { name: "sdlc:coverage",        color: "c2e0c6", description: "The pipeline's spec-coverage tracker — a report, not work" }
+- { name: "sdlc:self-fix",        color: "c2e0c6", description: "The pipeline fixed its own framework — the fix PR, and the daily digest" }
 
 # Kinds a person marks on purpose. The Router's free rules take an audit only from this label or
 # an `Audit:` title: a keyword anywhere in the title closed features unbuilt as audits.
