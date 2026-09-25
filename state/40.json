@@ -294,10 +294,11 @@
     "src/api/routes.js",
     "src/web/pages.js",
     "scripts/seed.js",
+    "test/domain/opportunity-readability.test.js",
     "test/domain/opportunities.test.js",
     "test/api/opportunities.test.js",
-    "test/web/pages.test.js",
-    "test/ops/seed.test.js"
+    "test/ops/seed.test.js",
+    "test/web/pages.test.js"
   ],
   "acceptance": [],
   "planned_route": [
