@@ -26,7 +26,7 @@ function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function forgot(code, field, message) {
+function rejected(code, field, message = 'invalid evaluation counts') {
   return { ok: false, error: experimentError(code, `${field}: ${message}`, { field }) };
 }
 
@@ -40,21 +40,21 @@ function forgot(code, field, message) {
  */
 export function validateExperiment(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return forgot('EXP_BAD_ID', 'experiment', 'body must be an object');
+    return rejected('EXP_BAD_ID', 'experiment', 'body must be an object');
   }
   if (typeof input.experiment_id !== 'string' || !input.experiment_id.startsWith('exp_') || input.experiment_id.length <= 4) {
-    return forgot('EXP_BAD_ID', 'experiment_id', `must be a string starting with exp_, got ${JSON.stringify(input.experiment_id)}`);
+    return rejected('EXP_BAD_ID', 'experiment_id', `must be a string starting with exp_, got ${JSON.stringify(input.experiment_id)}`);
   }
   if (typeof input.tenant_id !== 'string' || input.tenant_id.length === 0) {
-    return forgot('EXP_BAD_ID', 'tenant_id', `must be a non-empty string, got ${JSON.stringify(input.tenant_id)}`);
+    return rejected('EXP_BAD_ID', 'tenant_id', `must be a non-empty string, got ${JSON.stringify(input.tenant_id)}`);
   }
   if (!Array.isArray(input.arms) || input.arms.length < 2
     || !input.arms.every((arm) => arm && typeof arm.id === 'string' && arm.id.length > 0
       && typeof arm.name === 'string' && arm.name.length > 0)) {
-    return forgot('EXP_BAD_ARMS', 'arms', 'must be an array of at least two {id, name} objects');
+    return rejected('EXP_BAD_ARMS', 'arms', 'must be an array of at least two {id, name} objects');
   }
   if (!input.caps || typeof input.caps !== 'object') {
-    return forgot('EXP_BAD_CAPS', 'caps', 'must be an object with max_spend_micros and max_downside_micros');
+    return rejected('EXP_BAD_CAPS', 'caps', 'must be an object with max_spend_micros and max_downside_micros');
   }
   for (const key of ['max_spend_micros', 'max_downside_micros']) {
     const micros = input.caps[key];
@@ -63,7 +63,7 @@ export function validateExperiment(input) {
     }
   }
   if (!input.stopRules || typeof input.stopRules !== 'object') {
-    return forgot('EXP_BAD_STOP_RULES', 'stopRules', 'must be an object with min_runtime_hours, min_sample, success_threshold and harm_threshold');
+    return rejected('EXP_BAD_STOP_RULES', 'stopRules', 'must be an object with min_runtime_hours, min_sample, success_threshold and harm_threshold');
   }
   for (const key of ['min_sample']) {
     const value = input.stopRules[key];
@@ -82,11 +82,11 @@ export function validateExperiment(input) {
   }
   const state = input.state ?? 'draft';
   if (!EXPERIMENT_STATES.includes(state)) {
-    return forgot('EXP_BAD_STATE', 'state', `must be one of ${EXPERIMENT_STATES.join('|')}, got ${JSON.stringify(state)}`);
+    return rejected('EXP_BAD_STATE', 'state', `must be one of ${EXPERIMENT_STATES.join('|')}, got ${JSON.stringify(state)}`);
   }
   if (typeof input.data_through !== 'string' || input.data_through.length === 0
     || Number.isNaN(Date.parse(input.data_through))) {
-    return forgot('EXP_BAD_DATA_THROUGH', 'data_through', 'must be a parseable UTC ISO-8601 timestamp');
+    return rejected('EXP_BAD_DATA_THROUGH', 'data_through', 'must be a parseable UTC ISO-8601 timestamp');
   }
   return {
     ok: true,
@@ -145,26 +145,38 @@ export function zStatistic(counts) {
 export function evaluateExperiment({ counts, min_sample: minSample, threshold = SEPARATION_Z }) {
   if (!counts || counts.control_conversions === undefined || counts.control_exposures === undefined
     || counts.treatment_conversions === undefined || counts.treatment_exposures === undefined) {
-    return forgotChild('EXP_BAD_COUNTS', 'counts');
+    return rejected('EXP_BAD_COUNTS', 'counts');
   }
   for (const key of ['control_conversions', 'control_exposures', 'treatment_conversions', 'treatment_exposures']) {
     const value = counts[key];
     if (!Number.isSafeInteger(value) || value < 0) {
-      return forgotChild('EXP_BAD_COUNTS', key);
+      return rejected('EXP_BAD_COUNTS', key);
     }
   }
   if (counts.control_exposures === 0 || counts.treatment_exposures === 0) {
-    return forgotChild('EXP_BAD_COUNTS', 'exposures');
+    return rejected('EXP_BAD_COUNTS', 'exposures');
+  }
+  // Conversions cannot exceed the exposures that produced them: such counts
+  // make the pooled standard error the square root of a negative number, and a
+  // NaN z would fall straight through the separation test into a forced
+  // win/loss verdict. Reject them instead of scoring them.
+  if (counts.control_conversions > counts.control_exposures) {
+    return rejected('EXP_BAD_COUNTS', 'control_conversions', 'cannot exceed control_exposures');
+  }
+  if (counts.treatment_conversions > counts.treatment_exposures) {
+    return rejected('EXP_BAD_COUNTS', 'treatment_conversions', 'cannot exceed treatment_exposures');
   }
   if (!Number.isSafeInteger(minSample) || minSample < 1) {
-    return forgotChild('EXP_BAD_COUNTS', 'min_sample');
+    return rejected('EXP_BAD_COUNTS', 'min_sample');
   }
 
   if (totalConversions(counts) < minSample) {
     return { outcome: 'inconclusive', reason: 'underpowered', next_state: 'inconclusive' };
   }
   const z = zStatistic(counts);
-  if (Math.abs(z) < threshold) {
+  // A non-finite z separates nothing, so it is inconclusive like any other
+  // unseparated pair — never a win or a loss.
+  if (!Number.isFinite(z) || Math.abs(z) < threshold) {
     return { outcome: 'inconclusive', reason: 'no-separation', next_state: 'inconclusive', z };
   }
   return {
@@ -174,15 +186,14 @@ export function evaluateExperiment({ counts, min_sample: minSample, threshold = 
   };
 }
 
-function forgotChild(code, field) {
-  return { ok: false, error: experimentError(code, `${field}: invalid evaluation counts`, { field }) };
-}
-
 /**
- * Guard rail (spec section 27): every experiment carries caps and an
+ * Stop-rule arithmetic (spec section 27): every experiment carries caps and an
  * early-stop harm threshold. Returns {triggered, reason} — reason 'cap' when
  * cumulative spend has reached max_spend_micros, 'harm' when the treatment
  * converts below the control by more than harm_threshold (a fraction).
+ * This slice stores, renders and computes the rules; enforcing them against a
+ * live spend or kill switch is out of scope (see the work order), so nothing
+ * calls this yet.
  */
 export function stopRuleTriggered({ counts, stopRules, caps, spend_micros: spendMicros = null }) {
   const { control_conversions, control_exposures, treatment_conversions, treatment_exposures } = counts ?? {};

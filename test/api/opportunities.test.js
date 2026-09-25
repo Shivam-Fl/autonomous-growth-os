@@ -202,6 +202,133 @@ test('the evaluation row resists mutation through the repository surface too', (
   assert.deepEqual(rows.map((row) => row.result), ['inconclusive', 'win']);
 });
 
+test('a body min_sample below the stored stop rule cannot force a verdict', async () => {
+  // exp_alpha_gate stores min_sample 100. The same thin counts are inconclusive
+  // under that gate and a clear win under a body min_sample of 1 — so a caller
+  // that lowers the gate would persist a win the experiment's own stop rule
+  // forbids. The stored rule is the floor: a body may demand more, never less.
+  const created = await (await fetch(url('/v1/experiments'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...EXPERIMENT, experiment_id: 'exp_alpha_gate' }),
+  })).json();
+  assert.equal(created.created, true);
+
+  const thinCounts = {
+    tenant_id: 'tenant_alpha',
+    control_conversions: 1, control_exposures: 100, treatment_conversions: 10, treatment_exposures: 100,
+  };
+  const lowered = await (await fetch(url('/v1/experiments/exp_alpha_gate/evaluate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...thinCounts, min_sample: 1 }),
+  })).json();
+  assert.equal(lowered.outcome, 'inconclusive', 'a body min_sample of 1 does not beat the stored rule');
+  assert.equal(lowered.reason, 'underpowered');
+  assert.equal(lowered.next_state, 'inconclusive');
+
+  const stored = repositories.experiments.get('tenant_alpha', 'exp_alpha_gate');
+  assert.equal(stored.state, 'inconclusive', 'no win or matured was persisted');
+  assert.equal(stored.evaluation_result, 'inconclusive');
+
+  // A stricter gate than the stored rule is honoured: the caller may hold the
+  // experiment longer than its stop rule requires, just not shorter.
+  const raised = await (await fetch(url('/v1/experiments/exp_alpha_gate/evaluate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...thinCounts, min_sample: 1000 }),
+  })).json();
+  assert.equal(raised.outcome, 'inconclusive');
+  assert.equal(raised.reason, 'underpowered');
+});
+
+test('impossible counts return 400 and leave the experiment state untouched', async () => {
+  const before = repositories.experiments.get('tenant_alpha', 'exp_alpha_gate');
+  const response = await fetch(url('/v1/experiments/exp_alpha_gate/evaluate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tenant_id: 'tenant_alpha',
+      control_conversions: 99, control_exposures: 10, treatment_conversions: 1, treatment_exposures: 10,
+      min_sample: 1,
+    }),
+  });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.equal(body.code, 'EXP_BAD_COUNTS');
+  assert.equal(body.outcome, undefined, 'no verdict on the wire');
+  assert.equal(body.stack, undefined);
+
+  const after = repositories.experiments.get('tenant_alpha', 'exp_alpha_gate');
+  assert.equal(after.state, before.state, 'the state is untouched');
+  assert.equal(after.evaluation_result, before.evaluation_result);
+  assert.equal(after.evaluated_at, before.evaluated_at);
+  assert.equal(
+    repositories.evaluations.listForExperiment('tenant_alpha', 'exp_alpha_gate').length,
+    2,
+    'only the two inconclusive evaluations were appended',
+  );
+});
+
+test('an idempotent re-post reports the stored row, not the discarded body', async () => {
+  const ignored = await (await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...EXPENSIVE,
+      opportunity_id: 'opp_alpha_repost',
+      value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    }),
+  })).json();
+  assert.equal(ignored.created, true);
+  assert.equal(ignored.expected_contribution_micros, 1_700_000_000);
+
+  // Same id, entirely different components: the row is not overwritten, and
+  // every field of the response — the contribution included — describes the
+  // row that exists.
+  const repost = await (await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...EXPENSIVE,
+      opportunity_id: 'opp_alpha_repost',
+      value: 100, pSuccess: 0.1, fit: 0.1, infoValue: 0.1, reversibility: 0.1, cost: 9999, downside: 9, delay: 9,
+    }),
+  })).json();
+  assert.equal(repost.created, false);
+  assert.equal(repost.score, 0.9208, 'the stored score, not the discarded body');
+  assert.equal(repost.components.value, 6000, 'the stored components, not the discarded body');
+  assert.equal(
+    repost.expected_contribution_micros,
+    1_700_000_000,
+    'the contribution is computed from the stored components too',
+  );
+});
+
+test('an opportunity whose component product overflows is rejected and never ranks', async () => {
+  const response = await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...CHEAP,
+      opportunity_id: 'opp_alpha_overflow',
+      value: 1e308, infoValue: 1e308,
+    }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, 'OPP_BAD_COMPONENT');
+
+  const listing = await (await fetch(url('/v1/opportunities?tenant_id=tenant_alpha'))).json();
+  assert.equal(
+    listing.opportunities.some((row) => row.opportunity_id === 'opp_alpha_overflow'),
+    false,
+    'nothing was stored',
+  );
+  for (const row of listing.opportunities) {
+    assert.equal(Number.isFinite(row.score), true, `${row.opportunity_id} has a finite stored score`);
+  }
+});
+
 test('tenant B cannot read tenant A rows through either listing', async () => {
   const betaOpps = await (await fetch(url('/v1/opportunities?tenant_id=tenant_beta'))).json();
   assert.deepEqual(betaOpps.opportunities, [], 'tenant_beta sees none of tenant_alpha rank');

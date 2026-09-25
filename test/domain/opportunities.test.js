@@ -117,6 +117,34 @@ test('a negative cost or value rejects with OPP_BAD_MONEY', () => {
   assert.equal(cost.error.code, 'OPP_BAD_MONEY');
 });
 
+test('components whose product overflows are rejected, so an infinite score is never stored', () => {
+  // Every component is finite and in range on its own: value 1e308 times
+  // infoValue 1e308 overflows only as a product. Unbounded, the score would be
+  // Infinity, which serialises as null and sorts above every real bet.
+  const result = validateOpportunity({ ...GENERIC, value: 1e308, infoValue: 1e308 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'OPP_BAD_COMPONENT');
+  assert.ok(result.error.message.length > 0);
+});
+
+test('an unscorable record scores finite and ranks last, never above a real bet', () => {
+  // validateOpportunity is the gate for that shape, so the record is built by
+  // hand here: scoreOpportunity must still return a finite number and the rank
+  // function must place it below every real score (SQL would sort it first).
+  const overflow = scoreOpportunity({ ...GENERIC, value: 1e308, infoValue: 1e308 });
+  assert.equal(overflow, 0, 'an overflow scores 0 — finite, and the lowest rank');
+  const ranked = rankOpportunities([
+    { opportunity_id: 'opp_overflow', score: overflow },
+    { opportunity_id: 'opp_ok', score: 2.16 },
+    { opportunity_id: 'opp_nan', score: Number.NaN },
+  ]);
+  assert.deepEqual(
+    ranked.map((row) => row.opportunity_id),
+    ['opp_ok', 'opp_overflow', 'opp_nan'],
+    'real scores first, unscorable rows last, deterministic by id',
+  );
+});
+
 test('opportunity ids must start with opp_', () => {
   for (const id of ['evt_nope', 'opp', undefined, '']) {
     const result = validateOpportunity({ ...GENERIC, opportunity_id: id });

@@ -129,6 +129,23 @@ test('malformed experiments reject with the stable codes, never a throw', () => 
   assert.equal(state.error.code, 'EXP_BAD_STATE');
 });
 
+test('conversions above their exposures reject with EXP_BAD_COUNTS, never a verdict', () => {
+  // 99 conversions in 10 exposures makes the pooled standard error the square
+  // root of a negative number: z is NaN, and NaN fails every comparison, so a
+  // separation check that only tests |z| < threshold falls through into a
+  // forced win/loss. The counts are arithmetically impossible, not merely
+  // weak, so they are rejected before the z-test.
+  for (const counts of [
+    { control_conversions: 99, control_exposures: 10, treatment_conversions: 1, treatment_exposures: 10 },
+    { control_conversions: 1, control_exposures: 10, treatment_conversions: 11, treatment_exposures: 10 },
+  ]) {
+    const result = evaluateExperiment({ counts, min_sample: 1 });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'EXP_BAD_COUNTS');
+    assert.equal(result.outcome, undefined, 'no outcome at all, so nothing can be persisted');
+  }
+});
+
 test('the z statistic separates in the direction of the better-converting arm', () => {
   const win = evaluateExperiment({
     counts: { control_conversions: 30, control_exposures: 1000, treatment_conversions: 70, treatment_exposures: 1000 },

@@ -475,11 +475,88 @@ test('the composer is mounted on the error shell and on the ideal page', async (
   const ideal = await renderPage('/experiments', { repositories: repos });
   assert.match(ideal, /data-testid="hypothesis-composer"/);
   assert.match(ideal, /<label for="composer-title">Title</);
-  assert.match(ideal, /data-draft-key="opp_exp_draft_title"/);
+  // Every composer field carries its own namespaced draft key: the fields
+  // client.js persists are exactly the ones the markup declares.
+  for (const key of ['opp_exp_draft_title', 'opp_exp_draft_thesis', 'opp_exp_draft_cap']) {
+    assert.match(ideal, new RegExp(`data-draft-key="${key}"`), `${key} is persisted`);
+  }
 
   const errorShell = await renderPage('/experiments', { repositories: repos, override: 'error' });
   assert.match(errorShell, /Experiment fetch failed/, 'the error panel still renders');
   assert.match(errorShell, /data-testid="hypothesis-composer"/, 'the composer stays mounted beside the error');
+  for (const key of ['opp_exp_draft_title', 'opp_exp_draft_thesis', 'opp_exp_draft_cap']) {
+    assert.match(errorShell, new RegExp(`data-draft-key="${key}"`), `${key} survives the error shell`);
+  }
+});
+
+// A minimal DOM for client.js: the fields the composer markup declares, the
+// localStorage behind them, and nothing else the page script touches. Enough
+// to drive the draft round trip AC-5 claims — type, reload, still there.
+function draftHarness({ fields = {}, stored = {} } = {}) {
+  const listeners = new Map();
+  const storage = new Map(Object.entries(stored));
+  const made = Object.keys(fields).map((key) => ({
+    dataset: { draftKey: key },
+    value: fields[key],
+    addEventListener(type, handler) {
+      listeners.set(`${key}:${type}`, handler);
+    },
+  }));
+  globalThis.document = {
+    title: 'Experiments · live',
+    body: { dataset: { state: 'live' } },
+    getElementById: () => null,
+    querySelectorAll: (selector) => (selector === '[data-draft-key]' ? made : []),
+    querySelector: () => null,
+    addEventListener: () => {},
+  };
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+      setItem: (key, value) => storage.set(key, value),
+    },
+  };
+  return { fields: made, listeners, storage };
+}
+
+let clientLoad = 0;
+async function loadClient() {
+  clientLoad += 1;
+  await import(`../../src/web/client.js?draft-run=${clientLoad}`);
+}
+
+test('typed composer fields are saved to localStorage and restored on the next load', async () => {
+  try {
+    const typed = draftHarness({
+      fields: { opp_exp_draft_title: '', opp_exp_draft_thesis: '', opp_exp_draft_cap: '' },
+    });
+    await loadClient();
+    const type = (key, value) => {
+      typed.fields.find((field) => field.dataset.draftKey === key).value = value;
+      typed.listeners.get(`${key}:input`)();
+    };
+    type('opp_exp_draft_title', 'Exact-intent search deserves more budget');
+    type('opp_exp_draft_thesis', 'Qualified CPL should fall because intent is narrower.');
+    type('opp_exp_draft_cap', '500000000');
+    assert.equal(typed.storage.get('opp_exp_draft_title'), 'Exact-intent search deserves more budget');
+    assert.equal(typed.storage.get('opp_exp_draft_thesis'), 'Qualified CPL should fall because intent is narrower.');
+    assert.equal(typed.storage.get('opp_exp_draft_cap'), '500000000');
+
+    // The reload: fresh, empty fields, the same storage behind them — what the
+    // error shell does to a draft the user is still writing.
+    const reloaded = draftHarness({
+      fields: { opp_exp_draft_title: '', opp_exp_draft_thesis: '', opp_exp_draft_cap: '' },
+      stored: Object.fromEntries(typed.storage),
+    });
+    await loadClient();
+    const restored = Object.fromEntries(reloaded.fields.map((field) => [field.dataset.draftKey, field.value]));
+    assert.equal(restored.opp_exp_draft_title, 'Exact-intent search deserves more budget');
+    assert.equal(restored.opp_exp_draft_thesis, 'Qualified CPL should fall because intent is narrower.');
+    assert.equal(restored.opp_exp_draft_cap, '500000000');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
 });
 
 test('an empty database still renders the research-prompt empty state', async () => {
@@ -490,4 +567,23 @@ test('an empty database still renders the research-prompt empty state', async ()
   assert.match(html, /lead quality dropped by campaign/);
   assert.match(html, /search demand is growing for your converting intent/);
   assert.match(html, /below your current qualified CPL/);
+
+  // The copy above is static and also renders on the pre-change page, so it
+  // cannot tell the two branches apart. What this change actually moved is the
+  // branch condition: the queue is now driven by the repository, so one stored
+  // opportunity must replace the empty state with the ranked list.
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_pages_first',
+    record: {
+      opportunity_id: 'opp_pages_first', tenant_id: 'tenant_demo', name: 'First bet',
+      value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    },
+    score: 0.9208,
+  });
+  const ranked = await renderPage('/opportunities', { repositories: repos });
+  assert.doesNotMatch(ranked, /data-testid="opportunities-empty"/, 'the empty state yields to the ranked list');
+  assert.match(ranked, /data-testid="opportunity-row"/);
+  assert.match(ranked, /opp_pages_first/);
+  assert.match(ranked, /0\.9208/, 'the stored score renders on the row');
 });

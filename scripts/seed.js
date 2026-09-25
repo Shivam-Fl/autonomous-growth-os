@@ -300,7 +300,6 @@ const SEED_EXPERIMENTS = [
     caps: { max_spend_micros: 500_000_000, max_downside_micros: 200_000_000 },
     stopRules: { min_runtime_hours: 48, min_sample: 100, success_threshold: 0.1, harm_threshold: 0.2 },
     state: 'running',
-    data_through: null,
   },
   {
     experiment_id: 'exp_seed_underpowered',
@@ -309,7 +308,6 @@ const SEED_EXPERIMENTS = [
     caps: { max_spend_micros: 300_000_000, max_downside_micros: 100_000_000 },
     stopRules: { min_runtime_hours: 24, min_sample: 100, success_threshold: 0.1, harm_threshold: 0.2 },
     state: 'inconclusive',
-    data_through: null,
   },
 ];
 

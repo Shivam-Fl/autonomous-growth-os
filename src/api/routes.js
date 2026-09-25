@@ -62,6 +62,22 @@ function errorResponse(response, status, error) {
     .json({ code: error.code ?? 'INTERNAL', message: error.message, ...(error.details ? { details: error.details } : {}) });
 }
 
+/**
+ * The min-sample gate an evaluation runs against. The experiment's own
+ * persisted stop rule is the floor: a caller may demand MORE sample than the
+ * stored rule (a stricter, voluntary hold) but never less, because a body
+ * min_sample below the rule would let thin counts reach the z-test and be
+ * persisted as a win or loss that the experiment's own stop rule forbids.
+ */
+function evaluationMinSample(experiment, requested) {
+  const stored = experiment.record?.stopRules?.min_sample;
+  const ask = Number.isSafeInteger(requested) && requested > 0 ? requested : null;
+  if (stored === undefined) {
+    return ask;
+  }
+  return ask === null ? stored : Math.max(ask, stored);
+}
+
 export function buildApp({ repositories }) {
   const app = express();
   app.disable('x-powered-by');
@@ -345,7 +361,10 @@ export function buildApp({ repositories }) {
       name: result.name,
       components: result.components,
       score: result.score,
-      expected_contribution_micros: expectedContribution(opportunity),
+      // From the STORED row, not the request body: on an idempotent re-post
+      // the body is discarded, and the response must describe the record that
+      // exists rather than the one that was ignored.
+      expected_contribution_micros: expectedContribution(result.components),
       created: result.created,
     });
   });
@@ -430,9 +449,7 @@ export function buildApp({ repositories }) {
       treatment_conversions: body.treatment_conversions,
       treatment_exposures: body.treatment_exposures,
     };
-    const minSample = Number.isSafeInteger(body.min_sample) && body.min_sample > 0
-      ? body.min_sample
-      : experiment.record.stopRules?.min_sample;
+    const minSample = evaluationMinSample(experiment, body.min_sample);
     const evaluated = evaluateExperiment({ counts, min_sample: minSample });
     if (evaluated.error) {
       return errorResponse(response, 400, evaluated.error);

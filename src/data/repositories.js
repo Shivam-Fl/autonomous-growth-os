@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { utcNow } from './db.js';
 import { SCOPE_FIELDS } from '../memory/learnings.js';
+import { rankOpportunities } from '../domain/opportunities.js';
 
 function parseJson(text, fallback) {
   if (text === null || text === undefined) {
@@ -615,9 +616,11 @@ function createOpportunityRepository(db) {
       return shape(selectOne.get(tenantId, opportunityId));
     },
 
-    /** Ranked rows in stored-score order; the view never re-sorts. */
+    /** Ranked rows in stored-score order; the view never re-sorts. The order
+     * is decided by the domain's one rank function, so the shipped listing and
+     * the unit-tested rankOpportunities can never drift apart. */
     list(tenantId) {
-      return selectRanked.all(tenantId).map(shape);
+      return rankOpportunities(selectRanked.all(tenantId).map(shape));
     },
   };
 }
