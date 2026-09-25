@@ -17,26 +17,30 @@ const SIX_HOURS_AGO = () => new Date(Date.now() - 6 * 3_600_000).toISOString();
 
 /** The canonical 10-event click-to-revenue journey: one spend of INR 7200 and
  * three qualified leads out of three created, so tenant spend / volume must
- * resolve to 7_200_000_000 / 3 = 2_400_000_000 micros exactly. */
-function journeyRows({ tenantId = 'tenant_demo', occurredAt = SIX_HOURS_AGO(), suffix = '' } = {}) {
+ * resolve to 7_200_000_000 / 3 = 2_400_000_000 micros exactly. Every row
+ * carries its tenant_id: the funnel's dedup key is tenant_id:event_id, so an
+ * unstamped row would collide with any other tenant's same-named event. */
+function journeyRows({ tenantId = 'tenant_demo', occurredAt = SIX_HOURS_AGO() } = {}) {
   const ids = ['j1', 'j2', 'j3'];
   return [
-    { event_id: `evt${suffix}_click_1`, event_type: 'click', occurred_at: occurredAt, payload: { campaign: 'search-brand' } },
-    { event_id: `evt${suffix}_spend_1`, event_type: 'spend.observed', occurred_at: occurredAt, payload: { campaign: 'search-brand', amount_micros: 7_200_000_000, currency: 'INR' } },
+    { event_id: `evt_click_1`, event_type: 'click', tenant_id: tenantId, occurred_at: occurredAt, payload: { campaign: 'search-brand' } },
+    { event_id: `evt_spend_1`, event_type: 'spend.observed', tenant_id: tenantId, occurred_at: occurredAt, payload: { campaign: 'search-brand', amount_micros: 7_200_000_000, currency: 'INR' } },
     ...ids.map((id, index) => ({
-      event_id: `evt${suffix}_lead_created_${index + 1}`,
+      event_id: `evt_lead_created_${index + 1}`,
       event_type: 'lead_created',
+      tenant_id: tenantId,
       occurred_at: occurredAt,
       payload: { campaign: 'search-brand', lead_id: `lead_${id}` },
     })),
     ...ids.map((id, index) => ({
-      event_id: `evt${suffix}_lead_qualified_${index + 1}`,
+      event_id: `evt_lead_qualified_${index + 1}`,
       event_type: 'lead_qualified',
+      tenant_id: tenantId,
       occurred_at: occurredAt,
       payload: { campaign: 'search-brand', lead_id: `lead_${id}`, session_id: 'sess_journey_1' },
     })),
-    { event_id: `evt${suffix}_opp_1`, event_type: 'opportunity_created', occurred_at: occurredAt, payload: { opportunity_id: 'opp_1', lead_id: 'lead_j1' } },
-    { event_id: `evt${suffix}_deal_1`, event_type: 'deal_won', occurred_at: occurredAt, payload: { order_id: 'order_1', opportunity_id: 'opp_1' } },
+    { event_id: `evt_opp_1`, event_type: 'opportunity_created', tenant_id: tenantId, occurred_at: occurredAt, payload: { opportunity_id: 'opp_1', lead_id: 'lead_j1' } },
+    { event_id: `evt_deal_1`, event_type: 'deal_won', tenant_id: tenantId, occurred_at: occurredAt, payload: { order_id: 'order_1', opportunity_id: 'opp_1' } },
   ];
 }
 
@@ -76,11 +80,21 @@ test('a duplicate event_id inside a batch counts once', () => {
 });
 
 test('the same event_id on two tenants are distinct events, not duplicates', () => {
-  // Tenant isolation holds for the funnel key too.
+  // Tenant isolation holds for the funnel key too: identical event ids on
+  // tenant_demo and tenant_other are two separate journeys, and tenant_other's
+  // spend sums in with its own. With distinct ids alone (the old suffix shape)
+  // volume 6 followed regardless of the key, so the assertion proved nothing.
   const demo = journeyRows({ tenantId: 'tenant_demo' });
-  const other = journeyRows({ tenantId: 'tenant_other', occurredAt: '2026-09-25T08:00:00.000Z', suffix: '_x' });
+  const other = journeyRows({ tenantId: 'tenant_other', occurredAt: '2026-09-25T08:00:00.000Z' });
+  assert.deepEqual(
+    new Set([...demo, ...other].map((row) => row.event_id)),
+    new Set(demo.map((row) => row.event_id)),
+    'fixture: the two tenants carry identical event_ids',
+  );
+  assert.ok([...demo, ...other].every((row) => typeof row.tenant_id === 'string'), 'fixture: every row is stamped');
   const funnel = computeFunnel([...demo, ...other]);
   assert.equal(funnel.qualified_volume, 6);
+  assert.equal(funnel.spend_micros, 14_400_000_000, 'both tenants\' spend is summed');
 });
 
 test('policy bands map 0.2/0.5/0.8/0.95 and strategic gating holds below 0.90', () => {
