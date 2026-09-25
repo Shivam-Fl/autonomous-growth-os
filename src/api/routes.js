@@ -90,6 +90,11 @@ export function buildApp({ repositories }) {
           override: request.query.state ?? null,
           metaProvider,
           metaError,
+          // The journal's class/status filters come from the two GET selects;
+          // unknown values are ignored downstream.
+          filters: route === '/journal'
+            ? { class: request.query.class ?? null, status: request.query.status ?? null }
+            : null,
         }));
     });
   }

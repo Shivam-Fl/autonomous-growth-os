@@ -481,10 +481,17 @@ ${panel({ title: 'Calibration', body: `<p class="empty-copy" data-testid="journa
   // panel), and offers a Retry per scenario.
   if (state === 'error') {
     const rows = decisionsOf(repositories, tenant);
-    return `<div class="banner banner-warn" role="status">Replay evaluation failed for scenario replay-tracking-outage. Every prior journal entry is preserved and untouched.</div>
+    return `${errorPanel({
+      failed: {
+        title: 'Replay evaluation failed for scenario replay-tracking-outage',
+        detail: 'The replay evaluation could not run for this scenario (check: replay-runner).',
+      },
+      stillTrue: 'every prior journal entry is preserved and untouched.',
+      retryHref: '/journal',
+    })}
 ${rows.length > 0 ? journalTable(rows, filters) : `<section class="panel"><h2>Decision journal</h2><p class="empty-copy">Shadow mode has not started. Once it starts, every decision the system considers appears here, and a failed replay leaves prior entries untouched.</p></section>`}
 <div class="journal-retries">
-${DECISION_SCENARIOS.map((Scenario) => `<button type="button" class="button button-secondary" data-action="retry" data-retry-href="/journal">Retry replay evaluation for ${escapeHtml(Scenario)}</button>`).join('')}
+${DECISION_SCENARIOS.map((scenario) => `<button type="button" class="button button-secondary" data-action="retry" data-retry-href="/journal">Retry replay evaluation for ${escapeHtml(scenario)}</button>`).join('')}
 </div>
 ${journalDrawerShell()}`;
   }

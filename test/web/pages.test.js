@@ -332,3 +332,67 @@ test('the dashboard route wires ?meta_error through to the provider and the erro
     await once(server, 'close');
   }
 });
+
+// Decision journal (TR-15, issue #19): the page reads the decisions
+// repository — filters, drawer fields and the LIVE calibration summary.
+// The frozen replay's 0.70/0.33 aggregate is CI-only and never appears here.
+test('the ideal journal renders filters, drawer fields and the LIVE calibration after seeding', async () => {
+  const repos = seededRepos('pages-journal-');
+  const html = await renderPage('/journal', { repositories: repos });
+  assert.match(html, /data-testid="journal-filters"/);
+  assert.match(html, /<select id="journal-filter-class"/);
+  assert.match(html, /<select id="journal-filter-status"/);
+  assert.match(html, /data-testid="journal-drawer"/);
+  assert.match(html, /data-action="open-decision"/, 'rows carry the drawer opener');
+  // Live seeded truth: evaluated 2 (both correct), one intervention, 1 awaiting.
+  assert.match(html, /data-testid="journal-precision">Precision 1\.00 over 2 matured decisions</);
+  assert.match(html, /data-testid="journal-false-intervention">False-intervention rate 0\.00 over 1 interventions</);
+  assert.match(html, /data-testid="journal-awaiting">1 awaiting maturity</);
+  assert.doesNotMatch(html, /0\.70/, 'the frozen replay aggregate is CI-only and never renders');
+});
+
+test('the journal table filters by class and status through the repository', async () => {
+  const repos = seededRepos('pages-jfilter-');
+  const byClass = await renderPage('/journal', { repositories: repos, filters: { class: 'campaign-status', status: null } });
+  assert.match(byClass, /campaign status/);
+  assert.doesNotMatch(byClass, /raise search brand budget 10pct/, 'the budget-change row is filtered out');
+  const byStatus = await renderPage('/journal', { repositories: repos, filters: { class: null, status: 'awaiting-maturity' } });
+  assert.match(byStatus, /shift budget to retargeting/);
+  assert.doesNotMatch(byStatus, /dec_seed_matured_1/, 'matured rows are filtered out');
+  const unknown = await renderPage('/journal', { repositories: repos, filters: { class: 'nonsense', status: 'nonsense' } });
+  assert.match(unknown, /data-state="ideal"/, 'unknown filter values degrade to unfiltered');
+  assert.match(unknown, /dec_seed_matured_1/);
+});
+
+test('the journal partial shell shows the awaiting-maturity row with its expected evaluation date', async () => {
+  const repos = seededRepos('pages-jpartial-');
+  const html = await renderPage('/journal', { repositories: repos, override: 'partial' });
+  assert.match(html, /Awaiting maturity — expected evaluation \d+ \w+ \d{4}/);
+  assert.match(html, /dec_seed_awaiting_1/);
+  assert.match(html, /data-testid="journal-precision">Precision 1\.00 over 2 matured decisions</);
+});
+
+test('the journal error shell names the scenario, preserves prior entries and offers per-scenario retry', async () => {
+  const repos = seededRepos('pages-jerror-');
+  const html = await renderPage('/journal', { repositories: repos, override: 'error' });
+  assert.match(html, /Replay evaluation failed for scenario replay-tracking-outage/);
+  assert.match(html, /What is still true: every prior journal entry is preserved and untouched\./);
+  assert.match(html, /dec_seed_matured_1/, 'prior entries stay on screen');
+  assert.match(html, /Retry replay evaluation for replay-cpl-hold/);
+  assert.match(html, /Retry replay evaluation for replay-tracking-outage/);
+});
+
+test('a decision drawer carries the TR-6 fields the drawer renders', async () => {
+  const repos = seededRepos('pages-jdrawer-');
+  const row = repos.decisions.get('tenant_demo', 'dec_seed_matured_1');
+  assert.ok(row, 'fixture: the seeded decision exists');
+  assert.equal(row.alternatives.filter((entry) => entry.action === 'do_nothing').length, 1);
+  assert.ok(row.alternatives.find((entry) => entry.action === 'do_nothing').reason.length > 0);
+  assert.deepEqual(Object.keys(row.alternatives[0].expected_outcomes).sort(), ['mean', 'p10', 'p90']);
+  assert.ok(Number.isSafeInteger(row.risk.expected_downside_micros));
+  assert.ok(row.risk.worst_reasonable_case.length > 0);
+  assert.ok(Array.isArray(row.evidence_refs) && row.evidence_refs.length > 0);
+  assert.ok(Array.isArray(row.memory_refs) && row.memory_refs.length > 0);
+  assert.ok(row.critic_result.length > 0);
+  assert.ok(row.policy_decision_id.length > 0);
+});

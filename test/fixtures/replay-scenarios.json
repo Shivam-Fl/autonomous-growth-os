@@ -1,0 +1,46 @@
+// Frozen replay scenarios for the CI-only calibration report (IAC-2, TR-15,
+// TR-16): evaluateReplay(src/domain/decisions.js) folds these into ONE
+// AGGREGATE report. Never imported by src/ — the /journal page and
+// GET /v1/calibration compute live rates from the decisions repository.
+//
+// Pinned arithmetic (asserted in test/domain/decisions.test.js):
+//   replay-cpl-hold:       6 matured (4 correct, 2 wrong; 4 interventions, 2 needless) + 1 awaiting
+//   replay-tracking-outage: 4 matured (3 correct, 1 wrong; 2 interventions, 0 needless) + 2 awaiting
+//   AGGREGATE: 10 matured, 7 correct -> precision 7/10 = 0.70 exactly
+//              6 matured interventions, 2 needless -> 2/6 -> 0.33 (two decimals)
+// Awaiting-maturity entries carry no evaluation and sit outside every rate.
+// replay-broken references a missing snapshot: the per-scenario retry
+// fixture (its decision must never fold into the pinned aggregate).
+{
+  "scenarios": [
+    {
+      "id": "replay-cpl-hold",
+      "decisions": [
+        { "id": "dec_replay_1", "selected_action": "raise_search_brand_budget_10pct", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-01T00:00:00.000Z" } },
+        { "id": "dec_replay_2", "selected_action": "shift_budget_to_retargeting", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-02T00:00:00.000Z" } },
+        { "id": "dec_replay_3", "selected_action": "pause_retargeting", "matured": true, "evaluation": { "outcome": "incorrect", "needless": true, "evaluated_at": "2026-09-03T00:00:00.000Z" } },
+        { "id": "dec_replay_4", "selected_action": "pause_search_brand", "matured": true, "evaluation": { "outcome": "incorrect", "needless": true, "evaluated_at": "2026-09-04T00:00:00.000Z" } },
+        { "id": "dec_replay_5", "selected_action": "do_nothing", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-05T00:00:00.000Z" } },
+        { "id": "dec_replay_6", "selected_action": "do_nothing", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-06T00:00:00.000Z" } },
+        { "id": "dec_replay_7", "selected_action": "shift_budget_to_retargeting", "matured": false }
+      ]
+    },
+    {
+      "id": "replay-tracking-outage",
+      "decisions": [
+        { "id": "dec_replay_8", "selected_action": "raise_search_brand_budget_10pct", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-08T00:00:00.000Z" } },
+        { "id": "dec_replay_9", "selected_action": "refresh_creative", "matured": true, "evaluation": { "outcome": "incorrect", "needless": false, "evaluated_at": "2026-09-09T00:00:00.000Z" } },
+        { "id": "dec_replay_10", "selected_action": "do_nothing", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-10T00:00:00.000Z" } },
+        { "id": "dec_replay_11", "selected_action": "do_nothing", "matured": true, "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-11T00:00:00.000Z" } },
+        { "id": "dec_replay_12", "selected_action": "shift_budget_to_retargeting", "matured": false },
+        { "id": "dec_replay_13", "selected_action": "refresh_creative", "matured": false }
+      ]
+    },
+    {
+      "id": "replay-broken",
+      "decisions": [
+        { "id": "dec_replay_14", "selected_action": "raise_search_brand_budget_10pct", "matured": true, "state_snapshot_id": "state_missing", "evaluation": { "outcome": "correct", "needless": false, "evaluated_at": "2026-09-12T00:00:00.000Z" } }
+      ]
+    }
+  ]
+}

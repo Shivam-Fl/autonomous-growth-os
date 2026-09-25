@@ -391,15 +391,6 @@ export function calibrationReport(records) {
   };
 }
 
-/** Whole-integer correction: calibrationReport's output rates come out
- * rounded; the raw ratios are what the page renders through toFixed(2). */
-export function rateOrDash(rate, dashboard = false) {
-  if (rate === null || rate === undefined) {
-    return '—';
-  }
-  return dashboard ? rate.toFixed(2) : String(rate);
-}
-
 /**
  * TR-8: a simulator episode that meets its target keeps proposing frontier
  * moves and records a valid do-nothing decision. An episode carries
@@ -457,6 +448,9 @@ export function evaluateReplay(scenarios) {
 
   return {
     ...totals,
+    // Awaiting decisions never fold into the rates: they are counted from
+    // the scenarios themselves, where perScenario already tracks them.
+    awaitingMaturity: perScenario.reduce((total, entry) => total + entry.awaiting, 0),
     perScenario,
     mutationsExecuted: 0,
   };

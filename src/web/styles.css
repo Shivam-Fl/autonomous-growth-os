@@ -333,6 +333,85 @@ th, td {
   font: inherit;
 }
 
+/* Journal: filter row, detail drawer, awaiting list. */
+.journal-filters {
+  display: flex;
+  gap: var(--space-3);
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.journal-filter-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.journal-filter-control select {
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  font: inherit;
+}
+
+.journal-retries {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.awaiting-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.awaiting-list li {
+  display: grid;
+  gap: var(--space-1);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  padding: var(--space-2);
+}
+
+#journal-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(460px, 100vw);
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-muted);
+  padding: var(--space-3);
+  overflow-y: auto;
+  z-index: 20;
+}
+
+#journal-drawer[hidden] {
+  display: none;
+}
+
+.journal-drawer-body {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+/* Narrow: the journal table collapses to cards and the drawer covers the
+   screen (docs/ui.md). */
+@media (max-width: 900px) {
+  #journal-drawer {
+    width: 100vw;
+  }
+
+  .journal-filters .journal-filter-control {
+    flex: 1 1 100%;
+  }
+}
+
 /* Narrow: single column under 900px; guard status first, KPI cards stacked. */
 @media (max-width: 900px) {
   .kpi-strip {
