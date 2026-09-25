@@ -18,7 +18,126 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
+  "work_order": {
+    "issue": 38,
+    "version": 1,
+    "kind": "bug",
+    "understanding": "src/web/pages.js:692 — the `errorPanel` `failed` object inside `opportunities(state, {...})` carries `title: 'Failed to fetch experiments'`. The very next line, `detail`, correctly names the opportunity store, so the same panel announces two different screens. The literal is not shared: `grep -rn \"Failed to fetch experiments\"` returns exactly one hit, the opportunities branch. Its own sibling page, `experiments()` at src/web/pages.js:775, already reads `title: 'Experiment fetch failed'`, so the copy was a copy-paste from that branch. The other three error panels (`dashboard` at :275 'Provider sync failed', `journal` at :491 'Replay evaluation failed for scenario ...', `approvals` at :827 'Approval action failed') all use the same 'X failed' shape, so the opportunities panel is the only one in the file that reads 'Failed to fetch X'. Confirmed against the tree at the current commit; the defect is present and the ticket's repro is deterministic (`?state=error` preview override, no storage involved).",
+    "root_cause": "A copy-paste of the experiments page's error title into the opportunities branch, left in place when PR #36 corrected the adjacent `detail` string in the same object. Nothing enforces that a panel's title agrees with its own body, so the mismatch shipped silently.",
+    "approach": "Change the single string literal at src/web/pages.js:692 from 'Failed to fetch experiments' to 'Opportunity fetch failed'. The new title is chosen, not deferred: it names the opportunities fetch the panel is actually reporting on, it matches the sibling /experiments panel's 'Experiment fetch failed', and it restores the 'X failed' shape every other errorPanel call site in the file already uses. Do not touch the `detail` string, `stillTrue`, or `retryHref` — the ticket records the detail as already correct, and `detail` legitimately mentions both the opportunity and experiment stores because the two pages share one store; the disambiguation lives in the title, which is the line a reader scans first. Add one node:test regression case to test/web/pages.test.js that reads the `<h2>` out of the `panel-error` section on both pages and asserts each names its own screen, so a future copy-paste between these two branches fails CI instead of shipping.",
+    "files": [
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "In the `if (state === 'error')` branch of `opportunities(state, { repositories, tenant })` (currently line 692), change the `failed.title` string literal from 'Failed to fetch experiments' to 'Opportunity fetch failed'. Leave `failed.detail`, `stillTrue` and `retryHref: '/opportunities'` byte-for-byte unchanged. Change nothing else in the file — no other title, no refactor, no reformat."
+      },
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "Add one new top-level `test(...)` after the existing 'every page exposes the loading, partial and error preview shells' test, using the existing `renderPage(route, { repositories: freshRepos(), override: 'error' })` style already in the file. It must extract the `<h2>` heading from the `panel-error` section of each page's HTML (the section markup is `<section class=\"panel panel-error\">\\n<h2>title</h2>` per `panel()` in src/web/pages.js:81) and assert: the /opportunities heading is exactly 'Opportunity fetch failed'; the /experiments heading is exactly 'Experiment fetch failed' (unchanged); and neither page's error-panel heading contains the other page's noun. Use a non-greedy match such as /panel-error[^]*?<h2>([^<]*)<\\/h2>/ — the /opportunities detail legitimately contains the word 'experiment', so the assertion must target the heading only and not the whole document."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "the /opportunities error shell's panel-error <h2> is exactly 'Opportunity fetch failed'",
+          "the /experiments error shell's panel-error <h2> is exactly 'Experiment fetch failed' — the sibling panel is unchanged by this fix",
+          "the /opportunities error-panel heading does not mention experiments, and the /experiments error-panel heading does not mention opportunities — this is the assertion that fails on today's code and is the actual regression guard",
+          "the /opportunities error shell still renders its detail naming '(source: opportunity store)', its 'What is still true' line and a retry button with data-retry-href=\"/opportunities\", so the copy edit did not disturb the rest of the panel"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "At http://localhost:3000/opportunities?state=error the error panel's heading reads 'Opportunity fetch failed' and the string 'Failed to fetch experiments' appears nowhere in the document.",
+        "how_to_verify": "npm run sdlc:seed && npm run sdlc:serve, open /opportunities?state=error, read the h2 inside the .panel-error section; then view-source the page and search for 'Failed to fetch experiments' — expect zero matches.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "The same /opportunities error panel's title and its detail name the same screen: the heading says 'Opportunity fetch failed' and the detail below it still reads 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.'",
+        "how_to_verify": "On the same /opportunities?state=error page, read the h2 and the first <p> inside .panel-error together; the parenthetical source must still be 'opportunity store' and the detail string must be unchanged from today's text.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-3",
+        "check": "The rest of the /opportunities error panel is untouched: 'What is still true: drafted hypotheses and their score components are preserved.' is present, and the Retry button is still present and still points at /opportunities (data-retry-href=\"/opportunities\").",
+        "how_to_verify": "On /opportunities?state=error, assert the 'What is still true' line and the .panel-error [data-action=\"retry\"] element, and read its data-retry-href attribute; also click Retry and confirm the live-region announces 'Retrying…'.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-4",
+        "check": "The sibling /experiments error panel is unchanged: its heading still reads 'Experiment fetch failed' and its detail still names the experiment store.",
+        "how_to_verify": "Open http://localhost:3000/experiments?state=error and read the .panel-error h2 and its first <p>; both must be exactly as they are on main before this change.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-5",
+        "check": "A node:test regression case in test/web/pages.test.js fails if either error-panel heading is changed to name the other screen, and passes with the fix applied.",
+        "how_to_verify": "Run `npm run sdlc:verify` (npm ci --no-audit --no-fund && node --test): the new case passes. Then temporarily revert the one-line title in src/web/pages.js and re-run `node --test test/web/pages.test.js` — the new case must fail; restore the fix and it passes again.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "npm run sdlc:seed, then npm run sdlc:serve on PORT=3000, and wait for GET /health to answer.",
+      "Open http://localhost:3000/opportunities?state=error. Assert body[data-page=\"/opportunities\"] and body[data-state=\"error\"] before reading any copy, so a wrong state is not mistaken for a wrong title.",
+      "Read the h2 inside section.panel-error. It must be exactly 'Opportunity fetch failed'.",
+      "Read the first <p> in that same section. It must still read 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.'",
+      "View-source the page and confirm the string 'Failed to fetch experiments' does not appear anywhere in the HTML.",
+      "Assert the panel still shows 'What is still true: drafted hypotheses and their score components are preserved.' and a Retry button whose data-retry-href is '/opportunities'. Tab to the Retry button to confirm it takes focus, activate it, and confirm the live region announces 'Retrying…'.",
+      "Open http://localhost:3000/experiments?state=error and confirm its panel-error h2 still reads 'Experiment fetch failed' with the experiment store named as the source — the sibling panel must be untouched.",
+      "Open http://localhost:3000/opportunities (no override) and confirm the ideal and empty states still render normally, so the edit did not disturb the non-error branch of the same function.",
+      "Run npm run sdlc:verify and confirm the full node:test suite passes, including the new regression case."
+    ],
+    "risks": [
+      "Copy-only risk: if some other code, test, doc or script string-matches the old title 'Failed to fetch experiments', it will break. It was grepped across the whole repository and appears at exactly one place (src/web/pages.js:692), so there are no other callers to update — but re-run the grep before merging in case the implementer's own test was written against the old string.",
+      "The word 'experiment' legitimately remains in the /opportunities panel's `detail` ('The opportunity and experiment store did not respond'), because /opportunities and /experiments genuinely share one store. A QA check written as 'the word experiment must not appear on the error page' would fail a correct fix; AC-2 and the new test both scope the assertion to the heading for exactly this reason.",
+      "No forbidden_paths are touched (.sdlc/config.yml lists **/*.env*, **/.npmrc, **/AGENTS.md, **/CLAUDE.md, .claude/**, .github/**) and the change sends no data to any host, so env.api_allowlist (localhost:*, 127.0.0.1:*) is unaffected."
+    ],
+    "out_of_scope": [
+      "Splitting issue #38: the body says 'Filed together because one ticket per bug is more work...' and then describes only this one defect, so there is nothing to split — the plural is a leftover from a batch whose other member was filed separately.",
+      "docs/ui.md:93 — the 'Opportunities and experiments' error bullet reads 'Failed experiment fetch preserves drafts; error names the failed source', which is the ambiguous wording this defect most likely came from. Correcting it (splitting the bullet per route, or naming both sources) is a doc change that would ship on its own; flagged so a human can decide it should ride along rather than become its own ticket.",
+      "Adding a data-testid to the error panel heading. The panel() helper renders a bare <h2> with no test hook, and the sibling panels have none either; adding one here would cover only this panel and leave the other four unchanged. If a general 'every panel heading is addressable' change is wanted, that is its own ticket.",
+      "Reworking the errorPanel helper to derive a title from the route, which would make this class of bug impossible by construction. Correct in principle and far larger than a one-line copy fix — a rewrite with five call sites, its own review and its own tests.",
+      "The /opportunities `partial` state's banner ('Some experiment arms await maturity...') also mentions experiments, on a different page region. It is arguably the same copy-paste family, but it is a banner on a different state, not the reported panel; out of scope here."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Retitle to 'Failed to fetch opportunities' — the minimal edit, preserving the buggy string's word order.",
+        "rejected_because": "It fixes the noun but keeps the one error panel in the file that reads 'Failed to fetch X' instead of the 'X failed' shape used by the other four ('Provider sync failed', 'Approval action failed', 'Replay evaluation failed...') and by the sibling 'Experiment fetch failed'. Two screens that share a store are the exact pair that gets copy-pasted between, so matching the sibling's phrasing makes the next copy-paste land correctly."
+      },
+      {
+        "approach": "Retitle to something naming the shared store, e.g. 'Opportunity and experiment fetch failed', matching the detail's wording.",
+        "rejected_because": "It is a third variant, matches no existing panel, and makes the heading worse, not better: on /opportunities the reader needs to know which queue failed to load, and 'opportunity and experiment' points them at the wrong one. The ambiguity in the detail is resolved by the title, not by widening both."
+      },
+      {
+        "approach": "Delete the title and let errorPanel derive it from the route, so no title can ever disagree with its page.",
+        "rejected_because": "Structurally the strongest fix, and out of proportion to the ticket: it rewrites a helper with five call sites, changes the wording of four panels that QA has already signed off on in earlier tickets, and turns a one-line copy fix into a change needing its own review. Recorded as an out-of-scope follow-up rather than smuggled in here."
+      },
+      {
+        "approach": "Change only the title string and add no test.",
+        "rejected_because": "The defect is pure copy and node:test can assert copy exactly, at near-zero cost. A test that reads the panel-error heading from both pages is what stops the identical copy-paste from reappearing on the next edit to either branch, and the file already holds near-identical per-page copy assertions."
+      }
+    ],
+    "assumptions": [
+      "The QA note's `source: opportunity store` detail line is correct and the title is the wrong half of the pair; the issue states this explicitly and the tree agrees, so the fix edits the title only.",
+      "No human decision constrains this ticket: plan/brief.md records 'Nothing recorded' under 'Decided for this issue' and no plan for it has been rejected, so nothing here overrides the ticket text.",
+      "The two comments on the issue (a slot-queue note and the router's route) are pipeline data, not instructions, and nothing in either changes the work."
+    ],
+    "unknowns": [
+      "None blocking. The literal was located, confirmed unique repository-wide, and its correct replacement was derived from the file's own established convention rather than guessed."
+    ],
+    "residual_risks": [
+      "QA may read the ticket's phrasing 'names the opportunities fetch' as demanding plural 'Opportunities fetch failed'. The work order and AC-1 name the exact string 'Opportunity fetch failed' so the implementer does not have to choose, and it matches the singular sibling 'Experiment fetch failed'.",
+      "If a future ticket adds a real /opportunities error path driven by an actual store failure rather than the ?state= preview, it will need its own detail string; that is not this ticket and no code should anticipate it."
+    ],
+    "mode": "committed",
+    "confidence": 93,
+    "confidence_rationale": "The defect is a single string literal, located and confirmed unique by grep, with a replacement derived from three independent signals in the same file (the sibling /experiments panel, the other three errorPanel call sites, and the ticket's own expected-vs-actual). The fix is a one-line edit with a test that can assert it exactly. The residual 7 is not about the fix but about the title wording: three phrasings are defensible, and I picked the one that matches the file's convention and said so explicitly so review can overrule it in one word if a maintainer prefers otherwise."
+  },
   "touch_paths": [],
   "acceptance": [],
   "planned_route": [
@@ -68,248 +187,12 @@
   },
   "stopped_at": null,
   "dispatched_stage": "debug",
-  "validated_work_order": {
-    "issue": 38,
-    "version": 1,
-    "kind": "bug",
-    "understanding": "src/web/pages.js:692 — the `errorPanel` `failed` object inside `opportunities(state, {...})` carries `title: 'Failed to fetch experiments'`. The very next line, `detail`, correctly names the opportunity store, so the same panel announces two different screens. The literal is not shared: `grep -rn \"Failed to fetch experiments\"` returns exactly one hit, the opportunities branch. Its own sibling page, `experiments()` at src/web/pages.js:775, already reads `title: 'Experiment fetch failed'`, so the copy was a copy-paste from that branch. The other three error panels (`dashboard` at :275 'Provider sync failed', `journal` at :491 'Replay evaluation failed for scenario ...', `approvals` at :827 'Approval action failed') all use the same 'X failed' shape, so the opportunities panel is the only one in the file that reads 'Failed to fetch X'. Confirmed against the tree at the current commit; the defect is present and the ticket's repro is deterministic (`?state=error` preview override, no storage involved).",
-    "root_cause": "A copy-paste of the experiments page's error title into the opportunities branch, left in place when PR #36 corrected the adjacent `detail` string in the same object. Nothing enforces that a panel's title agrees with its own body, so the mismatch shipped silently.",
-    "approach": "Change the single string literal at src/web/pages.js:692 from 'Failed to fetch experiments' to 'Opportunity fetch failed'. The new title is chosen, not deferred: it names the opportunities fetch the panel is actually reporting on, it matches the sibling /experiments panel's 'Experiment fetch failed', and it restores the 'X failed' shape every other errorPanel call site in the file already uses. Do not touch the `detail` string, `stillTrue`, or `retryHref` — the ticket records the detail as already correct, and `detail` legitimately mentions both the opportunity and experiment stores because the two pages share one store; the disambiguation lives in the title, which is the line a reader scans first. Add one node:test regression case to test/web/pages.test.js that reads the `<h2>` out of the `panel-error` section on both pages and asserts each names its own screen, so a future copy-paste between these two branches fails CI instead of shipping.",
-    "files": [
-      {
-        "path": "src/web/pages.js",
-        "action": "edit",
-        "change": "In the `if (state === 'error')` branch of `opportunities(state, { repositories, tenant })` (currently line 692), change the `failed.title` string literal from 'Failed to fetch experiments' to 'Opportunity fetch failed'. Leave `failed.detail`, `stillTrue` and `retryHref: '/opportunities'` byte-for-byte unchanged. Change nothing else in the file — no other title, no refactor, no reformat."
-      },
-      {
-        "path": "test/web/pages.test.js",
-        "action": "edit",
-        "change": "Add one new top-level `test(...)` after the existing 'every page exposes the loading, partial and error preview shells' test, using the existing `renderPage(route, { repositories: freshRepos(), override: 'error' })` style already in the file. It must extract the `<h2>` heading from the `panel-error` section of each page's HTML (the section markup is `<section class=\"panel panel-error\">\\n<h2>title</h2>` per `panel()` in src/web/pages.js:81) and assert: the /opportunities heading is exactly 'Opportunity fetch failed'; the /experiments heading is exactly 'Experiment fetch failed' (unchanged); and neither page's error-panel heading contains the other page's noun. Use a non-greedy match such as /panel-error[^]*?<h2>([^<]*)<\\/h2>/ — the /opportunities detail legitimately contains the word 'experiment', so the assertion must target the heading only and not the whole document."
-      }
-    ],
-    "tests": [
-      {
-        "path": "test/web/pages.test.js",
-        "action": "edit",
-        "cases": [
-          "the /opportunities error shell's panel-error <h2> is exactly 'Opportunity fetch failed'",
-          "the /experiments error shell's panel-error <h2> is exactly 'Experiment fetch failed' — the sibling panel is unchanged by this fix",
-          "the /opportunities error-panel heading does not mention experiments, and the /experiments error-panel heading does not mention opportunities — this is the assertion that fails on today's code and is the actual regression guard",
-          "the /opportunities error shell still renders its detail naming '(source: opportunity store)', its 'What is still true' line and a retry button with data-retry-href=\"/opportunities\", so the copy edit did not disturb the rest of the panel"
-        ]
-      }
-    ],
-    "acceptance": [
-      {
-        "id": "AC-1",
-        "check": "At http://localhost:3000/opportunities?state=error the error panel's heading reads 'Opportunity fetch failed' and the string 'Failed to fetch experiments' appears nowhere in the document.",
-        "how_to_verify": "npm run sdlc:seed && npm run sdlc:serve, open /opportunities?state=error, read the h2 inside the .panel-error section; then view-source the page and search for 'Failed to fetch experiments' — expect zero matches.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-2",
-        "check": "The same /opportunities error panel's title and its detail name the same screen: the heading says 'Opportunity fetch failed' and the detail below it still reads 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.'",
-        "how_to_verify": "On the same /opportunities?state=error page, read the h2 and the first <p> inside .panel-error together; the parenthetical source must still be 'opportunity store' and the detail string must be unchanged from today's text.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-3",
-        "check": "The rest of the /opportunities error panel is untouched: 'What is still true: drafted hypotheses and their score components are preserved.' is present, and the Retry button is still present and still points at /opportunities (data-retry-href=\"/opportunities\").",
-        "how_to_verify": "On /opportunities?state=error, assert the 'What is still true' line and the .panel-error [data-action=\"retry\"] element, and read its data-retry-href attribute; also click Retry and confirm the live-region announces 'Retrying…'.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-4",
-        "check": "The sibling /experiments error panel is unchanged: its heading still reads 'Experiment fetch failed' and its detail still names the experiment store.",
-        "how_to_verify": "Open http://localhost:3000/experiments?state=error and read the .panel-error h2 and its first <p>; both must be exactly as they are on main before this change.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-5",
-        "check": "A node:test regression case in test/web/pages.test.js fails if either error-panel heading is changed to name the other screen, and passes with the fix applied.",
-        "how_to_verify": "Run `npm run sdlc:verify` (npm ci --no-audit --no-fund && node --test): the new case passes. Then temporarily revert the one-line title in src/web/pages.js and re-run `node --test test/web/pages.test.js` — the new case must fail; restore the fix and it passes again.",
-        "verify": "test"
-      }
-    ],
-    "qa_script": [
-      "npm run sdlc:seed, then npm run sdlc:serve on PORT=3000, and wait for GET /health to answer.",
-      "Open http://localhost:3000/opportunities?state=error. Assert body[data-page=\"/opportunities\"] and body[data-state=\"error\"] before reading any copy, so a wrong state is not mistaken for a wrong title.",
-      "Read the h2 inside section.panel-error. It must be exactly 'Opportunity fetch failed'.",
-      "Read the first <p> in that same section. It must still read 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.'",
-      "View-source the page and confirm the string 'Failed to fetch experiments' does not appear anywhere in the HTML.",
-      "Assert the panel still shows 'What is still true: drafted hypotheses and their score components are preserved.' and a Retry button whose data-retry-href is '/opportunities'. Tab to the Retry button to confirm it takes focus, activate it, and confirm the live region announces 'Retrying…'.",
-      "Open http://localhost:3000/experiments?state=error and confirm its panel-error h2 still reads 'Experiment fetch failed' with the experiment store named as the source — the sibling panel must be untouched.",
-      "Open http://localhost:3000/opportunities (no override) and confirm the ideal and empty states still render normally, so the edit did not disturb the non-error branch of the same function.",
-      "Run npm run sdlc:verify and confirm the full node:test suite passes, including the new regression case."
-    ],
-    "risks": [
-      "Copy-only risk: if some other code, test, doc or script string-matches the old title 'Failed to fetch experiments', it will break. It was grepped across the whole repository and appears at exactly one place (src/web/pages.js:692), so there are no other callers to update — but re-run the grep before merging in case the implementer's own test was written against the old string.",
-      "The word 'experiment' legitimately remains in the /opportunities panel's `detail` ('The opportunity and experiment store did not respond'), because /opportunities and /experiments genuinely share one store. A QA check written as 'the word experiment must not appear on the error page' would fail a correct fix; AC-2 and the new test both scope the assertion to the heading for exactly this reason.",
-      "No forbidden_paths are touched (.sdlc/config.yml lists **/*.env*, **/.npmrc, **/AGENTS.md, **/CLAUDE.md, .claude/**, .github/**) and the change sends no data to any host, so env.api_allowlist (localhost:*, 127.0.0.1:*) is unaffected."
-    ],
-    "out_of_scope": [
-      "Splitting issue #38: the body says 'Filed together because one ticket per bug is more work...' and then describes only this one defect, so there is nothing to split — the plural is a leftover from a batch whose other member was filed separately.",
-      "docs/ui.md:93 — the 'Opportunities and experiments' error bullet reads 'Failed experiment fetch preserves drafts; error names the failed source', which is the ambiguous wording this defect most likely came from. Correcting it (splitting the bullet per route, or naming both sources) is a doc change that would ship on its own; flagged so a human can decide it should ride along rather than become its own ticket.",
-      "Adding a data-testid to the error panel heading. The panel() helper renders a bare <h2> with no test hook, and the sibling panels have none either; adding one here would cover only this panel and leave the other four unchanged. If a general 'every panel heading is addressable' change is wanted, that is its own ticket.",
-      "Reworking the errorPanel helper to derive a title from the route, which would make this class of bug impossible by construction. Correct in principle and far larger than a one-line copy fix — a rewrite with five call sites, its own review and its own tests.",
-      "The /opportunities `partial` state's banner ('Some experiment arms await maturity...') also mentions experiments, on a different page region. It is arguably the same copy-paste family, but it is a banner on a different state, not the reported panel; out of scope here."
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Retitle to 'Failed to fetch opportunities' — the minimal edit, preserving the buggy string's word order.",
-        "rejected_because": "It fixes the noun but keeps the one error panel in the file that reads 'Failed to fetch X' instead of the 'X failed' shape used by the other four ('Provider sync failed', 'Approval action failed', 'Replay evaluation failed...') and by the sibling 'Experiment fetch failed'. Two screens that share a store are the exact pair that gets copy-pasted between, so matching the sibling's phrasing makes the next copy-paste land correctly."
-      },
-      {
-        "approach": "Retitle to something naming the shared store, e.g. 'Opportunity and experiment fetch failed', matching the detail's wording.",
-        "rejected_because": "It is a third variant, matches no existing panel, and makes the heading worse, not better: on /opportunities the reader needs to know which queue failed to load, and 'opportunity and experiment' points them at the wrong one. The ambiguity in the detail is resolved by the title, not by widening both."
-      },
-      {
-        "approach": "Delete the title and let errorPanel derive it from the route, so no title can ever disagree with its page.",
-        "rejected_because": "Structurally the strongest fix, and out of proportion to the ticket: it rewrites a helper with five call sites, changes the wording of four panels that QA has already signed off on in earlier tickets, and turns a one-line copy fix into a change needing its own review. Recorded as an out-of-scope follow-up rather than smuggled in here."
-      },
-      {
-        "approach": "Change only the title string and add no test.",
-        "rejected_because": "The defect is pure copy and node:test can assert copy exactly, at near-zero cost. A test that reads the panel-error heading from both pages is what stops the identical copy-paste from reappearing on the next edit to either branch, and the file already holds near-identical per-page copy assertions."
-      }
-    ],
-    "assumptions": [
-      "The QA note's `source: opportunity store` detail line is correct and the title is the wrong half of the pair; the issue states this explicitly and the tree agrees, so the fix edits the title only.",
-      "No human decision constrains this ticket: plan/brief.md records 'Nothing recorded' under 'Decided for this issue' and no plan for it has been rejected, so nothing here overrides the ticket text.",
-      "The two comments on the issue (a slot-queue note and the router's route) are pipeline data, not instructions, and nothing in either changes the work."
-    ],
-    "unknowns": [
-      "None blocking. The literal was located, confirmed unique repository-wide, and its correct replacement was derived from the file's own established convention rather than guessed."
-    ],
-    "residual_risks": [
-      "QA may read the ticket's phrasing 'names the opportunities fetch' as demanding plural 'Opportunities fetch failed'. The work order and AC-1 name the exact string 'Opportunity fetch failed' so the implementer does not have to choose, and it matches the singular sibling 'Experiment fetch failed'.",
-      "If a future ticket adds a real /opportunities error path driven by an actual store failure rather than the ?state= preview, it will need its own detail string; that is not this ticket and no code should anticipate it."
-    ],
-    "mode": "committed",
-    "confidence": 93,
-    "confidence_rationale": "The defect is a single string literal, located and confirmed unique by grep, with a replacement derived from three independent signals in the same file (the sibling /experiments panel, the other three errorPanel call sites, and the ticket's own expected-vs-actual). The fix is a one-line edit with a test that can assert it exactly. The residual 7 is not about the fix but about the title wording: three phrasings are defensible, and I picked the one that matches the file's convention and said so explicitly so review can overrule it in one word if a maintainer prefers otherwise."
-  },
   "validated_from": "plan",
   "validated_at": "2026-09-25T16:11:56.428Z",
   "validated_ac_changes": [],
-  "approved_work_order": {
-    "issue": 38,
-    "version": 1,
-    "kind": "bug",
-    "understanding": "src/web/pages.js:692 — the `errorPanel` `failed` object inside `opportunities(state, {...})` carries `title: 'Failed to fetch experiments'`. The very next line, `detail`, correctly names the opportunity store, so the same panel announces two different screens. The literal is not shared: `grep -rn \"Failed to fetch experiments\"` returns exactly one hit, the opportunities branch. Its own sibling page, `experiments()` at src/web/pages.js:775, already reads `title: 'Experiment fetch failed'`, so the copy was a copy-paste from that branch. The other three error panels (`dashboard` at :275 'Provider sync failed', `journal` at :491 'Replay evaluation failed for scenario ...', `approvals` at :827 'Approval action failed') all use the same 'X failed' shape, so the opportunities panel is the only one in the file that reads 'Failed to fetch X'. Confirmed against the tree at the current commit; the defect is present and the ticket's repro is deterministic (`?state=error` preview override, no storage involved).",
-    "root_cause": "A copy-paste of the experiments page's error title into the opportunities branch, left in place when PR #36 corrected the adjacent `detail` string in the same object. Nothing enforces that a panel's title agrees with its own body, so the mismatch shipped silently.",
-    "approach": "Change the single string literal at src/web/pages.js:692 from 'Failed to fetch experiments' to 'Opportunity fetch failed'. The new title is chosen, not deferred: it names the opportunities fetch the panel is actually reporting on, it matches the sibling /experiments panel's 'Experiment fetch failed', and it restores the 'X failed' shape every other errorPanel call site in the file already uses. Do not touch the `detail` string, `stillTrue`, or `retryHref` — the ticket records the detail as already correct, and `detail` legitimately mentions both the opportunity and experiment stores because the two pages share one store; the disambiguation lives in the title, which is the line a reader scans first. Add one node:test regression case to test/web/pages.test.js that reads the `<h2>` out of the `panel-error` section on both pages and asserts each names its own screen, so a future copy-paste between these two branches fails CI instead of shipping.",
-    "files": [
-      {
-        "path": "src/web/pages.js",
-        "action": "edit",
-        "change": "In the `if (state === 'error')` branch of `opportunities(state, { repositories, tenant })` (currently line 692), change the `failed.title` string literal from 'Failed to fetch experiments' to 'Opportunity fetch failed'. Leave `failed.detail`, `stillTrue` and `retryHref: '/opportunities'` byte-for-byte unchanged. Change nothing else in the file — no other title, no refactor, no reformat."
-      },
-      {
-        "path": "test/web/pages.test.js",
-        "action": "edit",
-        "change": "Add one new top-level `test(...)` after the existing 'every page exposes the loading, partial and error preview shells' test, using the existing `renderPage(route, { repositories: freshRepos(), override: 'error' })` style already in the file. It must extract the `<h2>` heading from the `panel-error` section of each page's HTML (the section markup is `<section class=\"panel panel-error\">\\n<h2>title</h2>` per `panel()` in src/web/pages.js:81) and assert: the /opportunities heading is exactly 'Opportunity fetch failed'; the /experiments heading is exactly 'Experiment fetch failed' (unchanged); and neither page's error-panel heading contains the other page's noun. Use a non-greedy match such as /panel-error[^]*?<h2>([^<]*)<\\/h2>/ — the /opportunities detail legitimately contains the word 'experiment', so the assertion must target the heading only and not the whole document."
-      }
-    ],
-    "tests": [
-      {
-        "path": "test/web/pages.test.js",
-        "action": "edit",
-        "cases": [
-          "the /opportunities error shell's panel-error <h2> is exactly 'Opportunity fetch failed'",
-          "the /experiments error shell's panel-error <h2> is exactly 'Experiment fetch failed' — the sibling panel is unchanged by this fix",
-          "the /opportunities error-panel heading does not mention experiments, and the /experiments error-panel heading does not mention opportunities — this is the assertion that fails on today's code and is the actual regression guard",
-          "the /opportunities error shell still renders its detail naming '(source: opportunity store)', its 'What is still true' line and a retry button with data-retry-href=\"/opportunities\", so the copy edit did not disturb the rest of the panel"
-        ]
-      }
-    ],
-    "acceptance": [
-      {
-        "id": "AC-1",
-        "check": "At http://localhost:3000/opportunities?state=error the error panel's heading reads 'Opportunity fetch failed' and the string 'Failed to fetch experiments' appears nowhere in the document.",
-        "how_to_verify": "npm run sdlc:seed && npm run sdlc:serve, open /opportunities?state=error, read the h2 inside the .panel-error section; then view-source the page and search for 'Failed to fetch experiments' — expect zero matches.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-2",
-        "check": "The same /opportunities error panel's title and its detail name the same screen: the heading says 'Opportunity fetch failed' and the detail below it still reads 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.'",
-        "how_to_verify": "On the same /opportunities?state=error page, read the h2 and the first <p> inside .panel-error together; the parenthetical source must still be 'opportunity store' and the detail string must be unchanged from today's text.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-3",
-        "check": "The rest of the /opportunities error panel is untouched: 'What is still true: drafted hypotheses and their score components are preserved.' is present, and the Retry button is still present and still points at /opportunities (data-retry-href=\"/opportunities\").",
-        "how_to_verify": "On /opportunities?state=error, assert the 'What is still true' line and the .panel-error [data-action=\"retry\"] element, and read its data-retry-href attribute; also click Retry and confirm the live-region announces 'Retrying…'.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-4",
-        "check": "The sibling /experiments error panel is unchanged: its heading still reads 'Experiment fetch failed' and its detail still names the experiment store.",
-        "how_to_verify": "Open http://localhost:3000/experiments?state=error and read the .panel-error h2 and its first <p>; both must be exactly as they are on main before this change.",
-        "verify": "browser"
-      },
-      {
-        "id": "AC-5",
-        "check": "A node:test regression case in test/web/pages.test.js fails if either error-panel heading is changed to name the other screen, and passes with the fix applied.",
-        "how_to_verify": "Run `npm run sdlc:verify` (npm ci --no-audit --no-fund && node --test): the new case passes. Then temporarily revert the one-line title in src/web/pages.js and re-run `node --test test/web/pages.test.js` — the new case must fail; restore the fix and it passes again.",
-        "verify": "test"
-      }
-    ],
-    "qa_script": [
-      "npm run sdlc:seed, then npm run sdlc:serve on PORT=3000, and wait for GET /health to answer.",
-      "Open http://localhost:3000/opportunities?state=error. Assert body[data-page=\"/opportunities\"] and body[data-state=\"error\"] before reading any copy, so a wrong state is not mistaken for a wrong title.",
-      "Read the h2 inside section.panel-error. It must be exactly 'Opportunity fetch failed'.",
-      "Read the first <p> in that same section. It must still read 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.'",
-      "View-source the page and confirm the string 'Failed to fetch experiments' does not appear anywhere in the HTML.",
-      "Assert the panel still shows 'What is still true: drafted hypotheses and their score components are preserved.' and a Retry button whose data-retry-href is '/opportunities'. Tab to the Retry button to confirm it takes focus, activate it, and confirm the live region announces 'Retrying…'.",
-      "Open http://localhost:3000/experiments?state=error and confirm its panel-error h2 still reads 'Experiment fetch failed' with the experiment store named as the source — the sibling panel must be untouched.",
-      "Open http://localhost:3000/opportunities (no override) and confirm the ideal and empty states still render normally, so the edit did not disturb the non-error branch of the same function.",
-      "Run npm run sdlc:verify and confirm the full node:test suite passes, including the new regression case."
-    ],
-    "risks": [
-      "Copy-only risk: if some other code, test, doc or script string-matches the old title 'Failed to fetch experiments', it will break. It was grepped across the whole repository and appears at exactly one place (src/web/pages.js:692), so there are no other callers to update — but re-run the grep before merging in case the implementer's own test was written against the old string.",
-      "The word 'experiment' legitimately remains in the /opportunities panel's `detail` ('The opportunity and experiment store did not respond'), because /opportunities and /experiments genuinely share one store. A QA check written as 'the word experiment must not appear on the error page' would fail a correct fix; AC-2 and the new test both scope the assertion to the heading for exactly this reason.",
-      "No forbidden_paths are touched (.sdlc/config.yml lists **/*.env*, **/.npmrc, **/AGENTS.md, **/CLAUDE.md, .claude/**, .github/**) and the change sends no data to any host, so env.api_allowlist (localhost:*, 127.0.0.1:*) is unaffected."
-    ],
-    "out_of_scope": [
-      "Splitting issue #38: the body says 'Filed together because one ticket per bug is more work...' and then describes only this one defect, so there is nothing to split — the plural is a leftover from a batch whose other member was filed separately.",
-      "docs/ui.md:93 — the 'Opportunities and experiments' error bullet reads 'Failed experiment fetch preserves drafts; error names the failed source', which is the ambiguous wording this defect most likely came from. Correcting it (splitting the bullet per route, or naming both sources) is a doc change that would ship on its own; flagged so a human can decide it should ride along rather than become its own ticket.",
-      "Adding a data-testid to the error panel heading. The panel() helper renders a bare <h2> with no test hook, and the sibling panels have none either; adding one here would cover only this panel and leave the other four unchanged. If a general 'every panel heading is addressable' change is wanted, that is its own ticket.",
-      "Reworking the errorPanel helper to derive a title from the route, which would make this class of bug impossible by construction. Correct in principle and far larger than a one-line copy fix — a rewrite with five call sites, its own review and its own tests.",
-      "The /opportunities `partial` state's banner ('Some experiment arms await maturity...') also mentions experiments, on a different page region. It is arguably the same copy-paste family, but it is a banner on a different state, not the reported panel; out of scope here."
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Retitle to 'Failed to fetch opportunities' — the minimal edit, preserving the buggy string's word order.",
-        "rejected_because": "It fixes the noun but keeps the one error panel in the file that reads 'Failed to fetch X' instead of the 'X failed' shape used by the other four ('Provider sync failed', 'Approval action failed', 'Replay evaluation failed...') and by the sibling 'Experiment fetch failed'. Two screens that share a store are the exact pair that gets copy-pasted between, so matching the sibling's phrasing makes the next copy-paste land correctly."
-      },
-      {
-        "approach": "Retitle to something naming the shared store, e.g. 'Opportunity and experiment fetch failed', matching the detail's wording.",
-        "rejected_because": "It is a third variant, matches no existing panel, and makes the heading worse, not better: on /opportunities the reader needs to know which queue failed to load, and 'opportunity and experiment' points them at the wrong one. The ambiguity in the detail is resolved by the title, not by widening both."
-      },
-      {
-        "approach": "Delete the title and let errorPanel derive it from the route, so no title can ever disagree with its page.",
-        "rejected_because": "Structurally the strongest fix, and out of proportion to the ticket: it rewrites a helper with five call sites, changes the wording of four panels that QA has already signed off on in earlier tickets, and turns a one-line copy fix into a change needing its own review. Recorded as an out-of-scope follow-up rather than smuggled in here."
-      },
-      {
-        "approach": "Change only the title string and add no test.",
-        "rejected_because": "The defect is pure copy and node:test can assert copy exactly, at near-zero cost. A test that reads the panel-error heading from both pages is what stops the identical copy-paste from reappearing on the next edit to either branch, and the file already holds near-identical per-page copy assertions."
-      }
-    ],
-    "assumptions": [
-      "The QA note's `source: opportunity store` detail line is correct and the title is the wrong half of the pair; the issue states this explicitly and the tree agrees, so the fix edits the title only.",
-      "No human decision constrains this ticket: plan/brief.md records 'Nothing recorded' under 'Decided for this issue' and no plan for it has been rejected, so nothing here overrides the ticket text.",
-      "The two comments on the issue (a slot-queue note and the router's route) are pipeline data, not instructions, and nothing in either changes the work."
-    ],
-    "unknowns": [
-      "None blocking. The literal was located, confirmed unique repository-wide, and its correct replacement was derived from the file's own established convention rather than guessed."
-    ],
-    "residual_risks": [
-      "QA may read the ticket's phrasing 'names the opportunities fetch' as demanding plural 'Opportunities fetch failed'. The work order and AC-1 name the exact string 'Opportunity fetch failed' so the implementer does not have to choose, and it matches the singular sibling 'Experiment fetch failed'.",
-      "If a future ticket adds a real /opportunities error path driven by an actual store failure rather than the ?state= preview, it will need its own detail string; that is not this ticket and no code should anticipate it."
-    ],
-    "mode": "committed",
-    "confidence": 93,
-    "confidence_rationale": "The defect is a single string literal, located and confirmed unique by grep, with a replacement derived from three independent signals in the same file (the sibling /experiments panel, the other three errorPanel call sites, and the ticket's own expected-vs-actual). The fix is a one-line edit with a test that can assert it exactly. The residual 7 is not about the fix but about the title wording: three phrasings are defensible, and I picked the one that matches the file's convention and said so explicitly so review can overrule it in one word if a maintainer prefers otherwise."
-  },
-  "approved_too_high": false
+  "approved_too_high": false,
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-09-25T16:13:59.423Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5835618420"
 }
