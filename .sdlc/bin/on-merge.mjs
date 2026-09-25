@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // PR merged: advance the ledger and kick the release agent.
-import { ghJson, gh, setOutput } from './lib/actions.js';
+import { ghJson, gh, setOutput, repo as repoOf } from './lib/actions.js';
+import { fileFollowUps } from './lib/follow-ups.js';
 import { handOff } from './lib/handoff.js';
 import { advance } from './lib/advance.js';
 import { execFile } from 'node:child_process';
@@ -120,6 +121,11 @@ await ctl('unlock', '--issue', issue);
 await gh(['issue', 'close', String(issue), '--reason', 'completed']).catch(() => {});
 // A 404 here on a fresh install means the workflow is not on the default branch yet.
 await handOff('sdlc-release.yml', ['-f', `pr=${pr}`], { issue, pr, why: 'the PR merged and the release notes follow from it' });
+// What this PR's review and QA left, filed as one ticket (lib/follow-ups.js). Here, because every
+// merge passes through: the pipeline's and a person's alike. Before the wake below, so the
+// follow-up — blocked on this issue — is offered a slot in the same pass.
+await fileFollowUps(repoOf(), issue, pr)
+  .catch((e) => process.stdout.write(`::warning::could not file the follow-ups for #${issue}: ${e.message}\n`));
 // Whatever was waiting on this issue can start now. Done here rather than on an
 // `issues.closed` trigger, because a PR closing an issue does so with GITHUB_TOKEN and
 // fires no event anyone can listen for.

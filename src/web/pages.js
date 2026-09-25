@@ -50,6 +50,12 @@ function layout({ route, state, title, tenantName, content }) {
     return `<a href="${href}"${current}>${label}</a>`;
   }).join('');
 
+  // Exactly one h1 per document, and it is the only page-level heading any
+  // screen gets: panel()'s <h2> is the level beneath it. Add a second h1 or
+  // re-level the panels and the hierarchy breaks — the invariant is locked per
+  // route and state in test/web/pages.test.js.
+  const heading = `<h1 class="page-title" data-testid="page-title">${escapeHtml(title)}</h1>`;
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -69,6 +75,7 @@ function layout({ route, state, title, tenantName, content }) {
 </header>
 <div id="live-region" class="visually-hidden" aria-live="polite" role="status"></div>
 <main id="main">
+${heading}
 ${content}
 </main>
 <footer class="page-footer">
