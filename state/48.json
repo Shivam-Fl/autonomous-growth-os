@@ -234,5 +234,154 @@
       "Regression check: no existing test asserts on table markup beyond `<th>Id</th><th>Name</th>…` and `data-testid=\"meta-campaigns\"[\\s\\S]*?</table>`, both of which a wrapper div leaves intact; client.js reaches rows by data-action and id, never through the panel's DOM depth."
     ],
     "debate_summary": "v1 was rejected on one objection: the offender sweep required in qa_script step 3 and quoted in AC-1 filtered only on right edge past the viewport, then told the tester that any listed element is a real overflow 'not a scrollable region's content' — the exact category a correct implementation of this plan produces, so the right implementation failed its own QA step. Answered in v2 in the same breath as each mention: the sweep is now ancestor-aware (`.filter(el => !el.closest('.skip-link') && !el.closest('.table-scroll') && el.getBoundingClientRect().right > window.innerWidth + 0.5)`), its closing sentence states that content past the right edge inside a .table-scroll region is the expected, correct result and not a failure, and names those two exemptions as the only ones. AC-1 carries the same qualification and keeps the load-bearing checks the objection endorsed — scrollWidth <= innerWidth and the three KPI cards' maturity bars fully on screen, both of which sit outside any table region. AC-4 is unchanged in substance and now says why no exemption is needed there. A risk entry records the naive-sweep hazard so a QA run that re-derives the sweep sees it. Nothing else in v1 changed: the diagnosis, the two CSS rules, the wrapper, the files and the tests are as measured."
-  }
+  },
+  "approved_work_order": {
+    "issue": 48,
+    "version": 2,
+    "kind": "bug",
+    "confidence": 93,
+    "confidence_rationale": "Reproduced and measured on a seeded local boot at 320/375/414/768/900/1100/1440px, and the two-rule CSS change plus the table wrapper was applied in the live page and measured to remove the overflow on all five routes and every preview state, with the desktop three-column KPI strip intact. v1 was rejected on one point only — the right-edge sweep in qa_script step 3 and in AC-1 was written so that a correct implementation of this plan fails it, because a table inside a .table-scroll region is wider than the viewport by construction. That sweep is now ancestor-aware and states in the same breath that content past the right edge inside a .table-scroll region is the expected result, not a failure. Nothing about the diagnosis or the fix changed, and the rejected version's root cause and measured numbers are re-verified against the tree as it stands now (render sites at src/web/pages.js:247, 431, 498 and 897-901).",
+    "reproduced": true,
+    "understanding": "At a 375px viewport the dashboard, journal and approvals pages overflow horizontally (measured 686px, 821px and 385px of document scrollWidth against a 375px window), clipping the KPI cards' maturity bars and the journal filter selects. /opportunities and /experiments were already clean at 375px. All of it is pre-existing, not introduced by the PR QA found it on. Reproduced on a seeded local boot with headless Chromium and confirmed the cause and the fix by measurement rather than by inference.",
+    "root_cause": "#main (src/web/styles.css:120) is display:grid with no explicit columns, so its single auto track is sized by the largest min-content contribution among its items, and a grid item's automatic minimum size is its min-content width. One wide child therefore sets the column width for the whole page: every sibling — the h1, the KPI strip, the filter row — was measured stretching to that one track (h1.page-title measured 670px wide on / and 805px on /journal, the same width as the widest table on the page). The widest children are the tables: the journal's seven-column table has a min-content of 755px and the dashboard's Meta insights table 494px. Once the floor is removed, those tables are still wider than the column, so the page still scrolls; the second half of the fix is to let a wide table scroll inside its own region instead of the document. The four render sites are src/web/pages.js:247 (metaTable), :431 (decisionFeed), :498 (journalTable) and :897-901 (the autonomy-posture table inside approvals); /opportunities and /experiments render no table at all.",
+    "approach": "Two changes, both in the layout layer. (1) src/web/styles.css: add `#main > * { min-width: 0; }`, which drops the automatic minimum on the grid items so the column tracks the container's width instead of the widest child. (2) Every rendered table is wrapped in a `div.table-scroll` that carries `overflow-x: auto`, so a table wider than its column scrolls inside its own region rather than widening the page. The wrapper is a `role=\"region\"` with `tabindex=\"0\"` and an `aria-label` naming the table, because a scroll container that is not focusable is unreachable by keyboard outside Chromium — this is what stops the fix from trading a horizontal page scroll for an unreachable table.\n\nMeasured, at 320/375/414/768/900/1100/1440px, on all five routes and all five ?state= shells, with the two CSS rules and the wrapper injected into the live page: document.documentElement.scrollWidth is at or below window.innerWidth everywhere (360 at a 375px viewport, 305 at 320, and at 1100/1440 the dashboard KPI strip is still three columns of 335/340px). The open journal drawer at 375px measures 375 wide with no overflow. Before the change, at 375px: / 686, /journal 821, /approvals 385.\n\nA consequence QA and the acceptance criteria are written around: after this change the fixed markup deliberately contains elements whose right edge is far past the viewport — a 755px journal table and 494px Meta tables inside a roughly 300px-wide .table-scroll region at a 375px viewport. That is the fix working, not a regression. Every right-edge sweep below is therefore ancestor-aware and excludes `.table-scroll` descendants; the document-level symptoms (scrollWidth <= innerWidth, and the KPI cards and filter selects, which sit outside any table region) are the load-bearing checks.\n\n`#main > * { min-width: 0 }` is the rule to write, not `#main { grid-template-columns: minmax(0, 1fr) }`. Both were measured to fix the track; min-width:0 is specified because the tests below pin that exact rule and because it also protects an item that is itself an unshrinkable flex or grid row, not just the track. Do not substitute one for the other without also changing the pinned test.",
+    "files": [
+      {
+        "path": "src/web/styles.css",
+        "action": "edit",
+        "change": "Add two rules, each with a comment in the file's existing explanatory style. (1) Immediately after the existing `#main { ... }` rule (lines 120-126): `#main > * { min-width: 0; }`. Comment: #main is a grid and a grid item is floored at its min-content width unless it opts out, so one wide child (the journal's seven-column table, min-content 755px) set the column for the whole page and every sibling was measured stretching to it — h1.page-title 670px wide on / at a 375px viewport, 805px on /journal. min-width: 0 restores the column to the container's width. (2) Near the `table { ... }` rule at line 210: `.table-scroll { overflow-x: auto; }`. Comment: a table wider than its column now scrolls inside its own region rather than the page; the region is keyboard-reachable because pages.js gives it a tabindex and an accessible name. Change nothing else in this file.",
+        "why": "This is the load-bearing half of the fix. Measured: with only the wrapper and no min-width:0, the pages still overflow; with min-width:0 the page-level floor is gone everywhere."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "Add one markup helper between the existing `panel()` (line 89) and `emptyState()` (line 96): `function tableRegion(label, table) { return `<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"${escapeHtml(label)}\">${table}</div>`; }`. Then wrap the table markup at each of the four render sites, and only the branch that actually renders a table (the empty branches render a <p> and stay unwrapped): (1) `metaTable()` line 247 — the `<table><thead>…</table>` branch of the `body` ternary, labelled `` `${title} table` `` so each Meta panel reads e.g. 'Meta campaigns table'; (2) `decisionFeed()` line 431 — label 'Decision feed table'; (3) `journalTable()` line 498 — label 'Decision journal table'; (4) the autonomy-posture `<table>` in the `posture` template literal inside `approvals()` lines 897-901 — label 'Autonomy posture by action class table'. Passing a template literal as tableRegion's second argument nests template literals, which is valid; no existing markup, attribute, copy or class changes, and the <table> elements themselves are untouched, so the existing header, row-count and id-order assertions still match.",
+        "why": "The second half: with the floor gone, a table wider than its column still spills unless it scrolls in a container of its own. A `div` with overflow-x:auto alone would be an unnamed, unfocusable scroll region, so the extra columns would be unreachable by keyboard in Firefox and Safari (docs/ui.md: every page is fully operable by keyboard)."
+      },
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "Add two tests, following the two stylesheet-rule tests already in this file (the `#main:focus` rule test at line 273 and the `.page-title` rule test at line 1307, including their 'this is the one line that can be deleted with a green suite' comment style). (1) A stylesheet test asserting `/#main\\s*>\\s*\\*\\s*\\{([^}]*)\\}/` matches and its body carries `min-width:\\s*0\\s*;`, and that `/\\.table-scroll\\s*\\{([^}]*)\\}/` matches and its body carries `overflow-x:\\s*auto\\s*;`. (2) A rendering test: for each of the five routes, render the ideal state against `seededRepos()` (the helper at line 31 — the empty database renders no table and would make the count comparison vacuous) and additionally `override: 'error'` for /journal, which preserves the table (src/web/pages.js:564), and assert the number of `class=\"table-scroll\"` wrappers equals the number of `<table` occurrences on each page, and that every wrapper carries `tabindex=\"0\"`, `role=\"region\"` and a non-empty `aria-label`. Use renderPage the way the surrounding tests do; do not assert on any other class name."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "the stylesheet still carries the two declarations the narrow layout depends on: #main > * has min-width: 0 and .table-scroll has overflow-x: auto",
+          "every table the ideal dashboard renders (the four Meta tables and the decision feed) is inside a table-scroll wrapper with tabindex=\"0\", role=\"region\" and a non-empty aria-label, and the wrapper count equals the <table count",
+          "the journal's table is inside a wrapper labelled 'Decision journal table' in the ideal state, and the error shell — which preserves the table — is wrapped too",
+          "the approvals autonomy-posture table is inside a wrapper labelled 'Autonomy posture by action class table'",
+          "a page state that renders no table (the empty dashboard) renders no wrapper, so the count comparison is not satisfied vacuously"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "source": "TR-21",
+        "check": "At a 375px viewport the dashboard has no horizontal page scroll: document.documentElement.scrollWidth <= window.innerWidth (it measured 686 before this change), and no element's right edge passes 375 except content inside a .table-scroll region — which is the expected, correct result of this fix, because a table wider than its column scrolls inside its own region rather than the document. The load-bearing symptoms are the two that involve no table region at all: the document does not scroll, and the three KPI cards' maturity bars, which sit outside every .table-scroll, are fully on screen with no cut-off right edge.",
+        "how_to_verify": "Boot npm run sdlc:serve against a seeded DB, open / at { width: 375 }, and run document.documentElement.scrollWidth, then the ancestor-aware sweep in qa_script step 3. That sweep excludes the off-screen skip link and everything inside a .table-scroll region, so the wide Meta tables' own cells are not reported — do not treat a cell inside a .table-scroll as a failure.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "source": "TR-21",
+        "check": "At 375px the journal has no horizontal page scroll (821 before) and both filter selects are fully visible: #journal-filter-class and #journal-filter-status have getBoundingClientRect().right <= 375.",
+        "how_to_verify": "Open /journal (and /journal?state=ideal, /journal?state=partial, /journal?state=error) at 375px. Opening a row must not reintroduce overflow: with the drawer open, scrollWidth still reads <= 375.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-3",
+        "source": "TR-21",
+        "check": "At 375px /approvals has no horizontal page scroll (385 before), on the ideal, empty and partial shells.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-4",
+        "source": "TR-21",
+        "check": "/opportunities and /experiments, which were already clean, stay clean at 375px and at 320px: no element's right edge passes the viewport on either page. Neither page renders a table, so no .table-scroll region exists there and the sweep is unqualified — the ancestor-aware filter of qa_script step 3 excludes nothing on these two pages.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-5",
+        "source": "TR-21",
+        "check": "A table wider than its column is fully readable: every column is reachable by scrolling inside its own region, the region is reachable by Tab alone (focus lands on it and arrow keys scroll it), and it has an accessible name naming the table — the Meta insights table on /, the decision journal table on /journal, the autonomy-posture table on /approvals.",
+        "how_to_verify": "Keyboard only: Tab from the top of /journal until focus lands inside the journal table's region; check the region announces its name; press ArrowRight and confirm the last column becomes visible. Same on / for the Meta insights table.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-6",
+        "source": "TR-21",
+        "check": "No desktop regression: at 1280px the dashboard KPI strip is still three cards side by side (grid-template-columns resolves to three tracks), no page has a horizontal scrollbar, and no horizontal scrollbar appears inside any table region because every table fits at that width.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-7",
+        "source": "TR-21",
+        "check": "The two stylesheet declarations the narrow layout depends on, and the per-table wrapper, are pinned by the suite so neither can be deleted with a green build.",
+        "how_to_verify": "node --test test/web/pages.test.js — the stylesheet-rule test and the table-wrapper test added by this change. The stylesheet is not observable from a rendered page, which is why this one is verified in CI rather than in a browser.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "Boot the app the standard way (npm run sdlc:seed then npm run sdlc:serve) and confirm http://localhost:3000/health answers 200. Use a seeded database: the empty states render no tables and would under-report the overflow.",
+      "Set the viewport to { width: 375 } and open /, /journal, /approvals, /opportunities, /experiments. For each, run in the console: document.documentElement.scrollWidth + ' / ' + window.innerWidth. Every page must read scrollWidth <= innerWidth; before this change they read 686, 821, 385, 360, 360.",
+      "Run this ancestor-aware sweep on each page: [...document.querySelectorAll('body *')].filter(el => !el.closest('.skip-link') && !el.closest('.table-scroll') && el.getBoundingClientRect().right > window.innerWidth + 0.5).map(el => el.tagName + '.' + el.className). An empty list is a pass. Content extending past the right edge INSIDE a .table-scroll region is the expected and correct result of this fix — the journal table and the Meta tables are deliberately wider than the column and scroll in their own region — and the `.table-scroll` exclusion in the filter above is what removes it; do not report such an element as a failure. Any element this filtered sweep still lists is a real document overflow. The two exemptions are the only ones: the off-screen skip link (left: -9999px, src/web/styles.css:42-48, pre-existing) and anything inside a .table-scroll region. /opportunities and /experiments render no table, so the sweep is unqualified there.",
+      "Check the two named symptoms from the ticket by eye on / and /journal: the three KPI cards' maturity bars and the Action class / Status selects are complete, with no cut-off right edge. These are outside every table region, so they are what the filtered sweep above is really checking.",
+      "Keyboard pass on /journal: Tab from the top of the page. Focus must reach the journal table's region and announce its name; press ArrowRight until the Status column is visible, then Tab on. Do the same for the Meta insights table on / and the autonomy-posture table on /approvals. A region that takes focus but does not scroll with the arrow keys fails AC-5.",
+      "Open a journal row at 375px to bring up the detail drawer, and re-run document.documentElement.scrollWidth: it must still read <= 375 with the drawer open.",
+      "Repeat the scrollWidth check on every ?state= shell at 375px: /?state=empty, /?state=loading, /?state=partial, /?state=error and the same four on /journal and /approvals.",
+      "Desktop regression pass at 1280px: getComputedStyle(document.querySelector('.kpi-strip')).gridTemplateColumns on / must resolve to three tracks, and no page or table region shows a horizontal scrollbar.",
+      "Widen to 320px and repeat the scrollWidth check on all five pages — the fix must hold below the width the ticket reports."
+    ],
+    "risks": [
+      "The fix adds one focusable region per table (up to five tab stops on the dashboard). That is a real keyboard-navigation cost, taken deliberately: a scroll container with no tabindex cannot be scrolled by keyboard in Firefox or Safari, so without it this change would trade a horizontally scrolling page for an unreachable table. If QA finds the extra stops objectionable, the alternative is cards-per-row on the journal (see out_of_scope), not dropping the tabindex.",
+      "A naive right-edge sweep will now report the wide tables' own cells, because that is what the fix is designed to produce. The sweep in qa_script step 3 and the wording of AC-1 are written to exclude `.table-scroll` descendants and to say so explicitly; the document-level checks (scrollWidth <= innerWidth, the KPI cards, the filter selects) carry the regression signal and involve no table region.",
+      "overflow-wrap was deliberately NOT added. It is not needed for any content the app renders today (measured: with min-width:0 and the table region alone, every page is clean at 320px and up), but a future unbreakable string wider than its container — a much longer identifier, a longer currency formatting — would still overflow its box. The table region covers today's wide case, not that one.",
+      "The same min-content floor still exists one level down, on the nested grids .kpi-strip and .skeleton-stack. A KPI value wider than its column would floor that track and overflow the card. Not triggered by today's data (measured 273px of column for a card whose widest child is ~190px), and not fixed here.",
+      "#journal-drawer keeps `width: 100vw` under the 900px media query. 100vw includes a classic (non-overlay) scrollbar, so on such a browser the open drawer is about 15px wider than the visible area. Pre-existing, measured clean at 375px in Chromium, and untouched by this change — see out_of_scope.",
+      "overflow-x: auto on the region also computes overflow-y to auto. No vertical scrollbar appears because the region's height is content-driven; verified at every width from 320 to 1440.",
+      "No network, API, dependency or data-path change. Nothing in .sdlc/config.yml env.api_allowlist is contacted, and no path in forbidden_paths is touched — the diff is src/web/styles.css, src/web/pages.js and test/web/pages.test.js only."
+    ],
+    "out_of_scope": [
+      "docs/ui.md's narrow behaviour for the journal — 'Table collapses to cards'. Not implemented here. A CSS-only collapse (display:block on the table parts plus td::before content: attr(data-label)) drops table semantics, the exposed headers and the row counts the accessibility section requires; doing it properly is a restructure of journalTable's markup. It would ship on its own and is a follow-up ticket, not part of this bug.",
+      "docs/ui.md's other narrow notes that are not symptoms of this bug and are not implemented today: the dashboard's 'guard status first, feed below' ordering, and the opportunities/experiments 'score components collapse behind disclosure toggles'. Filed separately if wanted.",
+      "#journal-drawer's `width: 100vw` (see risks). A one-word change to 100%, but pre-existing and not part of the reported overflow.",
+      "The header (.app-header / .tenant-name) and the footer are not part of the grid and did not overflow at 375px; a long tenant name could, and is not fixed here."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "`.panel { overflow-x: auto }` — make the existing panel the scroll container, with no markup change at all.",
+        "rejected_because": "Measured to remove the page overflow, but every panel becomes a scroll container and each one is an unnamed, unfocusable scroll region: the extra table columns are unreachable by keyboard in Firefox and Safari, and a screen reader has nothing to announce. The wrapper costs four lines of markup and buys a labelled, focusable region."
+      },
+      {
+        "approach": "`overflow-wrap: anywhere` (or `word-break: break-word`) on #main or on the table cells, as the whole fix.",
+        "rejected_because": "Measured: it does not fix it. Breaking words lowers a text node's min-content contribution but cannot lower a grid track below the sum of its children's min-content, and a seven-column table of real words stays wide. With only the wrap applied, /journal still measured 796px against a 375px viewport."
+      },
+      {
+        "approach": "Fixes confined to the existing `@media (max-width: 900px)` block — e.g. make the tables `display: block` or the panels scroll only when narrow.",
+        "rejected_because": "display:block on table elements removes the table semantics, exposed headers and row counts docs/ui.md's accessibility section requires, and the narrower media query treats the symptom's width rather than the constraint that causes it — the same floor reappears at any viewport narrower than the widest table."
+      },
+      {
+        "approach": "`#main { grid-template-columns: minmax(0, 1fr) }` instead of `min-width: 0` on the items.",
+        "rejected_because": "Also measured to work, and a reasonable choice — but min-width:0 on the items is specified because the CI test pins that exact rule, and because it also protects an item that is itself an unshrinkable flex or grid row rather than only the track. Either is fine; changing one means changing the pinned test."
+      }
+    ],
+    "assumptions": [
+      "QA drives Chromium, matching the environment this was measured in. The fix relies on no Chromium-specific behaviour, but the numbers in this order were taken in Chromium 153 at 320-1440px.",
+      "The seeded database is what QA boots against, so tables are populated. The empty shells render no table and were measured clean as well."
+    ],
+    "evidence": [
+      "Before, at 375px on a seeded local boot: document.documentElement.scrollWidth read 686 on /, 821 on /journal, 385 on /approvals, 360 on /opportunities, 360 on /experiments — matching the ticket's 681/821/385 within font-metric differences.",
+      "The overflow is one track, not per-element: on / at 375px, h1.page-title, section.kpi-strip and div.kpi-card all measured 670px wide with right edges at 686; on /journal, form.journal-filters and section.panel both measured 805px with right edges at 821.",
+      "Widest children measured: the journal table 755px, the dashboard's Meta insights table 494px — the min-content contributions flooring #main's auto track.",
+      "Exactly four table render sites exist and all four are wrapped by this change: src/web/pages.js:247 (metaTable), :431 (decisionFeed), :498 (journalTable), :897-901 (the autonomy-posture table in approvals). /opportunities and /experiments render no <table>, which is why AC-4 needs no scroll-region exemption.",
+      "After injecting `#main > * { min-width: 0 }` and `.table-scroll { overflow-x: auto }` with the table wrapper, at 320/375/414/768/900/1100/1440px on all five routes and all five ?state= shells: scrollWidth never exceeded innerWidth (305 at 320, 360 at 375, and at 1100/1440 the KPI strip resolved to three columns of 335/340px). The journal drawer opened at 375px measured 375 wide with scrollWidth 360.",
+      "Regression check: no existing test asserts on table markup beyond `<th>Id</th><th>Name</th>…` and `data-testid=\"meta-campaigns\"[\\s\\S]*?</table>`, both of which a wrapper div leaves intact; client.js reaches rows by data-action and id, never through the panel's DOM depth."
+    ],
+    "debate_summary": "v1 was rejected on one objection: the offender sweep required in qa_script step 3 and quoted in AC-1 filtered only on right edge past the viewport, then told the tester that any listed element is a real overflow 'not a scrollable region's content' — the exact category a correct implementation of this plan produces, so the right implementation failed its own QA step. Answered in v2 in the same breath as each mention: the sweep is now ancestor-aware (`.filter(el => !el.closest('.skip-link') && !el.closest('.table-scroll') && el.getBoundingClientRect().right > window.innerWidth + 0.5)`), its closing sentence states that content past the right edge inside a .table-scroll region is the expected, correct result and not a failure, and names those two exemptions as the only ones. AC-1 carries the same qualification and keeps the load-bearing checks the objection endorsed — scrollWidth <= innerWidth and the three KPI cards' maturity bars fully on screen, both of which sit outside any table region. AC-4 is unchanged in substance and now says why no exemption is needed there. A risk entry records the naive-sweep hazard so a QA run that re-derives the sweep sees it. Nothing else in v1 changed: the diagnosis, the two CSS rules, the wrapper, the files and the tests are as measured."
+  },
+  "approved_too_high": false
 }
