@@ -159,7 +159,13 @@
       "The reviewer's note that the #43 work order's files[] entry named pages.js:794 and :810 as the traps, whereas the merged file has them at :827 and :843. That work order is not in this repository, so the discrepancy cannot be checked from here and has no bearing on the change."
     ]
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "test/web/pages.test.js",
+    "test/api/opportunities.test.js",
+    "src/web/pages.js",
+    "test/web/pages.test.js",
+    "test/api/opportunities.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
