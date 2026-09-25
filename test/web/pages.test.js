@@ -396,3 +396,64 @@ test('a decision drawer carries the TR-6 fields the drawer renders', async () =>
   assert.ok(row.critic_result.length > 0);
   assert.ok(row.policy_decision_id.length > 0);
 });
+
+// Opportunity queue + experiments (issue #22): the pages read the new
+// repositories, never placeholder raw events, so the seeded fixtures decide
+// everything below.
+
+test('ranked rows render stored score plus all eight score components in repository order', async () => {
+  const repos = seededRepos('pages-opp-rank-');
+  const html = await renderPage('/opportunities', { repositories: repos });
+
+  const order = ['opp_seed_expensive', 'opp_seed_cheap', 'opp_seed_low'].map((id) => html.indexOf(id));
+  assert.ok(order.every((index) => index >= 0), 'all three seeded opportunities render');
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), '0.9208 expensive first, 0.40 cheap, 0.01 low');
+
+  const rowHtml = (id) => html.match(new RegExp(`<li class="opportunity-row"[\\s\\S]*?data-opportunity-id="${id}"[\\s\\S]*?</li>`))[0];
+  for (const id of ['opp_seed_expensive', 'opp_seed_cheap', 'opp_seed_low']) {
+    const row = rowHtml(id);
+    assert.match(row, /data-testid="opportunity-row"/);
+    assert.match(row, /data-testid="score-components"/);
+    for (const component of ['value', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost', 'downside', 'delay']) {
+      assert.match(row, new RegExp(`data-component="${component}"`), `${id} renders its ${component}`);
+    }
+  }
+  assert.match(rowHtml('opp_seed_expensive'), /0\.9208/, 'the stored score renders on the winning row');
+});
+
+test('the seeded underpowered experiment renders the Inconclusive badge, never Win or Loss', async () => {
+  const repos = seededRepos('pages-exp-badge-');
+  const html = await renderPage('/experiments', { repositories: repos });
+  const card = html.match(/data-experiment-id="exp_seed_underpowered"[\s\S]*?<\/li>/)[0];
+  assert.match(card, /data-testid="exp-state">Inconclusive \(underpowered\)</);
+  assert.match(card, /data-testid="caps"/);
+  assert.match(card, /data-testid="stop-rules"/);
+  assert.match(card, /data-testid="data-through">data through /);
+  assert.doesNotMatch(card, /Win|Loss/, 'an inconclusive experiment never renders a win or loss badge');
+
+  const running = html.match(/data-experiment-id="exp_seed_running"[\s\S]*?<\/li>/)[0];
+  assert.match(running, /data-testid="exp-state">Running</);
+  assert.match(html, /₹500\.00/, 'the max spend cap formats as money');
+});
+
+test('the composer is mounted on the error shell and on the ideal page', async () => {
+  const repos = seededRepos('pages-composer-');
+  const ideal = await renderPage('/experiments', { repositories: repos });
+  assert.match(ideal, /data-testid="hypothesis-composer"/);
+  assert.match(ideal, /<label for="composer-title">Title</);
+  assert.match(ideal, /data-draft-key="opp_exp_draft_title"/);
+
+  const errorShell = await renderPage('/experiments', { repositories: repos, override: 'error' });
+  assert.match(errorShell, /Experiment fetch failed/, 'the error panel still renders');
+  assert.match(errorShell, /data-testid="hypothesis-composer"/, 'the composer stays mounted beside the error');
+});
+
+test('an empty database still renders the research-prompt empty state', async () => {
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  const html = await renderPage('/opportunities', { repositories: repos });
+  assert.match(html, /data-testid="opportunities-empty"/);
+  assert.match(html, /lead quality dropped by campaign/);
+  assert.match(html, /search demand is growing for your converting intent/);
+  assert.match(html, /below your current qualified CPL/);
+});

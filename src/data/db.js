@@ -213,6 +213,65 @@ CREATE TABLE IF NOT EXISTS model_calls (
   PRIMARY KEY (tenant_id, id)
 );`,
   },
+  {
+    // Opportunity and experiment working state (issue #22, spec sections
+    // 26/27). opportunities and experiments rows are deliberately MUTABLE
+    // working state — scores, states, evaluation columns and data_through are
+    // all rewritten in place — so there is deliberately NO immutability
+    // trigger on either table; only experiment_evaluations is append-only,
+    // with triggers matching the decisions pattern (RAISE ABORT).
+    name: '005_opportunity_experiment_tables',
+    sql: `
+CREATE TABLE IF NOT EXISTS opportunities (
+  tenant_id TEXT NOT NULL,
+  opportunity_id TEXT NOT NULL,
+  record TEXT NOT NULL,
+  score REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, opportunity_id)
+);
+
+CREATE INDEX IF NOT EXISTS opportunities_rank_idx
+  ON opportunities (tenant_id, score DESC, opportunity_id);
+
+CREATE TABLE IF NOT EXISTS experiments (
+  tenant_id TEXT NOT NULL,
+  experiment_id TEXT NOT NULL,
+  record TEXT NOT NULL,
+  state TEXT NOT NULL,
+  evaluation_result TEXT,
+  evaluation_reason TEXT,
+  evaluated_at TEXT,
+  data_through TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, experiment_id)
+);
+
+CREATE INDEX IF NOT EXISTS experiments_tenant_created_idx
+  ON experiments (tenant_id, created_at, experiment_id);
+
+CREATE TABLE IF NOT EXISTS experiment_evaluations (
+  tenant_id TEXT NOT NULL,
+  experiment_id TEXT NOT NULL,
+  evaluated_at TEXT NOT NULL,
+  result TEXT NOT NULL,
+  reason TEXT,
+  counts TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, experiment_id, evaluated_at)
+);
+
+CREATE TRIGGER IF NOT EXISTS experiment_evaluations_append_only_update
+BEFORE UPDATE ON experiment_evaluations
+BEGIN
+  SELECT RAISE(ABORT, 'experiment_evaluations is append-only: UPDATE denied');
+END;
+
+CREATE TRIGGER IF NOT EXISTS experiment_evaluations_append_only_delete
+BEFORE DELETE ON experiment_evaluations
+BEGIN
+  SELECT RAISE(ABORT, 'experiment_evaluations is append-only: DELETE denied');
+END;`,
+  },
 ];
 
 /** Open the database at dbPath, applying any migrations not yet recorded. */

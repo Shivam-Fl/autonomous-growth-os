@@ -27,6 +27,8 @@ import {
   validateDecisionRecord,
 } from '../domain/decisions.js';
 import { FakeMetaAdsProvider, FAILURE_MODES } from '../integrations/meta_ads/fake.js';
+import { validateOpportunity, scoreOpportunity, expectedContribution } from '../domain/opportunities.js';
+import { validateExperiment, evaluateExperiment } from '../domain/experiments.js';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -313,6 +315,155 @@ export function buildApp({ repositories }) {
     response.json({
       tenant_id: tenantId,
       learnings: repositories.learnings.list(tenantId),
+    });
+  });
+
+  // The opportunity-experiment surface (issue #22, spec sections 26/27):
+  // posted bets are validated in the domain, scored and stored with all eight
+  // components, and read back ranked by stored score (desc, id asc). The
+  // evaluation endpoint appends an evaluation row and rewrites the mutable
+  // experiment state in place. Idempotent re-posts return created:false and
+  // never duplicate rows.
+
+  app.post('/v1/opportunities', (request, response) => {
+    const body = request.body ?? {};
+    const validated = validateOpportunity(body);
+    if (!validated.ok) {
+      return errorResponse(response, 400, validated.error);
+    }
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const opportunity = validated.opportunity;
+    const score = scoreOpportunity(opportunity);
+    const result = repositories.opportunities.create({
+      tenant_id: tenantId,
+      opportunity_id: opportunity.opportunity_id,
+      record: { ...opportunity, tenant_id: tenantId },
+      score,
+    });
+    response.status(201).json({
+      opportunity_id: result.opportunity_id,
+      name: result.name,
+      components: result.components,
+      score: result.score,
+      expected_contribution_micros: expectedContribution(opportunity),
+      created: result.created,
+    });
+  });
+
+  app.get('/v1/opportunities', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    const rows = repositories.opportunities.list(tenantId);
+    response.json({
+      tenant_id: tenantId,
+      count: rows.length,
+      // Already stored-score desc / id asc from the repository: the one rank
+      // key everywhere. Rows carry all eight components plus the score.
+      opportunities: rows.map((row) => ({
+        opportunity_id: row.opportunity_id,
+        name: row.name,
+        components: row.components,
+        score: row.score,
+      })),
+    });
+  });
+
+  app.post('/v1/experiments', (request, response) => {
+    const body = request.body ?? {};
+    const validated = validateExperiment(body);
+    if (!validated.ok) {
+      return errorResponse(response, 400, validated.error);
+    }
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const experiment = validated.experiment;
+    const result = repositories.experiments.create({
+      tenant_id: tenantId,
+      experiment_id: experiment.experiment_id,
+      record: { ...experiment, tenant_id: tenantId },
+      state: experiment.state,
+      data_through: experiment.data_through,
+    });
+    response.status(201).json({
+      experiment_id: result.experiment_id,
+      name: result.name,
+      state: result.state,
+      caps: result.record.caps,
+      stop_rules: result.record.stopRules,
+      data_through: result.data_through,
+      created: result.created,
+    });
+  });
+
+  app.get('/v1/experiments', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    const rows = repositories.experiments.list(tenantId);
+    response.json({
+      tenant_id: tenantId,
+      count: rows.length,
+      experiments: rows.map((row) => ({
+        experiment_id: row.experiment_id,
+        name: row.name,
+        state: row.state,
+        evaluation_result: row.evaluation_result,
+        evaluation_reason: row.evaluation_reason,
+        evaluated_at: row.evaluated_at,
+        caps: row.record.caps,
+        stop_rules: row.record.stopRules,
+        data_through: row.data_through,
+      })),
+    });
+  });
+
+  app.post('/v1/experiments/:experimentId/evaluate', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.body?.tenant_id ?? request.query.tenant_id);
+    const experiment = repositories.experiments.get(tenantId, request.params.experimentId);
+    if (!experiment) {
+      return errorResponse(response, 422, {
+        code: 'UNKNOWN_EXPERIMENT',
+        message: `unknown experiment ${request.params.experimentId}`,
+        details: { experiment_id: request.params.experimentId },
+      });
+    }
+    const body = request.body ?? {};
+    const counts = {
+      control_conversions: body.control_conversions,
+      control_exposures: body.control_exposures,
+      treatment_conversions: body.treatment_conversions,
+      treatment_exposures: body.treatment_exposures,
+    };
+    const minSample = Number.isSafeInteger(body.min_sample) && body.min_sample > 0
+      ? body.min_sample
+      : experiment.record.stopRules?.min_sample;
+    const evaluated = evaluateExperiment({ counts, min_sample: minSample });
+    if (evaluated.error) {
+      return errorResponse(response, 400, evaluated.error);
+    }
+    const evaluatedAt = utcNow();
+    if (evaluated.outcome) {
+      repositories.evaluations.append({
+        tenant_id: tenantId,
+        experiment_id: experiment.experiment_id,
+        evaluated_at: evaluatedAt,
+        result: evaluated.outcome,
+        reason: evaluated.reason ?? null,
+        counts,
+      });
+      // State updates on the experiments table itself are legal here and only
+      // here: the row is mutable working state, outcomes live on the
+      // append-only evaluation rows.
+      repositories.experiments.updateState(tenantId, experiment.experiment_id, {
+        state: evaluated.next_state,
+        evaluation_result: evaluated.outcome,
+        evaluation_reason: evaluated.reason ?? null,
+        evaluated_at: evaluatedAt,
+        data_through: evaluatedAt,
+      });
+    }
+    response.status(200).json({
+      experiment_id: experiment.experiment_id,
+      outcome: evaluated.outcome,
+      reason: evaluated.reason ?? null,
+      next_state: evaluated.next_state,
+      z: evaluated.z ?? null,
     });
   });
 

@@ -39,6 +39,30 @@
     failedRetry.focus();
   }
 
+  // The hypothesis composer (issue #22): every field persists to localStorage
+  // on input and is restored on load, so the error shell — which keeps the
+  // form mounted beside the error panel — never loses a typed draft. Keys are
+  // namespaced opp_exp_draft_. Storage is read defensively: browsers without
+  // it, or a denied quota, degrade to a non-persistent form.
+  try {
+    document.querySelectorAll('[data-draft-key]').forEach(function (field) {
+      var key = field.dataset.draftKey;
+      var stored = window.localStorage.getItem(key);
+      if (stored !== null && stored !== '' && field.value === '') {
+        field.value = stored;
+      }
+      field.addEventListener('input', function () {
+        try {
+          window.localStorage.setItem(key, field.value);
+        } catch (error) {
+          /* A denied quota must not stop the form from working. */
+        }
+      });
+    });
+  } catch (error) {
+    /* Storage unavailable: the form still works, it just does not persist. */
+  }
+
   // The journal detail drawer: filling it is the page's one async behaviour.
   // A failed fetch keeps the drawer closed and announces the failure instead
   // of opening an empty dialog.
