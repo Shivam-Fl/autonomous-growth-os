@@ -349,6 +349,21 @@
       "work_order_version": 1,
       "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36107233820",
       "prior_signatures": []
+    },
+    "triage": {
+      "verdict": "resume",
+      "diagnosis": "QA testing completed but the QA agent wrote qa-report.json with fixtures[0..2].kind set to \"tenant\", which the qa-report schema rejects (allowed: account, org, record, file, token). The judge validation step failed on shape, not on test results; project code and work-order plan are unaffected. First occurrence (prior_signatures empty). Tenants map to kind \"account\" with ref tenant_demo/tenant_qa.",
+      "evidence": "judge Validate the report: `fixtures[0].kind`: must be one of [\"account\",\"org\",\"record\",\"file\",\"token\"], got \"tenant\" (same for [1] and [2]); agent result is_error false, 114 turns, $6.69; check-evidence: 40 file(s) collected, 35 cited, all present; qa-evidence artifact 41 files ID 10852022298; rejected qa-report kept on ledger as rejected_artifacts[\"qa-report\"] for the rerun to correct."
     }
-  }
+  },
+  "triage_history": [
+    {
+      "at": "2026-09-25T07:31:38.088Z",
+      "stage": "qa",
+      "verdict": "resume",
+      "confidence": 90,
+      "diagnosis": "QA testing completed but the QA agent wrote qa-report.json with fixtures[0..2].kind set to \"tenant\", which the qa-report schema rejects (allowed: account, org, record, file, token). The judge validation step failed on shape, not on test results; project code and work-order plan are unaffected. First occurrence (prior_signatures empty). Tenants map to kind \"account\" with ref tenant_demo/tenant_qa.",
+      "run": "36107233820"
+    }
+  ]
 }
