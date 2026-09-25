@@ -357,5 +357,33 @@
     "work_order_version": 1,
     "at": "2026-09-25T18:52:36.687Z"
   },
-  "qa_open_bugs": []
+  "qa_open_bugs": [],
+  "follow_ups": {
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "minor",
+        "title": "Skip link scrolls to main but leaves focus on body, so keyboard users are returned to the header nav",
+        "area": "a11y / keyboard navigation",
+        "expected": "Activating a.skip-link[href=\"#main\"] moves keyboard focus into main#main, so the next Tab continues from inside main and the header navigation is bypassed. This is what WCAG 2.4.1 Bypass Blocks asks for and what .sdlc/memory/qa/selectors.md records the skip link and main#main as being for.",
+        "actual": "On every route tested, activating the skip link set location.hash to #main and scrolled the viewport, but document.activeElement fell back to <body>. main#main is emitted with no tabindex, so it is not a focus target. On /, /opportunities and /approvals, which contain no focusable element inside main, the next Tab wrapped straight back to a.skip-link and then on into the brand and the primary nav, so the header the link promises to skip is re-traversed. On /journal and /experiments, which do contain controls inside main, focus lands in main only incidentally, through the browser's sequential-focus starting point, not because the link moved it.",
+        "repro": [
+          "Open any page of the app (e.g. the command dashboard) in a browser and reload it fresh.",
+          "Press Tab once. Focus lands on the 'Skip to content' link, the first focusable element in the document.",
+          "Press Enter.",
+          "Read document.activeElement in the console: it is <body>, not <main id=\"main\">. location.hash is #main and the page has scrolled, so the link only moved the viewport.",
+          "Press Tab once more: on /, /opportunities and /approvals focus returns to the 'Skip to content' link and then proceeds into the brand and the primary nav. The header was not bypassed.",
+          "Confirm the cause with document.querySelector('main#main').hasAttribute('tabindex'), which is false, and .tabIndex, which is -1 - main is not a focus target."
+        ],
+        "suspected_cause": "src/web/pages.js emits the skip link at line 67 as <a class=\"skip-link\" href=\"#main\">Skip to content</a> and the landmark at line 76 as <main id=\"main\">. A fragment link only moves focus when its target is focusable; <main> is not focusable by default and carries no tabindex=\"-1\". The usual remedy is tabindex=\"-1\" on the target. Pre-existing: git show origin/main:src/web/pages.js contains both lines unchanged, no commit in the file's history has ever added tabindex=\"-1\" (git log -S'tabindex=\"-1\"' -- src/web/pages.js is empty), and this PR's diff touches neither the skip link nor main#main.",
+        "reproducible": "always",
+        "introduced_by_pr": false,
+        "evidence": [
+          "qa-evidence/T-5-skiplink-a11y.txt",
+          "qa-evidence/T-5-skiplink-focused.png"
+        ]
+      }
+    ],
+    "pr": "50"
+  }
 }
