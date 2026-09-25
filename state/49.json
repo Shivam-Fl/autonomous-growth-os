@@ -56,7 +56,7 @@
       "action": "lock acquired"
     }
   ],
-  "resume_at": null,
+  "resume_at": "plan",
   "flow_plan": {
     "kind": "chore",
     "confidence": 85,
@@ -68,6 +68,6 @@
     },
     "decided_at": "2026-09-25T23:08:54.272Z"
   },
-  "stopped_at": null,
+  "stopped_at": "plan",
   "dispatched_stage": "plan"
 }
