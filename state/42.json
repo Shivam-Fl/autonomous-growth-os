@@ -16,7 +16,6 @@
     "n": 1,
     "run": "36161626092"
   },
-  "halted": null,
   "pending": {
     "stage": "implement",
     "rework": null,
@@ -255,7 +254,7 @@
       "action": "-> needs-human"
     }
   ],
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "bug",
     "confidence": 82,
@@ -267,7 +266,7 @@
     },
     "decided_at": "2026-09-25T16:29:08.895Z"
   },
-  "stopped_at": "implement",
+  "stopped_at": null,
   "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-25T16:32:32.481Z",
@@ -313,6 +312,15 @@
       "confidence": 96,
       "diagnosis": "The plan cannot be built as described. Its files[2] edits .sdlc/memory/qa/selectors.md, and on a ticket branch the effective rule set reserves the whole of .sdlc/memory/ — not because config.yml lists it, but because reservedRules() appends '.sdlc/memory/**' whenever the head branch is neither sdlc/project-* nor memory/* (src is .sdlc/bin/lib/guards.js:127). The implement stage's prepare job fetched the approved work order and refused it before any code was written, so nothing of the implementat",
       "run": "36161626092"
+    }
+  ],
+  "replan_requested_at": "2026-09-25T16:46:18.932Z",
+  "route_notes": [
+    {
+      "by": "Shivam-Fl",
+      "at": "2026-09-25T16:46:18.932Z",
+      "kind": "replan",
+      "note": "The approved plan edits .sdlc/memory/qa/selectors.md, which no ticket branch may change — the Librarian records selector changes from what merges. Plan the heading fix without touching .sdlc/memory/**."
     }
   ]
 }
