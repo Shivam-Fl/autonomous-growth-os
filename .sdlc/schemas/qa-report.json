@@ -70,13 +70,8 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "account",
-              "org",
-              "record",
-              "file",
-              "token"
-            ]
+            "minLength": 1,
+            "description": "What was provisioned, in the product's own terms: account, org, tenant, record, file, token, workspace. Nothing reads it but a person — teardown is judged on cleaned_up — so it is not held to a list: growth-os #17's QA created three tenants and the report was rejected because \"tenant\" was not one of five words."
           },
           "ref": {
             "type": "string",
