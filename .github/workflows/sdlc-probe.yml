@@ -21,6 +21,9 @@ on:
       # Another gateway to probe on (https), in place of runtime.provider.base_url — to prove a
       # model before switching to it, e.g. OpenCode's free models on Zen while the config says Go.
       gateway: { required: false, type: string, default: '' }
+      # A real piece of work per model (agent-trial.mjs), graded on tests it never sees. The
+      # bridged models go through the translator, the others straight to the gateway.
+      trial: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -28,7 +31,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90      # a trial is up to 25 minutes a model
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
@@ -84,6 +87,16 @@ jobs:
           npm install -g --no-audit --no-fund @anthropic-ai/claude-code >/dev/null
           node .sdlc/bin/agent-check.mjs agent.json
           tail -40 /tmp/litellm.log || true
+      - name: A real piece of work per model, graded on tests it never sees
+        if: inputs.trial == 'true'
+        env:
+          ANTHROPIC_BASE_URL: ${{ inputs.bridge != '' && 'http://127.0.0.1:4000' || steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ inputs.bridge == '' && steps.prov.outputs.headers || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODELS: ${{ inputs.bridge != '' && inputs.bridge || inputs.models }}
+        run: |
+          command -v claude >/dev/null || npm install -g --no-audit --no-fund @anthropic-ai/claude-code >/dev/null
+          node .sdlc/bin/agent-trial.mjs trial.json trial-work
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: sdlc-probe
@@ -91,4 +104,6 @@ jobs:
             probe.json
             bridge.json
             agent.json
+            trial.json
+            trial-work/
           if-no-files-found: warn
