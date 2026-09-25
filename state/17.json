@@ -513,29 +513,22 @@
     }
   ],
   "qa": {
-    "verdict": "fail",
-    "introduced_bugs": 2,
+    "verdict": "pass",
+    "introduced_bugs": 0,
     "ac_ids": [
       "AC-1",
       "AC-2",
       "AC-3",
       "AC-4",
       "AC-5",
-      "AC-6"
+      "AC-6",
+      "AC-7",
+      "AC-8"
     ],
-    "sha": "79cd58e2a180dda0f168b9087d12049e77b397ad",
-    "run_id": "36108093853",
-    "work_order_version": 1,
-    "at": "2026-09-25T07:39:14.598Z"
+    "sha": "a414b32c3c4e07a60cb4dc7a39bc9a5a94e11e50",
+    "run_id": "36113626629",
+    "work_order_version": 2,
+    "at": "2026-09-25T08:49:14.485Z"
   },
-  "qa_open_bugs": [
-    {
-      "id": "BUG-1",
-      "title": "POST /v1/events accepts negative spend.observed amounts and lets them cancel or invert the tenant's qualified CPL"
-    },
-    {
-      "id": "BUG-2",
-      "title": "computeFunnel sums amount_micros across different currencies, producing a meaningless qualified CPL"
-    }
-  ]
+  "qa_open_bugs": []
 }
