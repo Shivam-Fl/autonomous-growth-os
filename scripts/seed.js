@@ -7,7 +7,7 @@ import { createRepositories, replayRawToDerived } from '../src/data/repositories
 import { validateEvent } from '../src/domain/events.js';
 import { validateDecisionRecord } from '../src/domain/decisions.js';
 import { validateLearning } from '../src/memory/learnings.js';
-import { validateOpportunity, scoreOpportunity } from '../src/domain/opportunities.js';
+import { validateOpportunity, scoreOpportunity, opportunityError, isReadableOpportunityRecord, unreadableComponents } from '../src/domain/opportunities.js';
 import { validateExperiment } from '../src/domain/experiments.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
@@ -320,6 +320,30 @@ function seedOpportunities(repositories) {
     }
     const opportunity = validated.opportunity;
     const previous = repositories.opportunities.get(TENANT.id, candidate.opportunity_id);
+    // A stale row at a fixed seed id is neither rewritten nor reported by the
+    // write below, so a database full of them made every re-seed look like a
+    // clean no-op over records the build cannot read. Fail here instead, and
+    // name the recovery that actually works.
+    //
+    // The seed is NOT transactional: by the time this runs the tenant, the 13
+    // events, the audit event, the learnings, the decisions, the snapshot and
+    // the derived replay are already committed, and seedExperiments has not
+    // run. The throw is loud, not atomic.
+    if (previous && !isReadableOpportunityRecord(previous.record)) {
+      // The code leads the message as well as riding on the error: an uncaught
+      // throw from `npm run sdlc:seed` prints message and stack, never `.code`,
+      // and this message is the only guidance the operator gets. It names the
+      // components this build could not read and the rule they failed, and
+      // deliberately does not assert a cause: a record missing pSuccess did not
+      // come from the micros rename any more than a float money value did, and
+      // guessing wrong about why costs an operator the one run they get.
+      const unreadable = unreadableComponents(previous.record);
+      throw opportunityError(
+        'OPP_STALE_RECORD',
+        `OPP_STALE_RECORD: seed opportunity ${candidate.opportunity_id}: this build cannot read the stored record's component(s) ${unreadable.join(', ')} — money must be a non-negative integer number of micros, the probability components (pSuccess, fit, reversibility) must be between 0 and 1, and the remaining multipliers (infoValue, downside, delay) must be non-negative; delete the database and re-seed (the seed is idempotent by fixed id and never rewrites a stored record)`,
+        { opportunity_id: candidate.opportunity_id, unreadable_components: unreadable },
+      );
+    }
     const result = repositories.opportunities.create({
       tenant_id: TENANT.id,
       opportunity_id: candidate.opportunity_id,

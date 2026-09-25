@@ -327,7 +327,7 @@ test('the ideal dashboard renders the four Meta tables with row counts, id-sorte
   assert.match(html, /Meta insights · 3 rows/);
   assert.match(html, /<th>Id<\/th><th>Name<\/th><th>Status<\/th><th>Objective<\/th>/, 'tables expose headers');
   assert.match(html, /₹500\.00/, 'ad-set budgets render as money');
-  assert.match(html, /₹4000\.00/, 'insight spend renders as money');
+  assert.match(html, /₹4,000\.00/, 'insight spend renders as money');
 
   const campaignsTable = html.match(/data-testid="meta-campaigns"[\s\S]*?<\/table>/)[0];
   const order = ['campaign_001', 'campaign_002', 'campaign_003'].map((id) => campaignsTable.indexOf(id));
@@ -529,20 +529,24 @@ test('the opportunity row renders money as rupees, never as bare micros', async 
   const row = html.match(/<li class="opportunity-row"[\s\S]*?data-opportunity-id="opp_seed_expensive"[\s\S]*?<\/li>/)[0];
 
   // 6_000_000_000 micros is 6000 rupees: the two money components go through
-  // money(), so a reader never has to know the unit to read the row.
-  assert.match(row, /value ₹6000\.00/);
-  assert.match(row, /cost ₹1900\.00/);
+  // money(), so a reader never has to know the unit to read the row. Thousands
+  // grouping is the repo's canonical formatter, the same one the dashboard's
+  // Qualified CPL card already used.
+  assert.match(row, /value ₹6,000\.00/);
+  assert.match(row, /cost ₹1,900\.00/);
   assert.doesNotMatch(row, /6000000000/, 'the bare micros never render');
   assert.doesNotMatch(row, /1900000000/, 'the bare micros never render');
+  assert.doesNotMatch(row, /₹6000\.00|₹1900\.00/, 'the ungrouped rupee string is gone');
   // The six dimensionless components stay plain numbers.
   assert.match(row, /success probability 0\.6/);
   assert.match(row, /downside 2/);
 });
 
 test('a component-less or legacy-shaped row renders the placeholder, never ₹NaN', async () => {
-  // A record stored before the micros rename carries value/cost, so
-  // components.value_micros is undefined. money(undefined) is ₹NaN, so the
-  // null check stands in front of it.
+  // A record stored before the micros rename carries value/cost, so the
+  // repository projects components.value_micros as an explicit null (an
+  // undefined key would be dropped by JSON.stringify). The view's null check
+  // stands in front of money(), and money() would render '—' for it anyway.
   const repos = freshRepos();
   repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
   repos.opportunities.create({
@@ -554,11 +558,125 @@ test('a component-less or legacy-shaped row renders the placeholder, never ₹Na
     },
     score: 0.9208,
   });
+  // The projection is explicit on the way in, not just on the wire.
+  assert.equal(repos.opportunities.get('tenant_demo', 'opp_legacy').components.value_micros, null);
+  assert.equal(repos.opportunities.get('tenant_demo', 'opp_legacy').components.cost_micros, null);
+
   const html = await renderPage('/opportunities', { repositories: repos });
   const row = html.match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
   assert.match(row, /data-component="value_micros">value —</);
   assert.match(row, /data-component="cost_micros">cost —</);
   assert.doesNotMatch(row, /₹NaN/);
+  assert.doesNotMatch(row, /value 6000\b/, 'the pre-rename raw-unit number is not silently rendered as money');
+  assert.doesNotMatch(row, /cost 1900\b/);
+});
+
+test('a row missing a NON-money component renders the placeholder, not a blank or "undefined"', async () => {
+  // Coverage, not a regression guard: this passed before the shared rule too,
+  // because the view's own `raw == null` check already caught the undefined
+  // value. The seven-key defect that motivated this was WIRE-only — a dropped
+  // key vanishes in JSON.stringify — and it is pinned in
+  // test/api/opportunities.test.js. What this holds is the view's half of the
+  // contract: a dimensionless component this build cannot read prints the
+  // em-dash, like the money ones, and the row's readable values still render.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  const { pSuccess, ...stored } = {
+    name: 'No success probability', value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9,
+    infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+  };
+  repos.opportunities.create({ tenant_id: 'tenant_demo', opportunity_id: 'opp_nopsuccess', record: stored, score: 0.9208 });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="pSuccess">success probability —</);
+  assert.doesNotMatch(row, /undefined/, 'a dropped key never renders as the string "undefined"');
+  // The components it CAN read still render, so the em-dash is a statement
+  // about the one component and not about the whole row.
+  assert.match(row, /data-component="value_micros">value ₹6,000\.00</);
+  assert.match(row, /data-component="fit">fit 0\.9</);
+});
+
+test('a negative amount renders the em-dash, never a negative number of rupees', async () => {
+  // A negative micros IS a safe integer, so the renderer's previous local
+  // guard printed '-1.00' for a record the wire projection and the
+  // contribution both called unknown. The renderer's guard is the domain's
+  // rule now, and the three agree.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_negative',
+    score: 0.4,
+    record: {
+      name: 'Negative value', value_micros: -1_000_000, pSuccess: 0.6, fit: 0.9,
+      infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="value_micros">value —</);
+  assert.doesNotMatch(row, /-1\.00|₹-1|value -\d/, 'never as a negative amount');
+  assert.match(row, /data-component="cost_micros">cost ₹1,900\.00</, 'and the readable money is unaffected');
+});
+
+test('a component stored as a numeric string renders the placeholder, not the string', async () => {
+  // '0.5' is not a number this build can stand behind. Rendering it as itself
+  // would print a probability the domain never validated, in a row whose
+  // contribution is null on the wire.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_string',
+    score: 0.4,
+    record: {
+      name: 'String probability', value_micros: 6_000_000_000, pSuccess: '0.5', fit: 0.9,
+      infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="pSuccess">success probability —</);
+  assert.doesNotMatch(row, /success probability 0\.5/, "never as '0.5'");
+  assert.doesNotMatch(row, /₹NaN/);
+});
+
+test('a component stored out of range renders the em-dash, not the number', async () => {
+  // The view half of the read-rule change, on two different keys so the row is
+  // not pinned on pSuccess alone. A pSuccess of 1.5 and a downside of -1 are
+  // now unreadable, so they project as null and opportunityRow renders the
+  // em-dash for any null — the same path a missing component takes. No edit to
+  // pages.js is involved; this is what stops the next person concluding that
+  // the renderer needs one, and it pins the degradation the browser check in
+  // the acceptance criteria walks past.
+  for (const [opportunity_id, component, label, value] of [
+    ['opp_range_psuccess', 'pSuccess', 'success probability', 1.5],
+    ['opp_range_downside', 'downside', 'downside', -1],
+  ]) {
+    const repos = freshRepos();
+    repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+    repos.opportunities.create({
+      tenant_id: 'tenant_demo',
+      opportunity_id,
+      score: 0.4,
+      record: {
+        name: 'Out of range', value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9,
+        infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+        [component]: value,
+      },
+    });
+
+    const row = (await renderPage('/opportunities', { repositories: repos }))
+      .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+    assert.match(row, new RegExp(`data-component="${component}">${label} —</`), `${component} ${value}: the em-dash`);
+    assert.doesNotMatch(row, new RegExp(`${label} ${value}`), `${component} ${value}: never the out-of-range number itself`);
+    // The rest of the row still renders, so the em-dash is a statement about
+    // that one component and not about the whole record.
+    assert.match(row, /data-component="value_micros">value ₹6,000\.00</);
+  }
 });
 
 test('the seeded underpowered experiment renders the Inconclusive badge, never Win or Loss', async () => {
@@ -733,6 +851,116 @@ test('an empty database still renders the research-prompt empty state', async ()
   assert.match(ranked, /data-testid="opportunity-row"/);
   assert.match(ranked, /opp_pages_first/);
   assert.match(ranked, /0\.9208/, 'the stored score renders on the row');
+});
+
+test('a non-INR tenant sees its own currency on opportunity value, cost and the Meta tables', async () => {
+  // The bug the hardcoded rupee sign had: a USD tenant read 6,000 micros as
+  // ₹6,000. Every renderer now goes through the tenant's currency, so the page
+  // draws the same amounts the tenant's own account would.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: 'USD' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_usd',
+    opportunity_id: 'opp_usd_expensive',
+    score: 0.9208,
+    record: {
+      opportunity_id: 'opp_usd_expensive', tenant_id: 'tenant_usd', name: 'US bet',
+      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /value \$6,000\.00/);
+  assert.match(row, /cost \$1,900\.00/);
+  assert.doesNotMatch(row, /₹/, 'no rupee sign survives anywhere on a USD row');
+
+  const dashboard = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+  assert.match(dashboard, /\$500\.00/, 'the ad-set budget is in the tenant currency');
+  assert.match(dashboard, /\$4,000\.00/, 'insight spend is in the tenant currency');
+  assert.doesNotMatch(dashboard, /₹500\.00|₹4,000\.00/);
+});
+
+test('the Meta error shell renders the last-good money cells in the tenant currency too', async () => {
+  // The last-good path is the one the ideal page never exercises, so a
+  // wrong-currency symbol would hide there: on ?meta_error=quota the tables
+  // come from the provider's snapshot, not from a live read.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: 'USD' });
+  const html = await renderPage('/', {
+    repositories: repos,
+    metaProvider: new FakeMetaAdsProvider({ failureMode: 'quota' }),
+    metaError: 'quota',
+  });
+  assert.match(html, /Meta provider sync failed/);
+  assert.match(html, /data-testid="meta-last-good">Meta last good sync /, 'the tables are the last-good snapshot');
+  assert.match(html, /\$500\.00/, 'the snapshot ad-set budget is in the tenant currency');
+  assert.match(html, /\$4,000\.00/, 'the snapshot insight spend is in the tenant currency');
+  assert.doesNotMatch(html, /₹/);
+});
+
+test('an unrecognised tenant currency renders as INR instead of throwing', async () => {
+  // repositories.tenants.create accepts any string, so an unknown code is bad
+  // data, not an exception. A page render must not 500 on it.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_odd', name: 'Odd Tenant', currency: 'ZZZ' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_odd',
+    opportunity_id: 'opp_odd',
+    score: 0.4,
+    record: {
+      opportunity_id: 'opp_odd', tenant_id: 'tenant_odd', name: 'Odd bet',
+      value_micros: 1_000_000_000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost_micros: 100_000_000, downside: 2, delay: 2,
+    },
+  });
+
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /value ₹1,000\.00/, 'the fallback is the repo default, not a crash');
+  assert.doesNotMatch(row, /ZZZ/);
+  assert.match(
+    await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() }),
+    /₹500\.00/,
+    'the dashboard renders too',
+  );
+});
+
+test('an experiment stored with no caps at all renders two em-dashes, never ₹NaN', async () => {
+  // Reachable today: the card defaults caps to {} and renders money() on two
+  // absent keys. The safe-integer guard in money() is what changes it.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  repos.experiments.create({
+    tenant_id: 'tenant_demo',
+    experiment_id: 'exp_no_caps',
+    state: 'draft',
+    record: { experiment_id: 'exp_no_caps', tenant_id: 'tenant_demo', name: 'Uncapped bet', arms: [], stopRules: {} },
+  });
+
+  for (const html of [
+    await renderPage('/experiments', { repositories: repos }),
+    await renderPage('/experiments', { repositories: repos, override: 'partial' }),
+  ]) {
+    const card = html.match(/data-experiment-id="exp_no_caps"[\s\S]*?<\/li>/)[0];
+    assert.match(card, /data-testid="caps">Max spend — · max downside —</);
+    assert.doesNotMatch(card, /₹NaN/);
+  }
+});
+
+test('the experiment caps render through the same helper on both the ideal and the partial branch', async () => {
+  // Two cards.map(experimentCard) sites, so two places for the currency to be
+  // dropped. Both branches, both caps, exactly once each per card.
+  const repos = seededRepos('pages-caps-branches-');
+  for (const html of [
+    await renderPage('/experiments', { repositories: repos }),
+    await renderPage('/experiments', { repositories: repos, override: 'partial' }),
+  ]) {
+    const card = html.match(/data-experiment-id="exp_seed_running"[\s\S]*?<\/li>/)[0];
+    assert.match(card, /Max spend ₹500\.00 · max downside ₹200\.00/);
+    assert.equal((card.match(/₹500\.00/g) ?? []).length, 1, 'the max spend cap appears exactly once');
+    assert.equal((card.match(/₹200\.00/g) ?? []).length, 1, 'the max downside cap appears exactly once');
+    assert.doesNotMatch(card, /₹NaN/);
+  }
 });
 
 // Issue #51 finding 1: the pinning test at the top of this file exercises

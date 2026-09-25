@@ -16,7 +16,17 @@
 // Divisor floors: cost is floored at one currency unit in micros and downside
 // and delay at 1, so a zero cost can never divide by zero or score infinite.
 // The stored score is the ONLY rank key everywhere (score desc, id asc);
-// expectedContribution is a stored display field, never a sort key.
+// expectedContribution is a stored display field, never a sort key. A record
+// this build cannot read reports null on the wire rather than a number it
+// cannot stand behind.
+//
+// The read side has one rule too, and it is the SAME rule as the write-side
+// rules above rather than a looser twin: isReadableComponent below answers with
+// the per-key table COMPONENT_RULES holds, and validateOpportunity asks the same
+// table. Every consumer of a stored record consults it — four consumers each
+// re-deriving the rule from whichever keys the bug that motivated them happened
+// to name is how one record came to be readable in the projection and
+// unreadable in the contribution.
 
 const COMPONENTS = ['value_micros', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost_micros', 'downside', 'delay'];
 const RATIO_COMPONENTS = ['pSuccess', 'fit', 'reversibility', 'infoValue'];
@@ -46,6 +56,107 @@ function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+/** Money is integer micros: exact, non-negative, and no larger than the
+ * largest integer JS can round-trip. Anything else is an amount this build
+ * cannot state without lying about it. */
+function isReadableMoney(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+/** pSuccess, fit and reversibility are probabilities: a closed [0,1]. */
+function isReadableRatio(value) {
+  return isFiniteNumber(value) && value >= 0 && value <= 1;
+}
+
+/** infoValue, downside and delay are multipliers: finite and non-negative.
+ * Unlike the probabilities they may exceed 1 — information can be worth more
+ * than the immediate profit, and a downside of 2 is a real lever. */
+function isReadableMultiplier(value) {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+/**
+ * The domain's per-key rule: what a value must be for this build to stand
+ * behind it, keyed in COMPONENTS order. One predicate per key, holding exactly
+ * the rule validateOpportunity enforces on the way in — so the read side and
+ * the write side cannot drift apart and answer differently about one record.
+ *
+ * Kept beside COMPONENTS rather than derived from it, and deliberately NOT
+ * read back as `Object.keys` to form COMPONENTS: object key order would then
+ * decide the wire projection's order, which is part of the contract
+ * (test/domain/opportunity-readability.test.js pins all eight keys in order).
+ */
+const COMPONENT_RULES = {
+  value_micros: isReadableMoney,
+  pSuccess: isReadableRatio,
+  fit: isReadableRatio,
+  infoValue: isReadableMultiplier,
+  reversibility: isReadableRatio,
+  cost_micros: isReadableMoney,
+  downside: isReadableMultiplier,
+  delay: isReadableMultiplier,
+};
+
+/**
+ * The read-side rule, and the only definition of it: can this build stand
+ * behind this stored value? The verdict is the key's own rule from
+ * COMPONENT_RULES, so a key with no rule is unreadable rather than readable.
+ *
+ * This is the SAME rule validateOpportunity applies, per key, on write — not a
+ * looser "is it a number" check beside it. That is what makes the wire
+ * contract hold instead of merely being asserted: a readable value_micros is a
+ * non-negative safe integer and a readable pSuccess is in [0,1], so
+ * `trunc(value_micros x pSuccess) - cost_micros` always lands inside
+ * [-MAX_SAFE_INTEGER, MAX_SAFE_INTEGER] and IS a safe integer. A read rule that
+ * accepted, say, a pSuccess of 1.5 left the contribution's own overflow guard
+ * reachable through the wire — eight readable components beside a null
+ * contribution, which no client can reconcile.
+ *
+ * It remains a number check, not a coercion: a numeric string such as
+ * '2000000000' is unreadable rather than silently read as 2e9, and a null or
+ * undefined is unreadable for every key.
+ */
+export function isReadableComponent(key, value) {
+  return COMPONENT_RULES[key]?.(value) === true;
+}
+
+/**
+ * The component keys of a stored record this build cannot stand behind, in
+ * COMPONENTS order. The array rather than a boolean because the seed's
+ * operator-facing error has to name the keys that failed, and a record this
+ * build cannot read is a specific diagnosis rather than a verdict.
+ */
+export function unreadableComponents(record) {
+  return COMPONENTS.filter((key) => !isReadableComponent(key, record?.[key]));
+}
+
+/** True when every component of a stored record is readable — the seed guard's
+ * question, and the one answer every consumer of a stored record agrees on. */
+export function isReadableOpportunityRecord(record) {
+  return unreadableComponents(record).length === 0;
+}
+
+/**
+ * The wire projection of a stored record's components: all eight keys, always,
+ * in COMPONENTS order, each readable value passed through and each unreadable
+ * one null.
+ *
+ * Always-present is the point. An unreadable component is present-and-null,
+ * never a dropped key, because JSON.stringify removes an undefined one and a
+ * client cannot tell a component the build chose not to return from a
+ * component that was never stored. Deriving the projection from COMPONENTS is
+ * also what makes it impossible for a key to be left out — the eight
+ * hand-written lines this replaced are how a record missing pSuccess reached
+ * the wire with seven keys.
+ */
+export function readableComponents(record) {
+  const components = {};
+  for (const key of COMPONENTS) {
+    components[key] = isReadableComponent(key, record?.[key]) ? record[key] : null;
+  }
+  return components;
+}
+
 /**
  * Validate one opportunity. Returns {ok, opportunity} (defaults filled) or
  * {ok:false, error:{code,message,details}}. Stable codes: OPP_BAD_ID,
@@ -67,28 +178,31 @@ export function validateOpportunity(input) {
       return rejected('OPP_BAD_COMPONENT', key, `must be a finite number, got ${JSON.stringify(value)}`);
     }
   }
-  // Ranges: probabilities/fit/reversibility are [0,1]; information value is a
-  // multiplier and may exceed 1 (information can be worth more than immediate
-  // profit). The two money components are integer micros (the divisor floors
-  // land in scoreOpportunity, not here).
+  // Ranges, decided by the same per-key table the read side asks.
+  // pSuccess/fit/reversibility is [0,1]; information value is a multiplier
+  // and may exceed 1 (information can be worth more than immediate profit); the
+  // two money components are integer micros (the divisor floors land in
+  // scoreOpportunity, not here). Asking isReadableComponent rather than
+  // re-comparing the range here is what keeps one record from being rejected on
+  // the way in and readable on the way out — every code and message below is
+  // exactly the one this function has always returned.
   for (const key of RATIO_COMPONENTS.filter((key) => key !== 'infoValue')) {
-    if (input[key] < 0 || input[key] > 1) {
+    if (!isReadableComponent(key, input[key])) {
       return rejected('OPP_BAD_COMPONENT', key, 'must be between 0 and 1');
     }
   }
-  if (input.infoValue < 0) {
+  if (!isReadableComponent('infoValue', input.infoValue)) {
     return rejected('OPP_BAD_COMPONENT', 'infoValue', 'must be non-negative');
   }
   // Money is integer micros: a fractional rupee, a negative amount and a value
   // above MAX_SAFE_INTEGER are all rejected, so every stored amount is exact.
   for (const key of MONEY_COMPONENTS) {
-    const micros = input[key];
-    if (!Number.isSafeInteger(micros) || micros < 0) {
-      return rejected('OPP_BAD_MONEY', key, `must be a non-negative integer number of micros, got ${JSON.stringify(micros)}`);
+    if (!isReadableComponent(key, input[key])) {
+      return rejected('OPP_BAD_MONEY', key, `must be a non-negative integer number of micros, got ${JSON.stringify(input[key])}`);
     }
   }
   for (const key of ['downside', 'delay']) {
-    if (input[key] < 0) {
+    if (!isReadableComponent(key, input[key])) {
       return rejected('OPP_BAD_COMPONENT', key, 'must be non-negative');
     }
   }
@@ -143,14 +257,36 @@ export function scoreOpportunity(opportunity) {
  * Derived display field only (integer micros), never a sort key:
  * truncated(value_micros x pSuccess) - cost_micros. Both amounts are already
  * micros, so there is no unit conversion here and none to get wrong.
+ *
+ * null means the money is UNKNOWN, not zero. A record this build cannot read —
+ * one stored before the micros rename, or a direct caller that bypasses
+ * validation — gets null, because 0 is a legitimate break-even contribution and
+ * a sentinel that collides with a real answer is worse than no answer. That is
+ * the opposite of scoreOpportunity above, which still returns 0: a rank key
+ * needs a total order and cannot express "unrankable", while a displayed amount
+ * can.
  */
 export function expectedContribution(opportunity) {
-  const contribution = Math.trunc(opportunity.value_micros * opportunity.pSuccess) - opportunity.cost_micros;
-  // A validated value_micros is a safe integer and pSuccess <= 1, so this
-  // cannot overflow; the guard is for direct callers that bypass validation,
-  // where an unrepresentable result is shown as 0 rather than serialised as
-  // null on the wire (the same unscorable-record-returns-0 convention as above).
-  return Number.isSafeInteger(contribution) ? contribution : 0;
+  const valueMicros = opportunity.value_micros;
+  const costMicros = opportunity.cost_micros;
+  const pSuccess = opportunity.pSuccess;
+  // The guard stands IN FRONT of the arithmetic, not after it. A null or
+  // undefined reaching `valueMicros * pSuccess` is 0, which would turn "the
+  // money is unknown" into a confident break-even — the exact lie this returns
+  // null to avoid. It asks the domain's shared rule rather than a local copy,
+  // so this and the projection above can never classify a record differently.
+  if (!isReadableComponent('value_micros', valueMicros)
+    || !isReadableComponent('cost_micros', costMicros)
+    || !isReadableComponent('pSuccess', pSuccess)) {
+    return null;
+  }
+  const contribution = Math.trunc(valueMicros * pSuccess) - costMicros;
+  // Unreachable through the wire, and that is the point. A readable value_micros
+  // is a non-negative safe integer and a readable pSuccess is in [0,1] (see
+  // COMPONENT_RULES), so the product stays inside the safe-integer range and
+  // this cannot fail for any record the projection reports as readable. It
+  // stays for the direct caller that bypasses the projection entirely.
+  return Number.isSafeInteger(contribution) ? contribution : null;
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   scoreOpportunity,
   rankOpportunities,
   expectedContribution,
+  isReadableComponent,
 } from '../../src/domain/opportunities.js';
 
 const EXPENSIVE = {
@@ -81,18 +82,98 @@ test('cheap low-quality vs expensive high-quality: the expensive campaign wins o
   assert.ok(expectedContribution(expensive) > expectedContribution(cheap));
 });
 
-test('expectedContribution is total: an unrepresentable record reads 0, never Infinity or NaN', () => {
-  // validation rejects this shape, so the record is built by hand here — the
-  // same defence-in-depth scoreOpportunity has. Infinity used to be the result
-  // and JSON.stringify turned it into null on the wire.
+test('expectedContribution says unknown: a record it cannot read is null, never 0, NaN or Infinity', () => {
+  // validation rejects these shapes, so the records are built by hand here — the
+  // same defence-in-depth scoreOpportunity has. The unrepresentable cases used
+  // to answer 0, which is also what a genuine break-even bet contributes, so
+  // the sentinel was indistinguishable from a real answer. null is the only
+  // honest one, and JSON carries it rather than dropping the key.
   const overflowing = expectedContribution({ ...GENERIC, value_micros: 1e303, pSuccess: 1, cost_micros: 0 });
-  assert.equal(overflowing, 0, 'not Infinity, not NaN, and never serialised as null');
-  assert.equal(Number.isFinite(overflowing), true);
-  assert.equal(JSON.stringify({ expected_contribution_micros: overflowing }), '{"expected_contribution_micros":0}');
-  // A record stored before the micros rename reads 0 too, not NaN.
+  assert.equal(overflowing, null, 'not 0, not Infinity, not NaN');
+  assert.equal(JSON.stringify({ expected_contribution_micros: overflowing }), '{"expected_contribution_micros":null}');
+  // A record stored before the micros rename reads null too, not NaN.
   const { value_micros, cost_micros, ...withoutMoney } = GENERIC;
   const legacy = expectedContribution({ ...withoutMoney, value: 1000, cost: 100 });
-  assert.equal(legacy, 0);
+  assert.equal(legacy, null);
+});
+
+test('expectedContribution returns null for a half-unreadable record, never a half-confident number', () => {
+  // Exactly one money key present: the arithmetic would happily produce a
+  // number from whatever survived, which is the half-known answer the fix exists
+  // to stop reporting.
+  const { cost_micros, ...noCost } = GENERIC;
+  assert.equal(expectedContribution(noCost), null, 'cost missing');
+  const { value_micros, ...noValue } = GENERIC;
+  assert.equal(expectedContribution(noValue), null, 'value missing');
+  // Present but not safe-integer micros: a raw-unit amount from the pre-micros
+  // shape, and a float a provider or snapshot row could carry.
+  assert.equal(expectedContribution({ ...GENERIC, value_micros: 1000.5 }), null, 'a fractional rupee is not micros');
+  assert.equal(expectedContribution({ ...GENERIC, cost_micros: 1e303 }), null, 'an overflowing cost is not micros');
+  assert.equal(expectedContribution({ ...GENERIC, value_micros: '6000000000' }), null, 'a string is not micros');
+  assert.equal(expectedContribution({ ...GENERIC, cost_micros: null }), null, 'an explicit null is unknown, not zero');
+});
+
+test('expectedContribution returns null when pSuccess is not a finite number', () => {
+  // Math.trunc(value * undefined) is NaN; the guard stands in front of the
+  // arithmetic, so a null cost_micros cannot turn 'unknown' into a confident 0.
+  for (const pSuccess of [undefined, NaN, Infinity, -Infinity, null, '0.6']) {
+    assert.equal(expectedContribution({ ...GENERIC, pSuccess }), null, `pSuccess ${JSON.stringify(pSuccess)}`);
+  }
+  // The repository now projects an unreadable money key as null, so this is the
+  // exact shape a pre-rename row reaches the domain in.
+  const { value_micros, ...preRename } = GENERIC;
+  assert.equal(expectedContribution({ ...preRename, value_micros: null, cost_micros: null, pSuccess: 0.5 }), null);
+});
+
+test('expectedContribution still answers for a real record, and 0 stays a real answer', () => {
+  assert.equal(expectedContribution(GENERIC), 400_000_000, 'trunc(1e9 x 0.5) - 1e8');
+  // Break-even: value x pSuccess exactly equals the cost, so the true
+  // contribution is zero. This is why null — not 0 — has to mean unknown: if 0
+  // were the sentinel, this record and an unreadable one would be identical.
+  const breakEven = { ...GENERIC, value_micros: 200_000_000, pSuccess: 0.5, cost_micros: 100_000_000 };
+  assert.equal(expectedContribution(breakEven), 0, 'a genuine break-even contributes 0, not null');
+});
+
+test('a negative amount is a number this build cannot stand behind, so the contribution is null', () => {
+  // A negative micros is a safe integer, so the guard this replaced let it
+  // through and reported a confident NEGATIVE contribution for a record the
+  // wire projection calls unknown — the two halves of the same response
+  // disagreeing about one record. Money is a non-negative safe integer here
+  // for the same reason validateOpportunity rejects a negative on the way in.
+  for (const key of ['value_micros', 'cost_micros']) {
+    assert.equal(
+      expectedContribution({ ...GENERIC, [key]: -1_000_000 }),
+      null,
+      `${key}: a negative amount is unknown money, not a negative contribution`,
+    );
+  }
+  // The renderer half of the same rule — a negative amount renders '—' rather
+  // than '-1.00' — is pinned in test/domain/opportunity-readability.test.js,
+  // where the projection and the page are checked against this predicate for
+  // the same fixtures.
+});
+
+test('the arithmetic overflow guard is unreachable through the read rule, at both endpoints', () => {
+  // The two shapes that make that claim a proof rather than a hope. A readable
+  // value_micros is a non-negative safe integer and a readable pSuccess is in
+  // [0,1], so `trunc(value x p) - cost` is always a safe integer — and the
+  // extremes of a CLOSED range are where that is worth testing, since an
+  // endpoint is exactly what an open interval would have let through.
+  //
+  // These are the bodies QA filed: on the previous rule, MAX_SAFE_INTEGER with
+  // a pSuccess of 1.5 put eight readable components beside a null contribution.
+  const atMax = { ...GENERIC, value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 1, cost_micros: 0 };
+  assert.equal(isReadableComponent('value_micros', Number.MAX_SAFE_INTEGER), true, 'the largest safe integer is readable money');
+  assert.equal(expectedContribution(atMax), Number.MAX_SAFE_INTEGER, 'the product is exactly MAX_SAFE_INTEGER, a number and not null');
+
+  const atZero = { ...GENERIC, value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 0, cost_micros: 1_000_000 };
+  assert.equal(expectedContribution(atZero), -1_000_000, 'pSuccess 0 is 0 minus the cost: a negative number, still not null');
+
+  // And the readable range is what rules the overflow shape out at the source,
+  // rather than the guard catching it on the way past.
+  const overflowShape = { ...GENERIC, value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 1.5, cost_micros: 0 };
+  assert.equal(isReadableComponent('pSuccess', 1.5), false, 'pSuccess 1.5 is not readable, so the product never happens');
+  assert.equal(expectedContribution(overflowShape), null, 'which is why the shape is refused at the guard, not at the arithmetic');
 });
 
 test('a zero cost is floored at one currency unit in micros, never infinite and never throws', () => {
@@ -113,24 +194,68 @@ test('zero downside and zero delay are floored the same way as cost', () => {
   assert.ok(Number.isFinite(score) && score > 0, 'no divide-by-zero and no infinite score');
 });
 
+test('validateOpportunity and isReadableComponent are ONE rule, not two that agree today', () => {
+  // The property the wire contract actually rests on. The two paths used to
+  // hold separate rules — a range rule on write, a "is it a number" check on
+  // read — and the gap between them was reachable: a pSuccess of 1.5 was
+  // rejected on the way in and readable on the way out, which is how a body
+  // ended up with eight readable components beside a null contribution. If
+  // either side grows its own copy of the rule again, this fails.
+  //
+  // Every one of the eight keys appears on both sides, so a table that covers
+  // only the money keys cannot pass.
+  const accepted = [
+    ['pSuccess', 0], ['pSuccess', 1], ['fit', 0], ['fit', 1], ['reversibility', 0], ['reversibility', 1],
+    ['infoValue', 0], ['infoValue', 1.2], ['downside', 0], ['delay', 1],
+    ['value_micros', 0], ['value_micros', 6_000_000_000],
+    ['cost_micros', 0], ['cost_micros', 1_900_000_000],
+  ];
+  const refused = [
+    ['pSuccess', -1], ['pSuccess', 1.5], ['fit', 2], ['reversibility', -0.1],
+    ['infoValue', -1], ['downside', -1], ['delay', -1],
+    ['value_micros', -1], ['value_micros', 1.5], ['cost_micros', '500000000'],
+  ];
+  for (const [key, value] of accepted) {
+    assert.equal(isReadableComponent(key, value), true, `${key} ${JSON.stringify(value)} is readable`);
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_rule', [key]: value });
+    assert.equal(result.ok, true, `${key} ${JSON.stringify(value)}: the write side accepts it too${result.error ? ` — ${result.error.message}` : ''}`);
+  }
+  for (const [key, value] of refused) {
+    assert.equal(isReadableComponent(key, value), false, `${key} ${JSON.stringify(value)} is unreadable`);
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_rule', [key]: value });
+    assert.equal(result.ok, false, `${key} ${JSON.stringify(value)}: the write side refuses it too`);
+  }
+});
+
 test('invalid components reject with OPP_BAD_COMPONENT', () => {
-  for (const bad of [
-    { ...GENERIC, opportunity_id: 'opp_bad', pSuccess: 1.5 },
-    { ...GENERIC, opportunity_id: 'opp_bad', fit: -1 },
-    { ...GENERIC, opportunity_id: 'opp_bad', infoValue: Number.NaN },
-    { ...GENERIC, opportunity_id: 'opp_bad', reversibility: 'high' },
+  // The exact message, not just a non-empty one: the ranges now answer through
+  // the same per-key table the read side asks, and a caller-facing string that
+  // changed on the way is a wire break this change must not ship.
+  for (const [bad, message] of [
+    [{ pSuccess: 1.5 }, 'pSuccess: must be between 0 and 1'],
+    [{ pSuccess: -1 }, 'pSuccess: must be between 0 and 1'],
+    [{ fit: -1 }, 'fit: must be between 0 and 1'],
+    [{ fit: 2 }, 'fit: must be between 0 and 1'],
+    [{ reversibility: 2 }, 'reversibility: must be between 0 and 1'],
+    [{ infoValue: Number.NaN }, 'infoValue: must be a finite number, got null'],
+    [{ infoValue: -1 }, 'infoValue: must be non-negative'],
+    [{ reversibility: 'high' }, 'reversibility: must be a finite number, got "high"'],
+    [{ downside: -1 }, 'downside: must be non-negative'],
+    [{ delay: -0.5 }, 'delay: must be non-negative'],
   ]) {
-    const result = validateOpportunity(bad);
-    assert.equal(result.ok, false);
-    assert.equal(result.error.code, 'OPP_BAD_COMPONENT');
-    assert.ok(result.error.message.length > 0);
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', ...bad });
+    assert.equal(result.ok, false, `${JSON.stringify(bad)} must reject`);
+    assert.equal(result.error.code, 'OPP_BAD_COMPONENT', `${JSON.stringify(bad)} reports the component code`);
+    assert.equal(result.error.message, message);
   }
 });
 
 test('a negative, fractional or unsafe cost or value rejects with OPP_BAD_MONEY', () => {
   // Money is integer micros: a fractional rupee and anything above
   // MAX_SAFE_INTEGER cannot be stored exactly, so it is rejected at the door
-  // rather than rounded into a different amount than the caller sent.
+  // rather than rounded into a different amount than the caller sent. The
+  // message is the same one it has always been, down to the interpolated
+  // amount — the money rule moved into the shared table, the wording did not.
   for (const bad of [
     { value_micros: -5 },
     { value_micros: 6_000_000.5 },
@@ -139,10 +264,14 @@ test('a negative, fractional or unsafe cost or value rejects with OPP_BAD_MONEY'
     { cost_micros: 1_900_000_000.5 },
     { cost_micros: 1e303 },
   ]) {
+    const key = Object.keys(bad)[0];
     const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', ...bad });
-    assert.equal(result.ok, false, `${Object.keys(bad)[0]} ${bad[Object.keys(bad)[0]]} must reject`);
+    assert.equal(result.ok, false, `${key} ${bad[key]} must reject`);
     assert.equal(result.error.code, 'OPP_BAD_MONEY', `${JSON.stringify(bad)} reports the money code`);
-    assert.ok(result.error.message.length > 0);
+    assert.equal(
+      result.error.message,
+      `${key}: must be a non-negative integer number of micros, got ${JSON.stringify(bad[key])}`,
+    );
   }
 });
 
@@ -154,7 +283,10 @@ test('components whose product overflows are rejected, so an infinite score is n
   const result = validateOpportunity({ ...GENERIC, value_micros: 9_007_199_254_740_991, infoValue: 1e308 });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, 'OPP_BAD_COMPONENT');
-  assert.ok(result.error.message.length > 0);
+  assert.equal(
+    result.error.message,
+    'components: the product of value_micros, pSuccess, fit, infoValue and reversibility must be a finite number',
+  );
 });
 
 test('an unscorable record scores finite and ranks last, never above a real bet', () => {
@@ -173,6 +305,11 @@ test('an unscorable record scores finite and ranks last, never above a real bet'
     ['opp_ok', 'opp_overflow', 'opp_nan'],
     'real scores first, unscorable rows last, deterministic by id',
   );
+  // The deliberate contrast with expectedContribution, which returns null for
+  // the same class of record: 0 is a LAST PLACE in a total order, so it can
+  // only ever lose to something, while 0 in a displayed amount is a claim that
+  // the bet breaks even.
+  assert.equal(expectedContribution({ ...GENERIC, value_micros: 1e303, pSuccess: 1, cost_micros: 0 }), null);
 });
 
 test('opportunity ids must start with opp_', () => {
