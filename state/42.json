@@ -252,19 +252,23 @@
       "at": "2026-09-25T16:38:05.015Z",
       "agent": "triage",
       "action": "-> needs-human"
+    },
+    {
+      "at": "2026-09-25T16:48:09.024Z",
+      "agent": "router",
+      "action": "route debug -> implement -> review -> qa (model, confidence 88)"
     }
   ],
   "resume_at": null,
   "flow_plan": {
     "kind": "bug",
-    "confidence": 82,
+    "confidence": 88,
     "matched_rule": null,
     "gates": {},
     "councils": {
-      "plan": "single",
-      "review": "single"
+      "plan": "single"
     },
-    "decided_at": "2026-09-25T16:29:08.895Z"
+    "decided_at": "2026-09-25T16:48:09.024Z"
   },
   "stopped_at": null,
   "dispatched_stage": "implement",
