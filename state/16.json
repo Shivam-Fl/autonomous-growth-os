@@ -128,16 +128,26 @@
       {
         "approach": "Fix BUG-3 by hardcoding a different port or adding a second ready script per port",
         "rejected_because": "ports are deployment configuration; the script must read the same $PORT the server reads, with the same 3000 default, or they will drift again"
+      },
+      {
+        "approach": "Invent a deliberately different fix approach for novelty, since this is the second work order on these bugs",
+        "rejected_because": "the v2 approach was never attempted — no code changed on the branch — so there is zero evidence against it; changing a correct, unexecuted plan to look different would be a re-roll in the opposite direction"
       }
     ],
-    "approach": "Fix forward with three surgical corrections on the sdlc/issue-16 branch, one per QA bug, each with a regression test. (1) src/web/pages.js renderPage: derive tenantName from the effective (post-override) state instead of only from the store — when the resolved state is 'empty' the header reads 'No connected account', otherwise it names the first tenant or falls back to 'No connected account'. The page bodies already branch on the effective state and are untouched. (2) src/api/routes.js /v1 catch-all: report request.baseUrl + request.path (the path the client actually called, without query string) instead of mount-relative request.path, so the envelope names /v1/events rather than /events. (3) package.json sdlc:ready: curl http://localhost:${PORT:-3000}/health so the readiness probe follows the same $PORT the server honours, keeping the 3000 default. Add regression coverage: a seeded-DB ?state=empty header/body agreement case in test/web/pages.test.js, a POST /v1/events full-path envelope case in test/api/health.test.js, and a new test/ops/ready-script.test.js asserting the ready script honours $PORT. Then run npm run sdlc:verify green.",
+    "approach": "Apply the v2 fix-forward, which was verified correct but never landed on the branch: three surgical corrections on sdlc/issue-16, one per QA bug, each with a regression test. (1) src/web/pages.js renderPage: derive tenantName from the effective (post-override) state instead of only from the store — when the resolved state is 'empty' the header reads 'No connected account', otherwise it names the first tenant or falls back to 'No connected account'. The page bodies already branch on the effective state and are untouched. (2) src/api/routes.js /v1 catch-all: report request.baseUrl + request.path (the path the client actually called, without query string) instead of mount-relative request.path, so the envelope names /v1/events rather than /events. (3) package.json sdlc:ready: curl http://localhost:${PORT:-3000}/health so the readiness probe follows the same $PORT the server honours, keeping the 3000 default. Add regression coverage: a seeded-DB ?state=empty header/body agreement case in test/web/pages.test.js, a POST /v1/events full-path envelope case in test/api/health.test.js, and a new test/ops/ready-script.test.js asserting the ready script honours $PORT. Then run npm run sdlc:verify green and confirm the diff actually contains the three source edits plus the three test changes before handing back.",
     "assumptions": [
       "A clean CI runner provides Node.js 22 with the built-in node:sqlite module and npm registry access for the one-time express install",
       "No login is required anywhere in v1, so QA drives all pages unauthenticated per TR-21",
       "SQLite file defaults to ./data/app.db with DB_PATH override for tests"
     ],
-    "confidence": 85,
-    "confidence_rationale": "All three defects are confirmed against the PR code (BUG-1 reproduced live via renderPage on a seeded temp DB; BUG-2/BUG-3 confirmed by inspection plus QA evidence), each fix is a one-line, behaviour-pinned change with a dedicated regression test, and all ten original criteria already pass so no surrounding code needs to move.",
+    "confidence": 90,
+    "confidence_rationale": "The v2 diagnosis is verified line-by-line against the branch HEAD: BUG-1 reproduced live by this agent across all five routes, BUG-2/BUG-3 confirmed by inspection plus QA evidence, and each fix is a one-line behaviour-pinned change with a dedicated regression test. The only failure mode observed so far is the changes never landing, which the qa_script now guards with explicit diff/file-existence checks.",
+    "evidence": [
+      "Reproduced BUG-1 live via node against origin/sdlc/issue-16 src/web/pages.js with stub repositories: seeded + override=empty on /journal gives header 'Demo Tenant' with body 'Shadow mode has not started' and data-state=empty; same mismatch on all five routes; controls correct (seeded/no-override -> Demo Tenant + ideal; fresh/no-override -> No connected account + empty)",
+      "QA screenshot probe-http%3A%2F%2Flocalhost%3A3000%2F%3Fstate%3Dempty.png shows the contradiction directly: empty body ('No connected ad account yet') under a 'Demo Tenant' header on the seeded server",
+      "Branch HEAD adc2939 equals the QA-tested commit, so QA tested exactly this code; v2's demanded test/ops/ready-script.test.js does not exist on the branch; test/api/health.test.js only probes /v1/does-not-exist without asserting the full path; test/web/pages.test.js only asserts the header on a fresh DB, never seeded+override",
+      "docs/ui.md defines empty as 'No connected account yet', grounding AC-11's direction in the spec rather than in QA preference"
+    ],
     "files": [
       {
         "action": "edit",
@@ -169,6 +179,7 @@
     ],
     "qa_script": [
       "npm run sdlc:verify — full node:test suite green",
+      "git diff --stat shows edits to src/web/pages.js, src/api/routes.js, package.json plus test/web/pages.test.js, test/api/health.test.js and new test/ops/ready-script.test.js — if the diff is empty the attempt changed nothing and must not be handed back",
       "npm run sdlc:serve, then curl -fsS http://localhost:3000/health — 200 within seconds, zero external services",
       "npm run sdlc:seed, then open /journal?state=empty — empty journal body AND header reads 'No connected account' (AC-11)",
       "curl -i -X POST -d 'x' http://localhost:3000/v1/events — 404 envelope naming POST /v1/events with no stack (AC-12)",
@@ -177,9 +188,10 @@
     "reproduced": true,
     "risks": [
       "The ?state= preview override remains a render-time aid only; the fix keeps it read-only (no store writes) exactly as QA verified in T-6",
-      "?state=ideal on a truly empty DB still shows the 'No connected account' header with ideal-shaped body content — consistent with AC-11's rule that chrome follows effective state, and covered by the new regression case"
+      "?state=ideal on a truly empty DB still shows the 'No connected account' header with ideal-shaped body content — consistent with AC-11's rule that chrome follows effective state, and covered by the new regression case",
+      "The previous attempt's failure mode was that no changes landed at all; the qa_script diff check above exists specifically so a second no-op handoff is caught by the implementer, not by QA"
     ],
-    "root_cause": "The page chrome and the page body answered two different definitions of 'empty'. renderPage resolved the body from the effective (post-override) state but computed the header tenantName solely from the store's first tenant, so ?state=empty on a seeded DB rendered an empty body under a 'Demo Tenant' header (BUG-1, user-visible). The same class of underspecification produced the other two: the /v1 catch-all reported Express's mount-relative request.path instead of the client-called path (BUG-2), and sdlc:ready hardcoded :3000 while the server honours $PORT (BUG-3). None of these touched the ticket's core invariants — all ten acceptance criteria and all 33 unit tests pass — which is why the slice looked done while three operator- and user-facing inconsistencies shipped with it.",
+    "root_cause": "The page chrome and the page body answer two different definitions of 'empty'. renderPage resolves the body from the effective (post-override) state but computes the header tenantName solely from the store's first tenant, so ?state=empty on a seeded DB renders an empty body under a 'Demo Tenant' header (BUG-1, user-visible) — directly contradicting docs/ui.md, which defines empty as 'No connected account yet'. The same class of underspecification produced the other two: the /v1 catch-all reports Express's mount-relative request.path instead of the client-called path (BUG-2), and sdlc:ready hardcodes :3000 while the server honours $PORT (BUG-3). None of these touches the ticket's core invariants — all ten original acceptance criteria and all 33 unit tests pass — which is why the slice looked done while three operator- and user-facing inconsistencies shipped with it.",
     "tests": [
       {
         "action": "edit",
@@ -206,8 +218,8 @@
         "path": "test/ops/ready-script.test.js"
       }
     ],
-    "understanding": "The v1 plan's foundation diagnosis was directionally right, not wrong: the repo needed the full greenfield scaffold, and that scaffold works — all ten acceptance criteria pass in the browser and all 33 node:test cases are green. What the previous attempt got wrong was three underspecified details that the implementation then filled in inconsistently, each confirmed against the PR code: (1) it described ?state= as rendering 'that shell' without saying the page chrome must follow the effective state, so src/web/pages.js renderPage computed the body from the override but tenantName from the store — on /journal?state=empty against a seeded DB the body says 'Shadow mode has not started' while the header says 'Demo Tenant' (BUG-1, minor, user-visible; I reproduced this live by seeding a temp DB and calling renderPage with override 'empty'). (2) It required the {code,message} envelope on unknown API paths without saying the message must name the path the client called, so the /v1-mounted handler used Express's mount-relative request.path and POST /v1/events is reported as 'POST /events' (BUG-2, trivial). (3) It specified sdlc:ready as curling /health without tying it to $PORT, so package.json hardcodes :3000 while src/index.js honours $PORT and a PORT=4000 boot fails its own readiness check (BUG-3, minor). This is the first QA failure on the issue (no failure-packet.json, no repeated mechanical signature), the failure is in code rather than environment or config, and the fix touches no forbidden paths — so a revised fix-forward work order, not stop.json. No criterion is wrong and none changes: AC-1..AC-10 are carried forward verbatim, and AC-11/AC-12/AC-13 are appended as permanent contract checks for the three introduced bugs.",
-    "version": 2
+    "understanding": "The previous work order's (v2) diagnosis was RIGHT, not wrong — and I verified that before writing anything else. BUG-1 reproduces live: seeded repositories plus override=empty on /journal yields header 'Demo Tenant' with the empty body and data-state=empty, on all five routes; the QA screenshot of /?state=empty shows the same contradiction directly. BUG-2 (routes.js line 43 uses mount-relative request.path) and BUG-3 (package.json hardcodes :3000) are exactly as v2 described. What the previous attempt got wrong was execution, not diagnosis: branch HEAD adc2939 is byte-identical to the commit QA tested, no commits followed the QA verdict, v2's demanded test/ops/ready-script.test.js does not exist on the branch, and the existing suites lack every v2 regression case. In other words PR #27 as QA saw it was still the v1 implementation — the v2 fix-forward was never built, so there is no evidence against its approach and no failure-packet.json repeat signature. This v3 therefore re-issues the same three surgical fixes with the same regression tests (AC-1..AC-13 carried forward verbatim, none renumbered or dropped), plus a diff check in qa_script so a second no-op handoff cannot pass silently. No criterion is wrong and none changes; stop.json is not warranted (nothing environmental, no forbidden paths, QA and the code agree).",
+    "version": 3
   },
   "touch_paths": [
     "src/web/pages.js",
@@ -655,10 +667,10 @@
   "validated_at": "2026-09-24T19:03:21.257Z",
   "validated_ac_changes": [],
   "approved_too_high": false,
-  "work_order_version": 2,
-  "work_order_posted_at": "2026-09-25T02:26:57.105Z",
+  "work_order_version": 3,
+  "work_order_posted_at": "2026-09-25T05:38:54.273Z",
   "work_order_from": "root-cause",
-  "work_order_comment": "5825674814",
+  "work_order_comment": "5827412484",
   "failure_packet": {
     "issue": 16,
     "pr": 27,
