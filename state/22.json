@@ -215,7 +215,16 @@
   ],
   "on_complete": "merge",
   "artifacts": {},
-  "failure_history": [],
+  "failure_history": [
+    {
+      "stage": "ci",
+      "error_signature": "8585c515b6416cdc",
+      "error_type": "unknown",
+      "attempt": 3,
+      "at": "2026-09-25T14:06:16.647Z",
+      "digest": "The ci stage failed and no known error pattern matched. The raw output is below."
+    }
+  ],
   "review_history": [
     {
       "criteria": [
