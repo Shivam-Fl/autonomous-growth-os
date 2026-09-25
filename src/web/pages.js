@@ -9,7 +9,7 @@
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
-import { formatMoney, fromMicros } from '../domain/money.js';
+import { formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
 import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
@@ -180,21 +180,33 @@ const META_TABLES = [
 
 const META_CELLS = {
   campaigns: (row) => [row.id, row.name, row.status, row.objective],
-  adSets: (row) => [row.id, row.campaign_id, row.name, row.status, money(row.daily_budget_micros)],
+  adSets: (row, currency) => [row.id, row.campaign_id, row.name, row.status, money(row.daily_budget_micros, currency)],
   ads: (row) => [row.id, row.ad_set_id, row.name, row.status],
-  insights: (row) => [row.id, row.campaign_id, money(row.spend_micros), String(row.impressions), String(row.clicks)],
+  insights: (row, currency) => [row.id, row.campaign_id, money(row.spend_micros, currency), String(row.impressions), String(row.clicks)],
 };
 
-function money(micros) {
-  return `₹${(micros / 1_000_000).toFixed(2)}`;
+/**
+ * The one money renderer in this file, over the repo's currency-aware
+ * formatter, so every amount on every screen agrees with the dashboard's
+ * Qualified CPL. Two guards keep a page strictly safer than the hand-rolled
+ * rupee version it replaces: a value that is not integer micros degrades to the
+ * em-dash (today's ₹NaN), and a currency outside ISO_CURRENCIES falls back to
+ * INR rather than throwing — tenants.create accepts any string, so an unknown
+ * code is bad data, and a page render must not 500 on it.
+ */
+function money(micros, currency = 'INR') {
+  if (!Number.isSafeInteger(micros)) {
+    return '—';
+  }
+  return formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR'));
 }
 
-function metaTable(collection, title, headers, rows) {
+function metaTable(collection, title, headers, rows, currency) {
   const cells = META_CELLS[collection];
   const body = rows.length === 0
     ? `<p class="empty-copy">No ${escapeHtml(title.toLowerCase())} in the last good sync.</p>`
     : `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
-${rows.map((row) => `<tr>${cells(row).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
+${rows.map((row) => `<tr>${cells(row, currency).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
 </tbody></table>`;
   return panel({
     title: `${title} · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
@@ -218,7 +230,7 @@ function metaErrorPanel({ check, error }) {
   });
 }
 
-async function metaRegions({ metaProvider, metaError }) {
+async function metaRegions({ metaProvider, metaError, currency }) {
   if (!metaProvider) {
     return panel({
       title: 'Meta campaigns',
@@ -239,7 +251,7 @@ async function metaRegions({ metaProvider, metaError }) {
   if (!failed && !simulation) {
     const syncedAt = metaProvider.lastGood?.()?.synced_at ?? 'unknown';
     return `${metaSyncLine(syncedAt)}
-${META_TABLES.map(([collection, title, headers]) => metaTable(collection, title, headers, reads[collection].data)).join('')}`;
+${META_TABLES.map(([collection, title, headers]) => metaTable(collection, title, headers, reads[collection].data, currency)).join('')}`;
   }
 
   const check = failed ? META_CHECKS[failed.error.code] ?? 'provider-sync' : META_SIMULATION_CHECKS[simulation];
@@ -248,7 +260,7 @@ ${META_TABLES.map(([collection, title, headers]) => metaTable(collection, title,
   const tables = META_TABLES
     .map(([collection, title, headers]) => {
       const rows = snapshot ? snapshot[collection] : reads[collection].ok ? reads[collection].data : null;
-      return rows ? metaTable(collection, title, headers, rows) : null;
+      return rows ? metaTable(collection, title, headers, rows, currency) : null;
     })
     .filter(Boolean);
   return `${metaErrorPanel({ check, error: failed?.error ?? null })}
@@ -290,7 +302,7 @@ ${panel({
     const age = tenant && through ? `${staleAgeHours(nowIso, through)}h ago` : 'unknown';
     return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(through ?? 'unknown')} (${escapeHtml(age)})</div>
 ${kpiStrip(state, { repositories, tenant, stale: true })}
-${await metaRegions({ metaProvider, metaError })}
+${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
@@ -310,7 +322,7 @@ ${guardianPanel(state)}`;
   }
 
   return `${kpiStrip(state, { repositories, tenant })}
-${await metaRegions({ metaProvider, metaError })}
+${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
@@ -350,9 +362,11 @@ function kpiStrip(state, { repositories, tenant }) {
   const { gated } = policyBand(maturity);
   const cpl = funnel.qualified_cpl_micros;
   const cards = [
-    // Same tenant-wide rule GET /v1/metrics applies: integer micros divided,
-    // formatted without floats, em-dash while the volume is zero.
-    kpiCard('Qualified CPL', cpl === null ? '—' : formatMoney(fromMicros(cpl, tenant.currency ?? 'INR')), maturity, through),
+    // Same tenant-wide rule GET /v1/metrics applies, and now the same renderer
+    // as every other amount on every other screen: integer micros divided,
+    // formatted without floats, em-dash while the volume is zero (money()'
+    // safe-integer guard).
+    kpiCard('Qualified CPL', money(cpl, tenant.currency ?? 'INR'), maturity, through),
     kpiCard('Qualified volume', String(funnel.qualified_volume), maturity, through),
     kpiCard('Maturity coverage', coverage.toFixed(2), maturity, through),
   ];
@@ -655,13 +669,14 @@ const COMPONENT_LABELS = [
 // dimensionless multipliers and stay as plain numbers.
 const MONEY_COMPONENTS = new Set(['value_micros', 'cost_micros']);
 
-function opportunityRow(row) {
+function opportunityRow(row, currency) {
   const components = COMPONENT_LABELS
     .map(([key, label]) => {
       // An absent component — a record stored before the micros rename, say —
-      // keeps the '—' placeholder: money(undefined) would print ₹NaN.
+      // keeps the '—' placeholder; the repository projects that as null rather
+      // than dropping the key, and both readings land here.
       const raw = row.components[key];
-      const shown = raw == null ? '—' : MONEY_COMPONENTS.has(key) ? money(raw) : String(raw);
+      const shown = raw == null ? '—' : MONEY_COMPONENTS.has(key) ? money(raw, currency) : String(raw);
       return `<span class="score-component" data-component="${key}">${escapeHtml(label)} ${escapeHtml(shown)}</span>`;
     })
     .join('');
@@ -672,12 +687,13 @@ function opportunityRow(row) {
 </li>`;
 }
 
-function rankedList(rows, emptyCopy) {
+function rankedList(rows, emptyCopy, currency) {
   return panel({
     title: `Ranked opportunities · ${rows.length}`,
     body: rows.length === 0
       ? `<p class="empty-copy">${emptyCopy}</p>`
-      : `<ul class="opportunity-list">${rows.map(opportunityRow).join('')}</ul>`,
+      // The explicit arrow keeps map's index out of the currency slot.
+      : `<ul class="opportunity-list">${rows.map((row) => opportunityRow(row, currency)).join('')}</ul>`,
   });
 }
 
@@ -704,7 +720,7 @@ function opportunities(state, { repositories, tenant }) {
   if (state === 'partial') {
     return `<div class="banner banner-warn" role="status">Some experiment arms await maturity — scores shown are provisional until conversions mature.</div>
 ${researchObservations(repositories, tenant)}
-${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.')}`;
+${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenant?.currency ?? 'INR')}`;
   }
 
   if (state === 'empty' || ranked.length === 0) {
@@ -718,7 +734,7 @@ ${emptyState({
   }
 
   return `${researchObservations(repositories, tenant)}
-${rankedList(ranked, '')}`;
+${rankedList(ranked, '', tenant?.currency ?? 'INR')}`;
 }
 
 const STATE_BADGES = {
@@ -729,14 +745,16 @@ const STATE_BADGES = {
   inconclusive: 'Inconclusive',
 };
 
-function experimentCard(experiment) {
+function experimentCard(experiment, currency) {
   const badge = STATE_BADGES[experiment.state] ?? experiment.state;
   const inconclusive = experiment.state === 'inconclusive';
   const stopRules = experiment.record?.stopRules ?? {};
+  // An experiment stored with no caps at all renders '—' twice rather than
+  // ₹NaN twice: money()'s safe-integer guard is what covers the absent keys.
   const caps = experiment.record?.caps ?? {};
   return `<li class="experiment-card" data-testid="experiment-card" data-experiment-id="${escapeHtml(experiment.experiment_id)}">
 <strong>${escapeHtml(experiment.name)}</strong>
-<span data-testid="caps">Max spend ${escapeHtml(money(caps.max_spend_micros))} · max downside ${escapeHtml(money(caps.max_downside_micros))}</span>
+<span data-testid="caps">Max spend ${escapeHtml(money(caps.max_spend_micros, currency))} · max downside ${escapeHtml(money(caps.max_downside_micros, currency))}</span>
 <div data-testid="stop-rules">stop rules: minimum runtime ${escapeHtml(String(stopRules.min_runtime_hours ?? '—'))}h, minimum sample ${escapeHtml(String(stopRules.min_sample ?? '—'))}, success threshold ${escapeHtml(String(stopRules.success_threshold ?? '—'))}, harm threshold ${escapeHtml(String(stopRules.harm_threshold ?? '—'))}</div>
 <span class="maturity-label" data-testid="exp-state">${escapeHtml(badge)}${experiment.evaluation_reason && (inconclusive || experiment.state === 'stopped') ? ` (${escapeHtml(experiment.evaluation_reason)})` : ''}</span>
 <span class="maturity-label" data-testid="data-through">data through ${escapeHtml(experiment.data_through ?? '—')}</span>
@@ -791,7 +809,7 @@ ${panel({
     title: 'Running experiments',
     body: cards.length === 0
       ? `<p class="empty-copy">No experiments running, so no arms await maturity.</p>`
-      : `<ul class="experiment-list">${cards.map(experimentCard).join('')}</ul>`,
+      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
   })}
 ${hypothesisComposer()}`;
   }
@@ -807,7 +825,7 @@ ${hypothesisComposer()}`;
 
   return panel({
     title: `Running experiments · ${cards.length}`,
-    body: `<ul class="experiment-list">${cards.map(experimentCard).join('')}</ul>`,
+    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
   }) + hypothesisComposer();
 }
 

@@ -364,6 +364,11 @@ export function buildApp({ repositories }) {
       // From the STORED row, not the request body: on an idempotent re-post
       // the body is discarded, and the response must describe the record that
       // exists rather than the one that was ignored.
+      // CONTRACT: this field is null, never 0, when the stored row is one this
+      // build cannot read — a row stored before the micros rename has no
+      // value_micros/cost_micros to compute from. null is an honest unknown;
+      // 0 is not, because a break-even bet legitimately contributes zero, so a
+      // client doing arithmetic on this field must null-check it.
       expected_contribution_micros: expectedContribution(result.components),
       created: result.created,
     });

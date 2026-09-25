@@ -16,7 +16,9 @@
 // Divisor floors: cost is floored at one currency unit in micros and downside
 // and delay at 1, so a zero cost can never divide by zero or score infinite.
 // The stored score is the ONLY rank key everywhere (score desc, id asc);
-// expectedContribution is a stored display field, never a sort key.
+// expectedContribution is a stored display field, never a sort key. A record
+// this build cannot read reports null on the wire rather than a number it
+// cannot stand behind.
 
 const COMPONENTS = ['value_micros', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost_micros', 'downside', 'delay'];
 const RATIO_COMPONENTS = ['pSuccess', 'fit', 'reversibility', 'infoValue'];
@@ -143,14 +145,30 @@ export function scoreOpportunity(opportunity) {
  * Derived display field only (integer micros), never a sort key:
  * truncated(value_micros x pSuccess) - cost_micros. Both amounts are already
  * micros, so there is no unit conversion here and none to get wrong.
+ *
+ * null means the money is UNKNOWN, not zero. A record this build cannot read —
+ * one stored before the micros rename, or a direct caller that bypasses
+ * validation — gets null, because 0 is a legitimate break-even contribution and
+ * a sentinel that collides with a real answer is worse than no answer. That is
+ * the opposite of scoreOpportunity above, which still returns 0: a rank key
+ * needs a total order and cannot express "unrankable", while a displayed amount
+ * can.
  */
 export function expectedContribution(opportunity) {
-  const contribution = Math.trunc(opportunity.value_micros * opportunity.pSuccess) - opportunity.cost_micros;
+  const valueMicros = opportunity.value_micros;
+  const costMicros = opportunity.cost_micros;
+  const pSuccess = opportunity.pSuccess;
+  // The guard stands IN FRONT of the arithmetic, not after it. A null or
+  // undefined reaching `valueMicros * pSuccess` is 0, which would turn "the
+  // money is unknown" into a confident break-even — the exact lie this returns
+  // null to avoid.
+  if (!Number.isSafeInteger(valueMicros) || !Number.isSafeInteger(costMicros) || !isFiniteNumber(pSuccess)) {
+    return null;
+  }
+  const contribution = Math.trunc(valueMicros * pSuccess) - costMicros;
   // A validated value_micros is a safe integer and pSuccess <= 1, so this
-  // cannot overflow; the guard is for direct callers that bypass validation,
-  // where an unrepresentable result is shown as 0 rather than serialised as
-  // null on the wire (the same unscorable-record-returns-0 convention as above).
-  return Number.isSafeInteger(contribution) ? contribution : 0;
+  // cannot overflow; the guard is for direct callers that bypass validation.
+  return Number.isSafeInteger(contribution) ? contribution : null;
 }
 
 /**

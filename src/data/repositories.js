@@ -585,12 +585,19 @@ function createOpportunityRepository(db) {
       name: record.name ?? row.opportunity_id,
       record,
       components: {
-        value_micros: record.value_micros,
+        // An unreadable money component is present-and-null rather than a
+        // dropped key: JSON.stringify removes an undefined key, so a caller
+        // cannot tell a component the build chose not to return from a
+        // component that was never stored. This is a wire-format change — the
+        // absent key becomes an explicit null — and a client that distinguishes
+        // `'value_micros' in components` from `components.value_micros ===
+        // null` will see the difference.
+        value_micros: record.value_micros ?? null,
         pSuccess: record.pSuccess,
         fit: record.fit,
         infoValue: record.infoValue,
         reversibility: record.reversibility,
-        cost_micros: record.cost_micros,
+        cost_micros: record.cost_micros ?? null,
         downside: record.downside,
         delay: record.delay,
       },

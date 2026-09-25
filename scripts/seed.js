@@ -7,7 +7,7 @@ import { createRepositories, replayRawToDerived } from '../src/data/repositories
 import { validateEvent } from '../src/domain/events.js';
 import { validateDecisionRecord } from '../src/domain/decisions.js';
 import { validateLearning } from '../src/memory/learnings.js';
-import { validateOpportunity, scoreOpportunity } from '../src/domain/opportunities.js';
+import { validateOpportunity, scoreOpportunity, opportunityError } from '../src/domain/opportunities.js';
 import { validateExperiment } from '../src/domain/experiments.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
@@ -311,6 +311,15 @@ const SEED_EXPERIMENTS = [
   },
 ];
 
+/** Can this build read a stored opportunity record at all? A record written
+ * before the micros rename carries value/cost instead of value_micros/
+ * cost_micros, so neither the renderer nor the contribution can stand behind
+ * it. Nothing in the seed can fix that: opportunities.create is INSERT OR
+ * IGNORE on a fixed id, so a re-seed leaves the stored row byte-identical. */
+function isReadableOpportunityRecord(record) {
+  return Number.isSafeInteger(record?.value_micros) && Number.isSafeInteger(record?.cost_micros);
+}
+
 function seedOpportunities(repositories) {
   let written = 0;
   for (const candidate of SEED_OPPORTUNITIES) {
@@ -320,6 +329,25 @@ function seedOpportunities(repositories) {
     }
     const opportunity = validated.opportunity;
     const previous = repositories.opportunities.get(TENANT.id, candidate.opportunity_id);
+    // A stale row at a fixed seed id is neither rewritten nor reported by the
+    // write below, so a database full of them made every re-seed look like a
+    // clean no-op over records the build cannot read. Fail here instead, and
+    // name the recovery that actually works.
+    //
+    // The seed is NOT transactional: by the time this runs the tenant, the 13
+    // events, the audit event, the learnings, the decisions, the snapshot and
+    // the derived replay are already committed, and seedExperiments has not
+    // run. The throw is loud, not atomic.
+    if (previous && !isReadableOpportunityRecord(previous.record)) {
+      // The code leads the message as well as riding on the error: an uncaught
+      // throw from `npm run sdlc:seed` prints message and stack, never `.code`,
+      // and this message is the only guidance the operator gets.
+      throw opportunityError(
+        'OPP_STALE_RECORD',
+        `OPP_STALE_RECORD: seed opportunity ${candidate.opportunity_id}: the stored record predates the micros rename and this build cannot read it; delete the database and re-seed (the seed is idempotent by fixed id and never rewrites a stored record)`,
+        { opportunity_id: candidate.opportunity_id, field: 'value_micros' },
+      );
+    }
     const result = repositories.opportunities.create({
       tenant_id: TENANT.id,
       opportunity_id: candidate.opportunity_id,

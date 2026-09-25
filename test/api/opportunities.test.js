@@ -38,6 +38,10 @@ const LOW = {
   value_micros: 1_000_000_000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost_micros: 500_000_000, downside: 2, delay: 2,
 };
 
+// A fixed instant for the frozen-clock test below, as a number because
+// MockTimers.setTime takes milliseconds and not a Date: 2026-09-25T12:00:00Z.
+const FROZEN_INSTANT_MS = 1_789_041_600_000;
+
 const EXPERIMENT = {
   experiment_id: 'exp_alpha_budget',
   tenant_id: 'tenant_alpha',
@@ -395,4 +399,142 @@ test('tenant B cannot read tenant A rows through either listing', async () => {
     body: JSON.stringify({ control_conversions: 10, control_exposures: 1000, treatment_conversions: 12, treatment_exposures: 1000, min_sample: 100 }),
   });
   assert.equal(evaluated.status, 422, 'the cross-tenant evaluation is an unknown experiment');
+});
+
+test('two evaluations in the same millisecond report the collision instead of a second append', async (t) => {
+  // The false branch of the append. experiment_evaluations is keyed on
+  // (tenant_id, experiment_id, evaluated_at), so the second insert is a no-op
+  // — but only if both land in the same millisecond, which two real requests
+  // usually do not. Freezing the Date API the route's utcNow() reads is the way
+  // to reach the branch over HTTP. node:test's own MockTimers: stdlib, no new
+  // dependency, and it prints one ExperimentalWarning and nothing else.
+  t.mock.timers.enable({ apis: ['Date'] });
+  t.mock.timers.setTime(FROZEN_INSTANT_MS);
+
+  const created = await (await fetch(url('/v1/experiments'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...EXPERIMENT, experiment_id: 'exp_alpha_same_ms' }),
+  })).json();
+  assert.equal(created.created, true, 'a fresh experiment id, so the shared database is undisturbed');
+
+  const counts = {
+    tenant_id: 'tenant_alpha',
+    control_conversions: 30, control_exposures: 1000, treatment_conversions: 70, treatment_exposures: 1000, min_sample: 100,
+  };
+  const first = await (await fetch(url('/v1/experiments/exp_alpha_same_ms/evaluate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(counts),
+  })).json();
+  assert.equal(first.appended, true);
+  assert.equal(first.duplicate, false);
+
+  const second = await (await fetch(url('/v1/experiments/exp_alpha_same_ms/evaluate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(counts),
+  })).json();
+  assert.equal(second.appended, false, 'the collision is reported, not swallowed');
+  assert.equal(second.duplicate, true);
+  assert.equal(second.outcome, first.outcome, 'the same counts in, the same verdict out');
+
+  const stored = repositories.evaluations.listForExperiment('tenant_alpha', 'exp_alpha_same_ms');
+  assert.equal(stored.length, 1, 'exactly one evaluation row, however many POSTs arrived');
+  assert.equal(stored[0].evaluated_at, new Date(FROZEN_INSTANT_MS).toISOString(), 'the frozen clock is what both rows collided on');
+
+  // Reset before returning so every later test in this file keeps real
+  // timestamps — the mock is per-test, but the shared database outlives it.
+  t.mock.timers.reset();
+});
+
+test('a pre-rename row comes back with all eight component keys and explicit nulls', async () => {
+  // A row stored before the micros rename carries value/cost, not
+  // value_micros/cost_micros. The repository projects both money keys as null
+  // rather than leaving them undefined, because JSON.stringify drops an
+  // undefined key: a caller could not tell "this build chose not to return it"
+  // from "it was never stored".
+  repositories.opportunities.create({
+    tenant_id: 'tenant_gamma',
+    opportunity_id: 'opp_gamma_prerename',
+    score: 0.9208,
+    record: {
+      name: 'Pre-rename bet', value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    },
+  });
+
+  const listing = await (await fetch(url('/v1/opportunities?tenant_id=tenant_gamma'))).json();
+  const row = listing.opportunities.find((entry) => entry.opportunity_id === 'opp_gamma_prerename');
+  assert.equal(Object.keys(row.components).length, 8, 'eight components, not the six a dropped key leaves behind');
+  assert.deepEqual(
+    Object.keys(row.components).sort(),
+    ['cost_micros', 'delay', 'downside', 'fit', 'infoValue', 'pSuccess', 'reversibility', 'value_micros'],
+  );
+  assert.equal(row.components.value_micros, null, 'present-and-null, not an absent key');
+  assert.equal(row.components.cost_micros, null);
+  assert.equal(row.components.pSuccess, 0.6, 'the dimensionless components are untouched');
+  assert.equal(row.score, 0.9208, 'the stored score still rides on the row');
+});
+
+test('an idempotent re-post of a pre-rename id reports a null contribution, never 0', async () => {
+  const response = await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...EXPENSIVE, opportunity_id: 'opp_gamma_prerename', tenant_id: 'tenant_gamma' }),
+  });
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.equal(body.created, false, 'the correctly-shaped body did not overwrite the stored row');
+  assert.equal(body.score, 0.9208, 'the stored score, not the discarded body');
+  assert.equal(
+    body.expected_contribution_micros,
+    null,
+    'the stored record has no micros to compute from: an honest unknown, not a break-even 0',
+  );
+  assert.equal(body.components.value_micros, null);
+  // The 0 this replaced is a real answer, and the route still produces it: a
+  // bet whose value x pSuccess exactly equals its cost contributes zero. That
+  // is why the field cannot overload 0 to mean "I could not compute this".
+  const breakEven = await (await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...EXPENSIVE,
+      opportunity_id: 'opp_gamma_breakeven',
+      tenant_id: 'tenant_gamma',
+      value_micros: 1_000_000_000, pSuccess: 0.5, cost_micros: 500_000_000,
+    }),
+  })).json();
+  assert.equal(breakEven.created, true);
+  assert.equal(breakEven.expected_contribution_micros, 0, 'a genuine break-even still reads 0, not null');
+});
+
+test('a half-migrated row keeps its real money key, nulls the missing one and reports a null contribution', async () => {
+  repositories.opportunities.create({
+    tenant_id: 'tenant_gamma',
+    opportunity_id: 'opp_gamma_partial',
+    score: 0.4,
+    record: {
+      name: 'Half-migrated bet', value_micros: 2_000_000_000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost: 100, downside: 2, delay: 2,
+    },
+  });
+
+  const listing = await (await fetch(url('/v1/opportunities?tenant_id=tenant_gamma'))).json();
+  const row = listing.opportunities.find((entry) => entry.opportunity_id === 'opp_gamma_partial');
+  assert.equal(Object.keys(row.components).length, 8);
+  assert.equal(row.components.value_micros, 2_000_000_000, 'the key that did migrate keeps its value');
+  assert.equal(row.components.cost_micros, null, 'the one that did not is null, not absent');
+
+  // One real key and one missing key is still an unknown: the arithmetic would
+  // happily invent an answer from whichever survived.
+  const repost = await (await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...CHEAP, opportunity_id: 'opp_gamma_partial', tenant_id: 'tenant_gamma' }),
+  })).json();
+  assert.equal(repost.created, false);
+  assert.equal(repost.score, 0.4);
+  assert.equal(repost.expected_contribution_micros, null, 'half a record never reports half a number');
+  assert.equal(repost.components.value_micros, 2_000_000_000);
+  assert.equal(repost.components.cost_micros, null);
 });
