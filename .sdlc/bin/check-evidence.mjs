@@ -25,8 +25,9 @@
 // list (QA_PREDATES) rather than trusting a step that ran beside the PR's code.
 
 import { readFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
-import { resolve, relative, extname } from 'node:path';
-import { setOutput, die, loadConfig } from './lib/actions.js';
+import { resolve, relative, extname, isAbsolute } from 'node:path';
+import { setOutput, die, loadConfig, repo as repoOf } from './lib/actions.js';
+import { rememberRejected } from './lib/artifact.js';
 import { checkApiOrigins } from './lib/guards.js';
 
 // A report that does not parse is the judge's validate step's to reject: by name, with the text
@@ -45,7 +46,10 @@ const started = process.env.QA_STARTED ? Date.parse(process.env.QA_STARTED) : nu
 const pass = report.verdict === 'pass';
 const cfg = await loadConfig();
 
-const local = (e) => typeof e === 'string' && /[/\\]/.test(e) && !/^https?:/.test(e);
+// Any citation that is not a URL names a file. This used to require a path separator, so a report
+// citing `mutations.log` — a real file at the top of the evidence directory — was told its tests
+// "cite no evidence file" (growth-os #46).
+const local = (e) => typeof e === 'string' && e.trim() !== '' && !/^https?:/.test(e);
 const cited = [
   ...(report.bugs ?? []).flatMap((b) => b.evidence ?? []),
   ...(report.tests ?? []).flatMap((t) => t.evidence ?? []),
@@ -58,11 +62,15 @@ const files = existsSync(dir) && statSync(dir).isDirectory()
 const kept = files.length;
 setOutput('files', String(kept));
 
+// Where a citation is: from the repository root (`qa-evidence/shells/x.png`) or from the evidence
+// directory itself (`shells/x.png`) — both are how an agent told to "write under $QA_EVIDENCE_DIR
+// and cite those paths" writes them. Only the first was looked for, so growth-os #46's pass, with
+// all 94 files present, was rejected for 15 "lost" citations. Either way it must be a file INSIDE
+// the collected directory: that is the whole rule.
+const locate = (p) => (isAbsolute(p) ? [p] : [resolve(p), resolve(dir, p)])
+  .find((a) => !relative(dir, a).startsWith('..') && existsSync(a) && statSync(a).isFile()) ?? null;
 // Cited paths that are outside the collected directory, or simply absent, are dead links.
-const lost = cited.filter((p) => {
-  const abs = resolve(p);
-  return relative(dir, abs).startsWith('..') || !existsSync(abs);
-});
+const lost = cited.filter((p) => !locate(p));
 
 const problems = [];
 const predates = (process.env.QA_PREDATES ?? '').split('\n').filter(Boolean);
@@ -78,7 +86,7 @@ if (pass) {
   if (lost.length) problems.push(`cited but not under ${dir}: ${lost.join(', ')}`);
 
   const MAGIC = { '.png': '89504e47', '.zip': '504b0304' };
-  for (const p of new Set(cited.filter((c) => !lost.includes(c)).map((c) => resolve(c)))) {
+  for (const p of new Set(cited.filter((c) => !lost.includes(c)).map(locate))) {
     const st = statSync(p);
     if (!st.size) { problems.push(`${p} is empty`); continue; }
     if (started && st.mtimeMs < started) predates.push(p);
@@ -133,9 +141,17 @@ if (problems.length && blocked) {
   process.exit(0);
 }
 if (problems.length) {
-  die(`the QA report's evidence does not hold up:\n${problems.map((p) => `  - ${p}`).join('\n')}\n` +
-      `Everything QA keeps must be written under ${dir} (QA_EVIDENCE_DIR), be what its name says, ` +
-      'and a pass needs a HAR of the run — a pass is what merges.');
+  const message = `the QA report's evidence does not hold up:\n${problems.map((p) => `  - ${p}`).join('\n')}\n` +
+    `Everything QA keeps must be written under ${dir} (QA_EVIDENCE_DIR), be what its name says, ` +
+    'and a pass needs a HAR of the run — a pass is what merges.';
+  // Kept for the next QA run, as a report the validator rejected is: this stops the judge before
+  // post-qa-report, so nothing else records it, and the rerun started blind — growth-os #46's
+  // triage found no rejected_artifacts at all. KEEP_REJECTED is set only in the judge's step,
+  // which holds the token that can write the ledger.
+  if (process.env.KEEP_REJECTED === 'true' && process.env.ISSUE) {
+    await rememberRejected(repoOf(), process.env.ISSUE, 'qa-report', readFileSync(process.env.REPORT ?? 'qa-report.json', 'utf8'), [message]);
+  }
+  die(message);
 }
 
 if (!lost.length) {
