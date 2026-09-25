@@ -286,6 +286,14 @@
       "attempt": 1,
       "at": "2026-09-25T01:35:49.014Z",
       "digest": "The qa stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "qa",
+      "error_signature": "edb6676b869cad00",
+      "error_type": "unknown",
+      "attempt": 1,
+      "at": "2026-09-25T05:59:42.867Z",
+      "digest": "The qa stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [
