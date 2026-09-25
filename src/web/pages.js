@@ -8,6 +8,9 @@
 
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 
+import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
+import { formatMoney, fromMicros } from '../domain/money.js';
+
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
 const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals'];
 
@@ -140,15 +143,6 @@ function eventsOf(repositories, tenant, type) {
   }
   return repositories.rawEvents.list(tenant.id, { limit: 200 })
     .filter((event) => event.event_type === type);
-}
-
-function spentMicros(repositories, tenant) {
-  if (!tenant) {
-    return 0;
-  }
-  const spend = repositories.derived.list(tenant.id)
-    .filter((row) => row.metric === 'spend_micros');
-  return spend.reduce((total, row) => total + row.value_micros, 0);
 }
 
 function maturityBar(score) {
@@ -288,10 +282,12 @@ ${panel({
   }
 
   if (state === 'partial') {
-    const lastGood = tenant
-      ? eventsOf(repositories, tenant, 'spend.observed').at(-1)?.occurred_at ?? 'unknown'
-      : 'unknown';
-    return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(lastGood)}</div>
+    const through = tenant
+      ? dataThrough(repositories.rawEvents.listByTypes(tenant.id, ['spend.observed', 'lead_qualified']))
+      : null;
+    const nowIso = new Date().toISOString();
+    const age = tenant && through ? `${staleAgeHours(nowIso, through)}h ago` : 'unknown';
+    return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(through ?? 'unknown')} (${escapeHtml(age)})</div>
 ${kpiStrip(state, { repositories, tenant, stale: true })}
 ${await metaRegions({ metaProvider, metaError })}
 ${decisionFeed(state, { repositories, tenant })}
@@ -319,18 +315,48 @@ ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
 }
 
+function maturityBadge(maturity) {
+  const { label } = policyBand(maturity);
+  // The emergency-only band reads as immature on a dashboard; the badge names
+  // the data state, not the policy action it permits.
+  const badge = label === 'emergency-only' ? 'immature' : label;
+  return `<span class="maturity-label" data-testid="kpi-band">${escapeHtml(badge)}</span>`;
+}
+
+function kpiCard(label, value, maturity, dataThrough) {
+  return `<div class="kpi-card">
+<span class="kpi-label">${escapeHtml(label)}</span>
+<span class="kpi-value">${escapeHtml(value)}</span>
+${maturityBadge(maturity)}
+${maturityBar(maturity)}
+<span class="maturity-label">data through ${escapeHtml(dataThrough ?? '—')}</span>
+</div>`;
+}
+
 function kpiStrip(state, { repositories, tenant }) {
-  const spend = spentMicros(repositories, tenant);
-  const qualified = eventsOf(repositories, tenant, 'lead.qualified').length;
-  const cpl = qualified > 0 ? Math.round(spend / qualified) : null;
+  if (!tenant) {
+    return `<section class="kpi-strip" aria-label="KPIs"></section>`;
+  }
+  const rows = repositories.rawEvents.listByTypes(tenant.id, ['spend.observed', 'lead_qualified']);
+  const funnel = computeFunnel(rows);
+  const coverage = coverageOf(rows);
+  const through = dataThrough(rows);
+  const nowIso = new Date().toISOString();
+  const ageHours = through ? (Date.parse(nowIso) - Date.parse(through)) / 3_600_000 : 0;
+  const maturity = maturityFor(ageHours);
+  const { gated } = policyBand(maturity);
+  const cpl = funnel.qualified_cpl_micros;
   const cards = [
-    ['Qualified CPL', cpl === null ? '—' : `₹${(cpl / 1_000_000).toFixed(2)}`],
-    ['Qualified volume', String(qualified)],
-    ['Maturity coverage', '0.00'],
-  ].map(([label, value]) => `<div class="kpi-card"><span class="kpi-label">${escapeHtml(label)}</span><span class="kpi-value">${escapeHtml(value)}</span></div>`);
+    // Same tenant-wide rule GET /v1/metrics applies: integer micros divided,
+    // formatted without floats, em-dash while the volume is zero.
+    kpiCard('Qualified CPL', cpl === null ? '—' : formatMoney(fromMicros(cpl, tenant.currency ?? 'INR')), maturity, through),
+    kpiCard('Qualified volume', String(funnel.qualified_volume), maturity, through),
+    kpiCard('Maturity coverage', coverage.toFixed(2), maturity, through),
+  ];
 
   return `<section class="kpi-strip" aria-label="KPIs">
 ${cards.join('')}
+${gated ? `<p class="maturity-label" data-testid="maturity-gate">Strategic actions blocked until maturity passes 0.90</p>` : ''}
 </section>`;
 }
 

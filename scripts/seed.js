@@ -8,52 +8,96 @@ import { validateEvent } from '../src/domain/events.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
 
-const OCCURRED = '2026-09-25T08:00:00.000Z';
+const JOURNEY = [
+  {
+    event_id: 'evt_seed_journey_click_1',
+    event_type: 'click',
+    payload: { campaign: 'search-brand' },
+  },
+  {
+    event_id: 'evt_seed_journey_spend_1',
+    event_type: 'spend.observed',
+    payload: { campaign: 'search-brand', amount_micros: 7_200_000_000, currency: 'INR' },
+  },
+  {
+    event_id: 'evt_seed_journey_lead_created_1',
+    event_type: 'lead_created',
+    payload: { campaign: 'search-brand', lead_id: 'lead_seed_j1' },
+  },
+  {
+    event_id: 'evt_seed_journey_lead_created_2',
+    event_type: 'lead_created',
+    payload: { campaign: 'search-brand', lead_id: 'lead_seed_j2' },
+  },
+  {
+    event_id: 'evt_seed_journey_lead_created_3',
+    event_type: 'lead_created',
+    payload: { campaign: 'search-brand', lead_id: 'lead_seed_j3' },
+  },
+  {
+    event_id: 'evt_seed_journey_lead_qualified_1',
+    event_type: 'lead_qualified',
+    payload: { campaign: 'search-brand', lead_id: 'lead_seed_j1', session_id: 'sess_seed_journey_1' },
+  },
+  {
+    event_id: 'evt_seed_journey_lead_qualified_2',
+    event_type: 'lead_qualified',
+    payload: { campaign: 'search-brand', lead_id: 'lead_seed_j2', session_id: 'sess_seed_journey_1' },
+  },
+  {
+    event_id: 'evt_seed_journey_lead_qualified_3',
+    event_type: 'lead_qualified',
+    payload: { campaign: 'search-brand', lead_id: 'lead_seed_j3', session_id: 'sess_seed_journey_1' },
+  },
+  {
+    event_id: 'evt_seed_journey_opp_1',
+    event_type: 'opportunity_created',
+    payload: { campaign: 'search-brand', opportunity_id: 'opp_seed_1', lead_id: 'lead_seed_j1' },
+  },
+  {
+    event_id: 'evt_seed_journey_deal_1',
+    event_type: 'deal_won',
+    payload: { campaign: 'search-brand', order_id: 'order_seed_1', opportunity_id: 'opp_seed_1' },
+  },
+];
 
-const EVENTS = [
-  {
-    event_id: 'evt_seed_spend_c1_1',
-    event_type: 'spend.observed',
-    payload: { campaign: 'search-brand', amount_micros: 2_500_000_000, currency: 'INR' },
-  },
-  {
-    event_id: 'evt_seed_spend_c1_2',
-    event_type: 'spend.observed',
-    payload: { campaign: 'search-brand', amount_micros: 1_500_000_000, currency: 'INR' },
-  },
-  {
-    event_id: 'evt_seed_spend_c2_1',
-    event_type: 'spend.observed',
-    payload: { campaign: 'generic-prospecting', amount_micros: 3_200_000_000, currency: 'INR' },
-  },
-  {
-    event_id: 'evt_seed_qualified_1',
-    event_type: 'lead.qualified',
-    payload: { campaign: 'search-brand', lead_id: 'lead_seed_1' },
-  },
-  {
-    event_id: 'evt_seed_qualified_2',
-    event_type: 'lead.qualified',
-    payload: { campaign: 'search-brand', lead_id: 'lead_seed_2' },
-  },
+const DECISIONS = [
   {
     event_id: 'evt_seed_decision_1',
     event_type: 'decision.recorded',
+    occurred_at: occurredAt(),
     payload: { class: 'budget change', expected: 'qualified CPL −8%', status: 'shadow' },
   },
   {
     event_id: 'evt_seed_decision_2',
     event_type: 'decision.recorded',
+    occurred_at: occurredAt(),
     payload: { class: 'campaign status', expected: 'no change (do-nothing)', status: 'do-nothing' },
   },
   {
     event_id: 'evt_seed_learning_1',
     event_type: 'learning.recorded',
+    occurred_at: occurredAt(),
     payload: {
       claim: 'search-brand qualified CPL tracks 18% below generic-prospecting',
       scope: 'campaign-level', evidence: 'raw_events spend + qualified leads',
     },
   },
+];
+
+/** Occurred_at is derived at seed time: six hours ago keeps the demo inside
+ * the lag window (maturity ~0.06, so strategic actions gate). */
+function occurredAt() {
+  return new Date(Date.now() - 6 * 3_600_000).toISOString();
+}
+
+const EVENTS = [
+  ...JOURNEY.map((event) => ({
+    ...event,
+    occurred_at: occurredAt(),
+    payload: { ...event.payload, session_id: 'sess_seed_journey_1' },
+  })),
+  ...DECISIONS,
 ];
 
 export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
@@ -65,7 +109,6 @@ export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
   for (const partial of EVENTS) {
     const envelope = validateEvent({
       ...partial,
-      occurred_at: OCCURRED,
       tenant_id: TENANT.id,
       schema_version: '1',
     });
