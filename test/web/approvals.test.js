@@ -278,6 +278,109 @@ test('EVERY route in EVERY state renders on a null-tenant database, banner inclu
   }
 });
 
+test('A DECISION SURVIVES THE NAVIGATION: the hand-off arrives as rendered copy, in the panel AND the live region', async () => {
+  // The client used to paint a toast and reload in the same task, so the
+  // operator saw the queue come back with the outcome nowhere on it. The
+  // outcome now travels in the query and is rendered SERVER-side, which is
+  // the only version of it that is still there a second later.
+  const { repositories } = seededRepos();
+  const html = await renderPage('/approvals', {
+    repositories,
+    decision: { decision: 'approved', receipt: 'rcp_x', reconciliation: 'agreed' },
+  });
+
+  // ...in the region client.js writes its own outcomes into, so the two cannot
+  // collide.
+  const region = html.match(/<div data-testid="approval-decision-result"[^>]*>(.*?)<\/div>\s*<section/s)
+    ?? html.match(/<div data-testid="approval-decision-result"[^>]*>(.*?)$/s);
+  assert.ok(region, 'the decision result region renders');
+  assert.match(region[1], /data-testid="approval-toast"/);
+  assert.match(region[1], /Executed\. Receipt rcp_x\. Reconciliation: agreed\./);
+
+  // ...and in the live region, so it is announced to a screen reader as well
+  // as painted. client.js leaves a non-empty region alone, so the two cannot
+  // overwrite each other.
+  const live = html.match(/<div id="live-region"[^>]*>(.*?)<\/div>/s);
+  assert.ok(live, 'the live region renders');
+  assert.equal(live[1], 'Executed. Receipt rcp_x. Reconciliation: agreed.');
+
+  // The receipt is the whole point of the sentence, so a hand-off without one
+  // is not a sentence with a hole in it.
+  for (const decision of [
+    { decision: 'approved', reconciliation: 'agreed' },
+    { decision: 'approved', receipt: '', reconciliation: 'agreed' },
+  ]) {
+    const bare = await renderPage('/approvals', { repositories, decision });
+    assert.equal(bare.includes('data-testid="approval-toast"'), false, JSON.stringify(decision));
+  }
+});
+
+test('a REJECTION is rendered as a decision that succeeded, not as a failure', async () => {
+  const { repositories } = seededRepos();
+  const html = await renderPage('/approvals', {
+    repositories,
+    decision: { decision: 'rejected', approval: 'apv_seed_budget_1' },
+  });
+  assert.match(html, /data-testid="approval-rejected"/);
+  assert.match(html, /Rejected\. apv_seed_budget_1 will not run\./);
+  assert.equal(html.includes('data-testid="approval-failed"'), false, 'a rejection is not a failure panel');
+  assert.equal(html.includes('data-testid="approval-toast"'), false, 'and not a receipt');
+  const live = html.match(/<div id="live-region"[^>]*>(.*?)<\/div>/s);
+  assert.equal(live[1], 'Rejected. apv_seed_budget_1 will not run.');
+});
+
+test('no decision, an empty one and an unrecognised one all render NEITHER outcome', async () => {
+  // The query is operator-writable, so an unknown value has to be inert rather
+  // than painted as a receipt nobody earned.
+  const { repositories } = seededRepos();
+  for (const decision of [
+    null,
+    {},
+    { decision: '' },
+    { decision: 'executed' },
+    { decision: 'maybe', receipt: 'rcp_x' },
+    { decision: 'REJECTED', approval: 'apv_1' },
+  ]) {
+    const html = await renderPage('/approvals', { repositories, decision });
+    assert.equal(html.includes('data-testid="approval-toast"'), false, JSON.stringify(decision));
+    assert.equal(html.includes('data-testid="approval-rejected"'), false, JSON.stringify(decision));
+    const live = html.match(/<div id="live-region"[^>]*>(.*?)<\/div>/s);
+    assert.equal(live[1], '', `${JSON.stringify(decision)} announced something`);
+  }
+});
+
+test('a receipt id carrying MARKUP is escaped in the panel and in the live region', async () => {
+  // The hand-off query is operator-writable, and the same string is rendered
+  // in two places. A receipt id is a receipt id, not a document.
+  const { repositories } = seededRepos();
+  const hostile = '<img src=x onerror="alert(1)">';
+  const html = await renderPage('/approvals', {
+    repositories,
+    decision: { decision: 'approved', receipt: hostile, reconciliation: 'agreed' },
+  });
+  assert.equal(html.includes(hostile), false, 'the raw markup is nowhere in the document');
+  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+  const live = html.match(/<div id="live-region"[^>]*>(.*?)<\/div>/s);
+  assert.equal(live[1].includes('<img'), false, 'the live region escapes it too');
+});
+
+test('the decision hand-off renders on a null-tenant database, and the state sweep still holds', async () => {
+  // renderPage composes the announcement before the page body, so a null
+  // tenant would throw here exactly as it would in the banner.
+  const repositories = freshRepos();
+  const html = await renderPage('/approvals', {
+    repositories,
+    decision: { decision: 'approved', receipt: 'rcp_x', reconciliation: 'agreed' },
+  });
+  assert.match(html, /data-testid="approval-toast"/);
+  assert.match(html, /data-testid="posture-table"/);
+
+  for (const state of STATES) {
+    const shell = await renderPage('/approvals', { repositories: freshRepos(), override: state });
+    assert.match(shell, new RegExp(`data-state="${state}"`), state);
+  }
+});
+
 test('the error and partial shells keep their retry control and their wording', async () => {
   const { repositories } = seededRepos();
   const error = await renderPage('/approvals', { repositories, override: 'error' });

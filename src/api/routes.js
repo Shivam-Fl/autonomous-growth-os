@@ -30,7 +30,7 @@ import { FakeMetaAdsProvider, FAILURE_MODES } from '../integrations/meta_ads/fak
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { validateOpportunity, scoreOpportunity, expectedContribution } from '../domain/opportunities.js';
 import { validateExperiment, evaluateExperiment } from '../domain/experiments.js';
-import { createKernel, DEFAULT_SIGNING_SECRET, decisionNonce, ACTION_CLASSES } from '../policy/kernel.js';
+import { createKernel, DEFAULT_SIGNING_SECRET, decisionNonce, ACTION_CLASSES, freezeScopeId } from '../policy/kernel.js';
 import { postureFor } from '../policy/trust.js';
 import { visibleReason, reasonRejection, isPendingApproval } from '../domain/approvals.js';
 import { createExecutor } from '../executor/executor.js';
@@ -41,6 +41,28 @@ const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // ?meta_error=quota|revoked drives the fake provider's failure injection for
 // simulation; anything else is ignored, exactly like an unknown ?state=.
 const META_ERROR_PARAMS = new Set([...FAILURE_MODES].filter((mode) => mode !== 'ok'));
+
+/** The codes kernel.validateIntent answers with. A refusal from the gate is
+ * 403 on every write route, whether it was raised at issuance or by the
+ * executor's re-gate on the way to the provider — one set, so a new refusal
+ * cannot be handled on one route and fall through to a 409 on the other. */
+const GATE_REFUSAL_CODES = new Set([
+  'AUTONOMY_NOT_EARNED',
+  'MICRO_LIMIT_EXCEEDED',
+  'MATURITY_BAND_BLOCKED',
+  'CAPABILITY_NOT_ISSUED',
+]);
+
+/** The guardian's own refusals, as statuses. The module decides WHAT is
+ * refused; this table only decides which number the refusal is. Without it a
+ * throw from freeze()/reEnable() reached the 500 handler, so a body naming an
+ * unknown scope — or a re-enable that cleared nothing — read as a crash. */
+const GUARDIAN_REFUSAL_STATUS = Object.freeze({
+  FREEZE_SCOPE_UNKNOWN: 400,
+  FREEZE_SCOPE_ID_REQUIRED: 400,
+  FREEZE_SCOPE_ID_MISMATCH: 400,
+  NO_ACTIVE_FREEZE: 409,
+});
 
 /**
  * The ONE place a request's provider is built, and the single source of its
@@ -108,6 +130,42 @@ function errorResponse(response, status, error) {
 }
 
 /**
+ * Run a guardian call, turning the refusals it names into HTTP answers, and
+ * returning null once it has done so. Anything it does not recognise is
+ * rethrown: a table that swallowed every error would convert a real bug into
+ * a tidy 4xx.
+ */
+function tryGuardian(call, response) {
+  try {
+    return call();
+  } catch (error) {
+    const status = GUARDIAN_REFUSAL_STATUS[error?.code];
+    if (status === undefined) {
+      throw error;
+    }
+    errorResponse(response, status, error);
+    return null;
+  }
+}
+
+/** The five parameters client.js hands the /approvals navigation, as the
+ * object the renderer reads. Everything arrives as a STRING from the query and
+ * is escaped there; an absent, empty or unrecognised decision is null, which
+ * is what makes the page a normal page again the moment they are gone. */
+function decisionFromQuery(query) {
+  if (query.decision !== 'approved' && query.decision !== 'rejected') {
+    return null;
+  }
+  return {
+    decision: query.decision,
+    receipt: typeof query.receipt === 'string' && query.receipt.length > 0 ? query.receipt : null,
+    reconciliation: typeof query.reconciliation === 'string' ? query.reconciliation : null,
+    drift: typeof query.drift === 'string' ? query.drift : null,
+    approval: typeof query.approval === 'string' && query.approval.length > 0 ? query.approval : null,
+  };
+}
+
+/**
  * The min-sample gate an evaluation runs against. The experiment's own
  * persisted stop rule is the floor: a caller may demand MORE sample than the
  * stored rule (a stricter, voluntary hold) but never less, because a body
@@ -139,10 +197,16 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     nonces: { seen: (tenantId, nonce) => repositories.actionRecords.getByNonce(tenantId, nonce) !== null },
   });
 
-  /** The posture for a class, from the same row the page renders. */
+  /** The posture for a class, from the same row the page renders. The class is
+   * coerced to null when it is not a string: the trust ledger's primary key is
+   * (tenant_id, action_class) and node:sqlite refuses to bind an object or an
+   * absent value to it, so an unvalidated body field is a 500 where the
+   * kernel's fail-closed unknown-class refusal is the answer this endpoint owes
+   * every class it cannot reason about. */
   function postureForClass(tenantId, actionClass) {
-    const roster = ACTION_CLASSES.find((entry) => entry.action_class === actionClass) ?? null;
-    return postureFor(actionClass, repositories.trustLedger.get(tenantId, actionClass), roster, null);
+    const name = typeof actionClass === 'string' && actionClass.length > 0 ? actionClass : null;
+    const roster = ACTION_CLASSES.find((entry) => entry.action_class === name) ?? null;
+    return postureFor(name, name === null ? null : repositories.trustLedger.get(tenantId, name), roster, null);
   }
 
   app.get('/health', (request, response) => {
@@ -170,6 +234,11 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
           override: request.query.state ?? null,
           metaProvider,
           metaError: META_ERROR_PARAMS.has(request.query.meta_error) ? request.query.meta_error : null,
+          // The outcome of a decision travels through the navigation that
+          // follows it, so the page the operator lands on is the page that
+          // says what happened. Only /approvals renders it, and only these
+          // five parameters: an unknown one renders nothing.
+          decision: route === '/approvals' ? decisionFromQuery(request.query) : null,
           // The journal's class/status filters come from the two GET selects;
           // unknown values are ignored downstream.
           filters: route === '/journal'
@@ -566,6 +635,44 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     return { tenant_id: tenantId, action_class: actionClass, action, resource, constraints: constraints ?? {} };
   }
 
+  /**
+   * THE assembly of the gate's inputs, defined ONCE in the repository.
+   *
+   * Every caller of kernel.validateIntent comes through here: both issuance
+   * routes, and — through the executor's injected port — the write path itself,
+   * which re-runs this exact function on the STORED envelope when a capability
+   * is spent. So the four values the gate reads (the live posture, the named
+   * approval row, the tenant's maturity measured now, and the clock) have one
+   * definition rather than one per call site, and a fix to any of them cannot
+   * reach the minting route while missing the write.
+   *
+   * approvalId is null on the autonomous route. A NAMED row that is not there
+   * is a refusal rather than a fallback to "no approval at all": an envelope
+   * claiming a human decision nobody can produce is not an autonomous one.
+   */
+  function autonomyVerdict(tenantId, intent, { nowIso, approvalId = null }) {
+    const approval = approvalId === null ? null : repositories.approvals.get(tenantId, approvalId);
+    if (approvalId !== null && !approval) {
+      return {
+        ok: false,
+        error: {
+          code: 'AUTONOMY_NOT_EARNED',
+          message: 'the capability names an approval row this server does not hold',
+          details: { reason: 'malformed', approval_id: approvalId },
+        },
+      };
+    }
+    return kernel.validateIntent(intent, {
+      nowIso,
+      posture: postureForClass(tenantId, intent.action_class),
+      approval,
+      maturity: tenantMaturity(repositories, tenantId, nowIso).maturity,
+    });
+  }
+
+  /** The executor's gate port, bound to the ONE definition above. */
+  const revalidate = autonomyVerdict;
+
   /** A provider refusal rather than a gate refusal, decided by the contract's
    * own error codes so a new adapter code is a refusal too. */
   function isProviderError(error) {
@@ -585,12 +692,7 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     // NOTHING ELSE mints a capability: this route, with the approval row
     // deliberately null, and the approve route below with it supplied.
     const maturity = tenantMaturity(repositories, tenantId, nowIso).maturity;
-    const validated = kernel.validateIntent(intent, {
-      nowIso,
-      posture: postureForClass(tenantId, body.action_class),
-      approval: null,
-      maturity,
-    });
+    const validated = autonomyVerdict(tenantId, intent, { nowIso });
     if (!validated.ok) {
       return errorResponse(response, 403, validated.error);
     }
@@ -669,12 +771,7 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     // (3) THE GATE, with the row it is executing supplied as the approval.
     const intent = intentFor(tenantId, row);
     const maturity = tenantMaturity(repositories, tenantId, nowIso).maturity;
-    const validated = kernel.validateIntent(intent, {
-      nowIso,
-      posture: postureForClass(tenantId, row.action_class),
-      approval: row,
-      maturity,
-    });
+    const validated = autonomyVerdict(tenantId, intent, { nowIso, approvalId });
     if (!validated.ok) {
       return errorResponse(response, 403, validated.error);
     }
@@ -682,13 +779,16 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     // (4) ISSUE AND EXECUTE. The nonce is the one definition of the approval
     // decision's nonce, and the provider comes from the SAME helper the execute
     // route uses, named here so the omission that made the ?meta_error failure
-    // clause unobservable cannot recur.
+    // clause unobservable cannot recur. The approval id goes INTO the signed
+    // envelope, so the executor can re-present this row to the gate without
+    // being told which row it is by the caller.
     const actor = typeof body.actor === 'string' && body.actor.trim().length > 0 ? body.actor.trim() : 'operator';
     const capability = kernel.issueCapability({ ...intent, maturity }, {
       nowIso,
       // The approval's own stamp caps the authority it granted.
       expiresAtCap: row.expires_at,
       nonce: decisionNonce(approvalId),
+      approvalId,
     });
     repositories.capabilities.create({
       tenant_id: tenantId,
@@ -696,8 +796,8 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
       envelope: capability,
       expires_at: capability.expiry,
     });
-    const executor = createExecutor({ repositories, provider: providerForRequest(request), kernel, auditClock: utcNow });
-    const result = await executor.execute(capability, { actor, tenantId, approvalId });
+    const executor = createExecutor({ repositories, provider: providerForRequest(request), kernel, auditClock: utcNow, revalidate });
+    const result = await executor.execute(capability, { actor, tenantId });
 
     // (5) PERSIST. A provider refusal writes NO status change: the item stays
     // pending, which is what the criterion asserts and what a genuine retry
@@ -738,7 +838,11 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
         reconciliation: 'unknown',
       });
     }
-    const status = result.error?.code === 'TENANT_MISMATCH' ? 403 : 409;
+    // A gate refusal is 403 here for the same reason it is on the execute route
+    // — it is the policy declining, not a conflict to retry. The 200
+    // provider-refused shape above is unchanged, and it is the reason the
+    // ?meta_error failure clause is observable at all.
+    const status = GATE_REFUSAL_CODES.has(result.error?.code) || result.error?.code === 'TENANT_MISMATCH' ? 403 : 409;
     return errorResponse(response, status, result.error);
   });
 
@@ -790,7 +894,7 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     const tenantId = resolveTenantId(repositories, body.tenant_id ?? body.tenant);
     // ONE provider for the write AND the re-read, so one request reconciles
     // against the state it just wrote.
-    const executor = createExecutor({ repositories, provider: providerForRequest(request), kernel, auditClock: utcNow });
+    const executor = createExecutor({ repositories, provider: providerForRequest(request), kernel, auditClock: utcNow, revalidate });
     const result = await executor.execute(body, {
       actor: typeof body?.actor === 'string' ? body.actor : 'executor',
       tenantId,
@@ -822,7 +926,12 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     if (isProviderError(result.error)) {
       return errorResponse(response, 502, result.error);
     }
-    if (code === 'EXPIRED_CAPABILITY' || code === 'BAD_SIGNATURE' || code === 'OVER_SCOPE' || code === 'REPLAYED_NONCE' || code === 'TENANT_MISMATCH') {
+    // Every GATE refusal is a 403 on this route, including the two the write
+    // path's own checks raise: a capability this server did not issue is
+    // refused as firmly as one it did, and it must not fall through to the
+    // 409 that a freeze produces — 409 says "try again later", and neither of
+    // these gets better later.
+    if (GATE_REFUSAL_CODES.has(code) || code === 'EXPIRED_CAPABILITY' || code === 'BAD_SIGNATURE' || code === 'OVER_SCOPE' || code === 'REPLAYED_NONCE' || code === 'TENANT_MISMATCH') {
       return errorResponse(response, 403, result.error);
     }
     return errorResponse(response, 409, result.error);
@@ -844,23 +953,43 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
     if (!evaluation.tripped) {
       return response.status(200).json({ frozen: false, kind, details: evaluation.details });
     }
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const scope = typeof body.scope === 'string' && body.scope.length > 0 ? body.scope : guardian.DEFAULT_FREEZE_SCOPE;
+    const suppliedScopeId = typeof body.scope_id === 'string' && body.scope_id.length > 0 ? body.scope_id : null;
+    // A scope_id that contradicts its scope is REFUSED here rather than
+    // forwarded, so the row the operator asked for is never written to a key no
+    // reader derives. The same kernel derivation the gate reads is the one
+    // this check reads; a contradiction is a 400, not a silently corrected body.
+    if (suppliedScopeId !== null) {
+      const canonical = freezeScopeId(scope, { tenant: tenantId });
+      if (canonical !== null && canonical !== suppliedScopeId) {
+        return errorResponse(response, 400, {
+          code: 'FREEZE_SCOPE_ID_MISMATCH',
+          message: `a ${scope} freeze is stored under ${canonical}, not ${suppliedScopeId}`,
+          details: { scope, scope_id: suppliedScopeId, expected_scope_id: canonical },
+        });
+      }
+    }
     // The scope falls back to guardian.freeze's OWN defaults, so the row the
     // demo writes is the row the banner and GET /v1/guardian read back.
     // The kill-switch write is an ON CONFLICT upsert, so a second trigger
     // after a re-enable re-freezes the SAME row with no database reset.
-    const frozen = guardian.freeze({
+    const frozen = tryGuardian(() => guardian.freeze({
       repositories,
-      tenantId: resolveTenantId(repositories, body.tenant_id),
+      tenantId,
       kind,
       details: { ...evaluation.details, reason: `${kind} tripped` },
       actor: typeof body.actor === 'string' && body.actor.trim().length > 0 ? body.actor.trim() : 'guardian',
-      ...(typeof body.scope === 'string' && body.scope.length > 0 ? { scope: body.scope } : {}),
-      ...(typeof body.scope_id === 'string' && body.scope_id.length > 0 ? { scopeId: body.scope_id } : {}),
+      scope,
+      ...(suppliedScopeId === null ? {} : { scopeId: suppliedScopeId }),
       at: nowIso,
-    });
+    }), response);
+    if (frozen === null) {
+      return undefined;
+    }
     response.status(201).json({
       ...frozen,
-      incidents: repositories.guardianIncidents.listForTenant(resolveTenantId(repositories, body.tenant_id), { limit: 20 }),
+      incidents: repositories.guardianIncidents.listForTenant(tenantId, { limit: 20 }),
     });
   });
 
@@ -875,15 +1004,20 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
         details: { field: 'actor' },
       });
     }
-    const result = guardian.reEnable({
+    const result = tryGuardian(() => guardian.reEnable({
       repositories,
       tenantId: resolveTenantId(repositories, body.tenant_id),
       actor: body.actor.trim(),
       ...(typeof body.scope === 'string' && body.scope.length > 0 ? { scope: body.scope } : {}),
       ...(typeof body.scope_id === 'string' && body.scope_id.length > 0 ? { scopeId: body.scope_id } : {}),
-    });
+    }), response);
+    if (result === null) {
+      return undefined;
+    }
     // The response echoes the RESOLVED scope, not the requested one, so a
-    // caller that guessed wrong can see what it actually cleared.
+    // caller that guessed wrong can see what it actually cleared — and a
+    // re-enable that matched no active row is a 409 above, never a 200
+    // claiming automation is running again.
     response.status(200).json({ re_enabled: result.re_enabled, scope: result.scope, scope_id: result.scope_id });
   });
 

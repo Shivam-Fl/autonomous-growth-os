@@ -14,6 +14,7 @@ import { openDatabase } from '../../src/data/db.js';
 import { createRepositories } from '../../src/data/repositories.js';
 import { buildApp } from '../../src/api/routes.js';
 import { DEFAULT_FREEZE_SCOPE, DEFAULT_FREEZE_SCOPE_ID, GUARDIAN_KINDS } from '../../src/strategy/guardian.js';
+import { freezeScopeId } from '../../src/policy/kernel.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'guardian-api-'));
 const db = openDatabase(join(dir, 'app.db'));
@@ -170,22 +171,112 @@ test('a re-enable naming no scope clears the row the demo wrote, and echoes what
   assert.deepEqual(cleared.body, { re_enabled: true, scope: DEFAULT_FREEZE_SCOPE, scope_id: DEFAULT_FREEZE_SCOPE_ID });
   assert.equal((await state()).body.switches.length, 0);
 
-  // The echo is the RESOLVED scope, not the requested one: a caller that
-  // guessed at a scope the row does not use is told what it actually cleared.
+  // A re-enable for a scope that has NO active row is a REFUSAL, not a 200.
+  // This case used to assert the opposite — a provider-scoped re-enable
+  // answering 200 while a campaign-scoped freeze was still up, which tells an
+  // operator "automation is running again" about an account that is still
+  // frozen. The row now has to be the one actually named.
   await trigger('?kind=spend-spike', { scope: 'campaign', scope_id: 'campaign_001' });
   assert.equal((await state()).body.switches[0].scope, 'campaign');
   const wrong = await reEnable({ actor: 'Priya', scope: 'provider', scope_id: 'meta_ads' });
-  assert.equal(wrong.status, 200);
-  assert.equal(wrong.body.scope, 'provider');
-  assert.equal(wrong.body.scope_id, 'meta_ads');
-  assert.equal((await state()).body.switches.length, 1, 'the campaign-scoped row is still up');
+  assert.equal(wrong.status, 409);
+  assert.equal(wrong.body.code, 'NO_ACTIVE_FREEZE');
+  assert.equal(wrong.body.details.scope, 'provider');
+  assert.equal(wrong.body.details.scope_id, 'meta_ads');
+  const stillFrozen = await state();
+  assert.equal(stillFrozen.body.switches.length, 1, 'the campaign-scoped row is still up');
+  assert.equal(stillFrozen.body.switches[0].active, 1, 'and the refusal did not quietly clear it either');
 
   const right = await reEnable({ actor: 'Priya', scope: 'campaign', scope_id: 'campaign_001' });
+  assert.equal(right.status, 200);
   assert.equal(right.body.scope, 'campaign');
   assert.equal((await state()).body.switches.length, 0);
-  // A second re-enable is a no-op that still answers honestly.
+
+  // A SECOND re-enable of a row that was really cleared is the same refusal.
+  // "Already clear" is not "re-enabled", and saying otherwise is the lie this
+  // route used to tell.
   const again = await reEnable({ actor: 'Priya', scope: 'campaign', scope_id: 'campaign_001' });
-  assert.equal(again.body.re_enabled, true);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.code, 'NO_ACTIVE_FREEZE');
+  assert.equal(again.body.re_enabled, undefined);
+  assert.equal(repositories.killSwitches.listForTenant(TENANT).filter((row) => row.active === 1).length, 0);
+});
+
+test('EVERY SCOPE freezes the writes it covers, and leaves the others writable', async () => {
+  // The freeze the gate reads is keyed by (scope, scope_id), so a campaign
+  // freeze has to refuse that campaign and NOT the one beside it, and a global
+  // freeze has to refuse everything. A scope that froze nothing — or froze
+  // everything — would pass the round trips below.
+  const mint = (resource) => post('/v1/capabilities', {
+    tenant_id: TENANT, action_class: 'campaign-status', action: 'set_campaign_status', resource, constraints: { status: 'PAUSED' },
+  });
+  for (const [scope, scopeId, blocked, allowed] of [
+    ['global', null, 'campaign_001', null],
+    ['tenant', null, 'campaign_001', null],
+    ['provider', null, 'campaign_001', null],
+    ['campaign', 'campaign_001', 'campaign_001', 'campaign_002'],
+  ]) {
+    // The row from the previous scope is cleared by a re-enable that names it
+    // exactly, so each scope is measured from a clean state.
+    for (const row of repositories.killSwitches.activeFor(TENANT)) {
+      await reEnable({ actor: 'Priya', scope: row.scope, scope_id: row.scope_id });
+    }
+
+    const frozen = await trigger('?kind=spend-spike', scopeId === null ? { scope } : { scope, scope_id: scopeId });
+    assert.equal(frozen.status, 201, scope);
+    // The id in the response is the DERIVED one, never a typed literal: the
+    // banner and the re-enable both have to find the row the trigger wrote.
+    assert.equal(frozen.body.scope_id, freezeScopeId(scope, { tenant: TENANT, resource: scopeId }) ?? scopeId, scope);
+    assert.equal((await state()).body.switches[0].scope_id, frozen.body.scope_id, scope);
+
+    const held = await mint(blocked);
+    assert.equal(held.status, 201, `${scope} still admits the class before execution`);
+    const refused = await post('/v1/actions/execute', held.body.envelope);
+    assert.equal(refused.status, 409, scope);
+    assert.equal(refused.body.code, 'KILL_SWITCH_ACTIVE', scope);
+    assert.equal(repositories.actionRecords.getByNonce(TENANT, held.body.envelope.nonce), null, `${scope} wrote no receipt`);
+
+    if (allowed !== null) {
+      const other = await mint(allowed);
+      const through = await post('/v1/actions/execute', other.body.envelope);
+      assert.equal(through.body.executed, true, `${scope} must not freeze ${allowed}`);
+    }
+  }
+  for (const row of repositories.killSwitches.activeFor(TENANT)) {
+    await reEnable({ actor: 'Priya', scope: row.scope, scope_id: row.scope_id });
+  }
+});
+
+test('a scope_id that contradicts the derived one is 400 and writes no row', async () => {
+  const before = await state();
+  const refused = await trigger('?kind=spend-spike', { scope: 'global', scope_id: 'meta_ads' });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, 'FREEZE_SCOPE_ID_MISMATCH');
+  assert.equal(refused.body.details.expected_scope_id, TENANT);
+  assert.equal(refused.body.stack, undefined);
+  const after = await state();
+  assert.deepEqual(after.body.switches, before.body.switches, 'a contradiction is a mistake, not a row to store');
+  assert.equal(after.body.incidents.length, before.body.incidents.length, 'and not an incident');
+});
+
+test('an unknown scope is 400, not a 500', async () => {
+  const refused = await trigger('?kind=spend-spike', { scope: 'moon' });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, 'FREEZE_SCOPE_UNKNOWN');
+  assert.deepEqual(repositories.killSwitches.activeFor(TENANT), []);
+});
+
+test('the freeze scope the route writes is the one the gate asks about, read from one function', async () => {
+  // The bug this file exists for was two literals for one key: the guardian
+  // wrote 'global' freezes under a provider id and the gate never asked for
+  // that one. The two sides are compared through the derivation itself, so a
+  // change to either side fails here rather than in production.
+  const frozen = await trigger('?kind=spend-spike');
+  const switchRow = (await state()).body.switches[0];
+  assert.equal(switchRow.scope, DEFAULT_FREEZE_SCOPE);
+  assert.equal(switchRow.scope_id, freezeScopeId(DEFAULT_FREEZE_SCOPE, { tenant: TENANT }));
+  assert.equal(frozen.body.scope_id, switchRow.scope_id);
+  await reEnable({ actor: 'Priya' });
 });
 
 test('a re-enable is audited against the human who did it', async () => {

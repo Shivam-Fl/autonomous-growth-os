@@ -7,13 +7,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ACTION_CLASSES,
+  AUTHORITY_KINDS,
   BAND_ORDER,
   DEFAULT_CAPABILITY_TTL_MS,
   DEFAULT_SIGNING_SECRET,
+  FREEZE_SCOPES,
   POLICY_ONLY_CLASSES,
   POSTURE_LABELS,
+  PROVIDER_SCOPE_ID,
+  approvalIdFromAuthority,
   createKernel,
   decisionNonce,
+  freezeScopeId,
+  intentFromEnvelope,
   issueCapability,
   labelFor,
   validateCapability,
@@ -24,6 +30,16 @@ import { ACTION_WRITES } from '../../src/integrations/meta_ads/index.js';
 
 const SECRET = 'kernel-test-secret';
 const NOW = '2026-09-25T10:00:00.000Z';
+
+/** assert.throws returns undefined, so the code under test is read here. */
+function thrown(fn) {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  return null;
+}
 
 const ports = { killSwitches: { isActive: () => false }, nonces: { seen: () => false } };
 
@@ -323,23 +339,32 @@ test('OVER_SCOPE: the envelope naming another tenant is refused, and the caller 
 test('THE KILL-SWITCH SCOPES, all four, from an envelope that names only a tenant and a resource', () => {
   // This is the case that fails if the four keys are left implicit: the
   // envelope carries tenant and resource, and the port takes three arguments.
+  //
+  // The expected keys are DERIVED, not typed. The writer of a freeze row and
+  // this reader have to agree on four keys from one tenant and one resource;
+  // two literals for the same key is how a global freeze ended up stored under
+  // a provider id that nothing ever asked about. Asserting against
+  // freezeScopeId means this test fails if EITHER side drifts.
+  const derived = (scope, capability) => freezeScopeId(scope, {
+    tenant: capability.tenant,
+    resource: capability.resource,
+  });
   const asked = [];
   const recording = { isActive: (...args) => { asked.push(args); return false; } };
   const capability = sign();
   assert.equal(validateCapability(capability, { secret: SECRET, nowIso: NOW, tenantId: 'tenant_demo', killSwitches: recording, nonces: { seen: () => false } }).ok, true);
-  assert.deepEqual(asked, [
-    ['tenant_demo', 'global', 'tenant_demo'],
-    ['tenant_demo', 'tenant', 'tenant_demo'],
-    ['tenant_demo', 'provider', 'meta_ads'],
-    ['tenant_demo', 'campaign', 'campaign_001'],
-  ]);
+  assert.deepEqual(asked, FREEZE_SCOPES.map((scope) => ['tenant_demo', scope, derived(scope, capability)]));
+  // ...and the four are the four the issue names, in that order.
+  assert.deepEqual([...FREEZE_SCOPES], ['global', 'tenant', 'provider', 'campaign']);
+  assert.deepEqual(asked.map(([, , id]) => id), ['tenant_demo', 'tenant_demo', PROVIDER_SCOPE_ID, 'campaign_001']);
 
   const frozen = (scope, scopeId) => validateCapability(capability, {
     secret: SECRET, nowIso: NOW, tenantId: 'tenant_demo',
     killSwitches: { isActive: (_t, s, i) => s === scope && i === scopeId },
     nonces: { seen: () => false },
   });
-  for (const [scope, scopeId] of [['global', 'tenant_demo'], ['tenant', 'tenant_demo'], ['provider', 'meta_ads'], ['campaign', 'campaign_001']]) {
+  for (const scope of FREEZE_SCOPES) {
+    const scopeId = derived(scope, capability);
     const result = frozen(scope, scopeId);
     assert.equal(result.error.code, 'KILL_SWITCH_ACTIVE', `${scope} ${scopeId}`);
     assert.equal(result.error.details.scope, scope);
@@ -347,6 +372,85 @@ test('THE KILL-SWITCH SCOPES, all four, from an envelope that names only a tenan
   }
   // A freeze on ANOTHER campaign does not block this one.
   assert.equal(frozen('campaign', 'campaign_999').ok, true);
+  // ...and neither does a provider freeze on a different provider id, which is
+  // the same key this epic writes under and the reason it is derived once.
+  assert.equal(frozen('provider', 'another_ads').ok, true);
+});
+
+test('a campaign scope has NO derived id, because the id IS the target of the freeze', () => {
+  // The one scope the kernel cannot key on its own. A caller that names one
+  // gets it; a caller that names none has to be refused rather than defaulted,
+  // which is the writer's business and not this module's.
+  assert.equal(freezeScopeId('campaign', { tenant: 'tenant_demo' }), null);
+  assert.equal(freezeScopeId('global', {}), null, 'a global scope still needs the tenant it covers');
+  assert.equal(freezeScopeId('provider', {}), PROVIDER_SCOPE_ID);
+  assert.equal(freezeScopeId('tenant', { tenant: 'tenant_demo' }), 'tenant_demo');
+  assert.equal(freezeScopeId('moon', { tenant: 'tenant_demo' }), null);
+});
+
+test('AUTHORITY: the envelope names who authorised it, and the name is SIGNED', () => {
+  // A capability is authorised by exactly one of two things: the class's
+  // posture at issuance, or a named human decision. Which one is signed into
+  // the envelope, so the executor files its receipt against the decision the
+  // server actually authorised rather than the one a delivery claims.
+  const autonomous = sign();
+  assert.deepEqual(autonomous.authority, { kind: 'autonomous' });
+  assert.equal(approvalIdFromAuthority(autonomous.authority), null);
+
+  const approved = sign({}, { approvalId: 'apv_seed_budget_1' });
+  assert.deepEqual(approved.authority, { kind: 'human-approval', approval_id: 'apv_seed_budget_1' });
+  assert.equal(approvalIdFromAuthority(approved.authority), 'apv_seed_budget_1');
+
+  // Tampering with the authority is tampering with the signature.
+  const swapped = { ...approved, authority: { kind: 'autonomous' } };
+  const result = verify(swapped);
+  assert.equal(result.error.code, 'BAD_SIGNATURE');
+  assert.equal(result.error.details.field, 'signature');
+  const relabelled = { ...autonomous, authority: { kind: 'human-approval', approval_id: 'apv_1' } };
+  assert.equal(verify(relabelled).error.code, 'BAD_SIGNATURE');
+  // An authority of an unrecognised kind is malformed, not merely unusual: it
+  // names nothing the executor could act on.
+  const bogus = { ...autonomous, authority: { kind: 'because-i-said-so' } };
+  assert.equal(verify(bogus).error.code, 'BAD_SIGNATURE');
+  const stripped = { ...autonomous };
+  delete stripped.authority;
+  assert.equal(verify(stripped).error.code, 'MALFORMED_CAPABILITY');
+
+  // The kinds are a closed set, and an id that is not an id is refused at
+  // issuance rather than signed into the envelope.
+  assert.deepEqual([...AUTHORITY_KINDS], ['autonomous', 'human-approval']);
+  for (const approvalId of ['', '   ', 7, {}, []]) {
+    const error = thrown(() => sign({}, { approvalId }));
+    assert.equal(error.code, 'APPROVAL_ID_INVALID', JSON.stringify(approvalId));
+  }
+  // null and undefined both mean "no human decided this", not "an id of null".
+  assert.deepEqual(sign({}, { approvalId: null }).authority, { kind: 'autonomous' });
+  assert.deepEqual(sign({}, { approvalId: undefined }).authority, { kind: 'autonomous' });
+  // A stored authority of no recognised kind yields no approval id, so nothing
+  // downstream can treat it as one.
+  assert.equal(approvalIdFromAuthority({ kind: 'because-i-said-so' }), null);
+  assert.equal(approvalIdFromAuthority({ kind: 'human-approval' }), null);
+  assert.equal(approvalIdFromAuthority(null), null);
+});
+
+test('intentFromEnvelope reads the intent back out of a signed envelope', () => {
+  // The write path re-gates on this shape, built from the STORED envelope
+  // rather than from the request, so it has to be the same shape the issuance
+  // route validated — the tenant_id/action_class/action/resource fields of an
+  // intent, and nothing invented.
+  const capability = sign({ constraints: { status: 'ACTIVE' } });
+  assert.deepEqual(intentFromEnvelope(capability), {
+    tenant_id: 'tenant_demo',
+    action_class: 'campaign-status',
+    action: 'set_campaign_status',
+    resource: 'campaign_001',
+    constraints: { status: 'ACTIVE' },
+  });
+  // An envelope with no constraints is a real one — create_campaign reads its
+  // name from there — so the field is defaulted rather than undefined.
+  assert.deepEqual(intentFromEnvelope({ ...capability, constraints: undefined }).constraints, {});
+  // maturity is NOT carried over: the gate is handed the maturity measured now.
+  assert.equal('maturity' in intentFromEnvelope(capability), false);
 });
 
 test('the nonces port is READ-ONLY: validateCapability never claims one', () => {

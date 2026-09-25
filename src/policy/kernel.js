@@ -13,11 +13,13 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { policyBand } from '../domain/measurement.js';
 
 /**
- * Dev-only default signing secret. A capability forged offline against this
- * literal is accepted, which is a real limitation of the slice and not an
- * oversight: it is a bearer surface whose only control is this string, and it
- * is bounded by the fact that the only writable provider is an in-memory fake.
- * Anything deployed sets POLICY_SIGNING_SECRET and index.js passes it in.
+ * Dev-only default signing secret. It is NOT the authorisation boundary and
+ * nothing may treat it as one: the write path proves provenance against the
+ * server's own capabilities table (executor.provenance), so an envelope forged
+ * offline against this literal verifies and is still refused as
+ * CAPABILITY_NOT_ISSUED. It is kept only because a signature has to be
+ * computable, and because a signature nobody can compute would buy nothing.
+ * Anything deployed still sets POLICY_SIGNING_SECRET and index.js passes it in.
  */
 export const DEFAULT_SIGNING_SECRET = 'dev-policy-signing-secret-not-a-production-secret';
 
@@ -294,6 +296,7 @@ export function validateIntent(intent, { nowIso, posture, approval = null, matur
 
 const SIGNED_FIELDS = Object.freeze([
   'tenant', 'action_class', 'action', 'resource', 'constraints', 'maturity', 'band', 'expiry', 'nonce', 'policy_version',
+  'authority',
 ]);
 
 /** The exact bytes that are signed: a fixed field order, so a re-ordering of
@@ -307,6 +310,60 @@ function sign(payload, secret) {
 }
 
 export const DEFAULT_CAPABILITY_TTL_MS = 900_000;
+
+/**
+ * The two authorities a capability can carry, and the ONLY way one is built.
+ *
+ * A capability is authorised by exactly one of two things: the class's posture
+ * at the moment of issuance ({kind:'autonomous'}), or a human decision on a
+ * named queue row ({kind:'human-approval', approval_id}). The field is SIGNED
+ * and this function is private, so a caller passes an approval ID and cannot
+ * assemble the object — which is the point: the envelope tells the executor
+ * which approval row to present to the gate, and an envelope that named a
+ * different row is a different envelope rather than a claim the server checks.
+ */
+export const AUTHORITY_KINDS = Object.freeze(['autonomous', 'human-approval']);
+
+function authorityFor(approvalId) {
+  if (approvalId === null || approvalId === undefined) {
+    return { kind: 'autonomous' };
+  }
+  if (typeof approvalId !== 'string' || approvalId.trim().length === 0) {
+    const error = new Error(`issueCapability: an approvalId must be a real non-empty id, got ${JSON.stringify(approvalId)}`);
+    error.code = 'APPROVAL_ID_INVALID';
+    error.details = { field: 'approvalId' };
+    throw error;
+  }
+  return { kind: 'human-approval', approval_id: approvalId };
+}
+
+/**
+ * The approval row a stored envelope's own authority names, or null. Reading it
+ * from the envelope rather than from the execute call is what deletes the
+ * caller's claim about its own request: a delivery cannot name a different
+ * approval on its receipt, and an envelope with an authority of no recognised
+ * kind names none.
+ */
+export function approvalIdFromAuthority(authority) {
+  return authority?.kind === 'human-approval' && typeof authority.approval_id === 'string' && authority.approval_id.length > 0
+    ? authority.approval_id
+    : null;
+}
+
+/**
+ * Rebuild the intent validateIntent reads, from a STORED envelope. The write
+ * path's re-gate and the issuance routes therefore hand the same pure function
+ * the same shape, and neither of them can describe the same envelope two ways.
+ */
+export function intentFromEnvelope(envelope) {
+  return {
+    tenant_id: envelope.tenant,
+    action_class: envelope.action_class,
+    action: envelope.action,
+    resource: envelope.resource,
+    constraints: envelope.constraints ?? {},
+  };
+}
 
 /**
  * Mint a signed capability for an intent the gate has already admitted.
@@ -324,8 +381,12 @@ export const DEFAULT_CAPABILITY_TTL_MS = 900_000;
  * nonce is OPTIONAL and generated internally when omitted, which is what lets
  * the approve route pass decisionNonce(approvalId) instead of assembling the
  * string itself. The caller that owns the clock owns both nowIso and the cap.
+ *
+ * approvalId is the queue row this capability is spent against, or null on the
+ * autonomous route; it becomes the envelope's signed authority and nothing
+ * else, and the executor reads the receipt's approval_id back out of it.
  */
-export function issueCapability(intent, { secret, policyVersion, ttlMs = DEFAULT_CAPABILITY_TTL_MS, nowIso, expiresAtCap = null, nonce = null }) {
+export function issueCapability(intent, { secret, policyVersion, ttlMs = DEFAULT_CAPABILITY_TTL_MS, nowIso, expiresAtCap = null, nonce = null, approvalId = null }) {
   const entry = ACTION_CLASSES.find((candidate) => candidate.action_class === intent.action_class);
   const now = Date.parse(nowIso);
   const cap = expiresAtCap ? Date.parse(expiresAtCap) : null;
@@ -342,8 +403,49 @@ export function issueCapability(intent, { secret, policyVersion, ttlMs = DEFAULT
     expiry: new Date(ttl).toISOString(),
     nonce: nonce ?? `nce_${randomUUID().replaceAll('-', '').slice(0, 16)}`,
     policy_version: policyVersion,
+    authority: authorityFor(approvalId),
   };
   return { ...envelope, signature: sign(signingBytes(envelope), secret) };
+}
+
+/**
+ * THE canonical (scope, scope_id) derivation, and the only place the pair is
+ * computed. A freeze is written by src/strategy/guardian.js and read by
+ * killSwitchChecks below; both call THIS function, because a row nobody's
+ * reader asks for is a freeze that exists in the table, in the banner and in
+ * GET /v1/guardian while blocking nothing at all.
+ *
+ * ('global', tenant) and ('tenant', tenant) carry the tenant that raised the
+ * freeze, never a '' sentinel, because every query in repositories.js binds
+ * tenant_id. ('provider', PROVIDER_SCOPE_ID) names the only provider this epic
+ * integrates, as a named constant passed IN rather than read from a module
+ * singleton, so a second provider is a second argument and not an edit. A
+ * campaign-wide freeze carries the campaign's own id, which is why that one is
+ * not derivable from a tenant alone: the guardian is told which campaign, and
+ * the gate asks about the envelope's resource.
+ *
+ * Returns null for an unknown scope and for a scope whose id is not derivable
+ * from what the caller has, so a caller can tell "not derivable here" from
+ * "the empty id" without a second function.
+ */
+export const FREEZE_SCOPES = Object.freeze(['global', 'tenant', 'provider', 'campaign']);
+
+/** The one provider scope id in the product, as a parameter and never as a
+ * default: freezeScopeId is pure, and a default would be a hidden second
+ * definition of the same string. */
+export const PROVIDER_SCOPE_ID = 'meta_ads';
+
+export function freezeScopeId(scope, { tenant = null, resource = null, providerScopeId = PROVIDER_SCOPE_ID } = {}) {
+  if (scope === 'global' || scope === 'tenant') {
+    return tenant;
+  }
+  if (scope === 'provider') {
+    return providerScopeId;
+  }
+  if (scope === 'campaign') {
+    return resource;
+  }
+  return null;
 }
 
 /**
@@ -351,24 +453,12 @@ export function issueCapability(intent, { secret, policyVersion, ttlMs = DEFAULT
  * the first active one. Every key is derivable from the SIGNED envelope with
  * nothing added to it, which is the point: a freeze is checkable by whoever
  * holds the capability, with no extra state to keep in sync.
- *
- * ('global', tenant) is stored under the tenant that raised the freeze, never
- * under a '' sentinel, because every query in repositories.js binds tenant_id.
- * ('provider', 'meta_ads') names the only provider this epic integrates, as a
- * constant so the string is written once. A provider-wide freeze blocks a
- * campaign write; a campaign-wide freeze blocks only that campaign.
  */
-const KILL_SWITCH_SCOPES = Object.freeze({
-  PROVIDER_SCOPE_ID: 'meta_ads',
-});
-
 function killSwitchChecks(envelope) {
-  return [
-    { scope: 'global', scope_id: envelope.tenant },
-    { scope: 'tenant', scope_id: envelope.tenant },
-    { scope: 'provider', scope_id: KILL_SWITCH_SCOPES.PROVIDER_SCOPE_ID },
-    { scope: 'campaign', scope_id: envelope.resource },
-  ];
+  return FREEZE_SCOPES.map((scope) => ({
+    scope,
+    scope_id: freezeScopeId(scope, { tenant: envelope.tenant, resource: envelope.resource }),
+  }));
 }
 
 /**

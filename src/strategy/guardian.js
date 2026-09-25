@@ -7,14 +7,19 @@
 // Freeze scope is an explicit argument rather than a constant because the
 // issue names four levels (global, tenant, provider, campaign) and a signature
 // that could only write one would not cover them. The DEFAULT is the provider
-// scope because Meta Ads is the only provider this epic integrates, and it is
-// safe to default to a non-global scope only because killSwitches.activeFor
-// returns every active row for the tenant whatever its scope — the read side
-// was widened to match the write side in the same change, and a test asserts
-// the two agree.
+// scope because Meta Ads is the only provider this epic integrates — and the
+// id that goes with it is DERIVED THROUGH THE KERNEL'S OWN FUNCTION rather than
+// written here, because this module is the writer and a second literal for the
+// same key is how a global freeze ended up stored under a provider id that no
+// reader ever asked for.
 
 import { randomUUID } from 'node:crypto';
 import { STALE_THRESHOLD_HOURS } from '../domain/measurement.js';
+import { FREEZE_SCOPES, freezeScopeId } from '../policy/kernel.js';
+
+/** Every scope the freeze may name. The LIST is the kernel's — one roster, one
+ * place — re-exported under the name this module's own callers already use. */
+export { FREEZE_SCOPES };
 
 /** The scope freeze() and reEnable() default to. Declared HERE rather than in
  * the route so the two defaults can be compared by a test: a re-enable that
@@ -22,10 +27,11 @@ import { STALE_THRESHOLD_HOURS } from '../domain/measurement.js';
  * whose scope did not match the frozen row's would clear nothing and still
  * report success — the exact failure this default removes. */
 export const DEFAULT_FREEZE_SCOPE = 'provider';
-export const DEFAULT_FREEZE_SCOPE_ID = 'meta_ads';
 
-/** Every scope the freeze may name, paired with the id it carries. */
-export const FREEZE_SCOPES = Object.freeze(['global', 'tenant', 'provider', 'campaign']);
+/** The provider scope's canonical key, read out of the kernel's derivation
+ * rather than typed: a test can compare this with what the gate asks for
+ * because both sides are the same function. */
+export const DEFAULT_FREEZE_SCOPE_ID = freezeScopeId(DEFAULT_FREEZE_SCOPE, {});
 
 export const GUARDIAN_KINDS = Object.freeze(['spend-spike', 'tracking-loss']);
 
@@ -150,6 +156,43 @@ function guardianError(code, message, details = {}) {
 }
 
 /**
+ * The scope_id a freeze at `scope` is WRITTEN under, and the one place the two
+ * sides of the pair are allowed to disagree: never, silently. An id the kernel
+ * derives is derived here too, so a caller who names a different one is
+ * refused rather than obeyed — a contradiction is a mistake worth naming, not
+ * a row to store where nothing will look for it.
+ *
+ * A campaign freeze is the one scope whose id is not derivable from a tenant
+ * alone, so the caller is the only possible source for it and there is nothing
+ * to contradict: any real id is the canonical one.
+ */
+function resolveFreezeScopeId(scope, tenantId, supplied) {
+  const canonical = freezeScopeId(scope, { tenant: tenantId });
+  if (supplied !== undefined) {
+    if (typeof supplied !== 'string' || supplied.length === 0) {
+      // A NULL in a rowid-composite primary key never matches an ON CONFLICT
+      // target, so a re-trigger would append a SECOND active row that no
+      // re-enable could clear. The scope_id is always a real id.
+      throw guardianError('FREEZE_SCOPE_ID_REQUIRED', 'a freeze scope_id must be a real non-empty id', { scope });
+    }
+    if (canonical !== null && supplied !== canonical) {
+      throw guardianError('FREEZE_SCOPE_ID_MISMATCH', `a ${scope} freeze is stored under ${canonical}, not ${supplied}`, {
+        scope,
+        scope_id: supplied,
+        expected_scope_id: canonical,
+      });
+    }
+  }
+  if (canonical !== null) {
+    return canonical;
+  }
+  if (supplied === undefined) {
+    throw guardianError('FREEZE_SCOPE_ID_REQUIRED', 'a freeze scope_id must be a real non-empty id', { scope });
+  }
+  return supplied;
+}
+
+/**
  * Raise the freeze and record why. The kill-switch row carries the REAL
  * resolved tenant_id, never a '' global sentinel, because every query in
  * repositories.js binds tenant_id — a sentinel row would be a freeze no
@@ -157,21 +200,16 @@ function guardianError(code, message, details = {}) {
  * the join with the switch, and an editable incident would be a second, worse
  * source of truth.
  */
-export function freeze({ repositories, tenantId, kind, details = {}, actor, scope = DEFAULT_FREEZE_SCOPE, scopeId = DEFAULT_FREEZE_SCOPE_ID, at = null }) {
+export function freeze({ repositories, tenantId, kind, details = {}, actor, scope = DEFAULT_FREEZE_SCOPE, scopeId, at = null }) {
   if (!FREEZE_SCOPES.includes(scope)) {
     throw guardianError('FREEZE_SCOPE_UNKNOWN', `a freeze scope must be one of ${FREEZE_SCOPES.join('|')}`, { scope });
   }
-  if (typeof scopeId !== 'string' || scopeId.length === 0) {
-    // A NULL in a rowid-composite primary key never matches an ON CONFLICT
-    // target, so a re-trigger would append a SECOND active row that no
-    // re-enable could clear. The scope_id is always a real id.
-    throw guardianError('FREEZE_SCOPE_ID_REQUIRED', 'a freeze scope_id must be a real non-empty id', { scope });
-  }
+  const resolvedScopeId = resolveFreezeScopeId(scope, tenantId, scopeId);
   const frozenAt = at ?? new Date().toISOString();
   repositories.killSwitches.upsertFreeze({
     tenant_id: tenantId,
     scope,
-    scope_id: scopeId,
+    scope_id: resolvedScopeId,
     kind,
     reason: details.reason ?? `${kind} tripped`,
     actor,
@@ -191,36 +229,50 @@ export function freeze({ repositories, tenantId, kind, details = {}, actor, scop
     actor: actor ?? 'guardian',
     action: 'guardian.freeze',
     subject: incidentId,
-    details: { kind, scope, scope_id: scopeId, ...details },
+    details: { kind, scope, scope_id: resolvedScopeId, ...details },
     occurred_at: frozenAt,
   });
-  return { frozen: true, scope, scope_id: scopeId, kind, incident_id: incidentId };
+  return { frozen: true, scope, scope_id: resolvedScopeId, kind, incident_id: incidentId };
 }
 
 /**
- * Clear a freeze. An EXPLICIT HUMAN ACTOR is required and with none the call
- * is refused: re-enabling automation is the one operation in this slice where
- * "the system decided to start again" is not an acceptable answer. There is
- * deliberately no recovery predicate argument here — see recoveryHolds.
+ * Clear a freeze, and REPORT what was actually cleared. An EXPLICIT HUMAN
+ * ACTOR is required and with none the call is refused: re-enabling automation
+ * is the one operation in this slice where "the system decided to start again"
+ * is not an acceptable answer. There is deliberately no recovery predicate
+ * argument here — see recoveryHolds.
+ *
+ * A scope matching no ACTIVE row is refused with NO_ACTIVE_FREEZE rather than
+ * reported as a success, because "automation is running again" is the one
+ * answer an operator has to be able to trust. Such a re-enable writes no row
+ * and appends no audit event, exactly as one refused for want of an actor
+ * already does.
  */
-export function reEnable({ repositories, tenantId, actor, scope = DEFAULT_FREEZE_SCOPE, scopeId = DEFAULT_FREEZE_SCOPE_ID, at = null }) {
+export function reEnable({ repositories, tenantId, actor, scope = DEFAULT_FREEZE_SCOPE, scopeId, at = null }) {
   if (typeof actor !== 'string' || actor.trim().length === 0) {
     throw guardianError('RE_ENABLE_ACTOR_REQUIRED', 'a re-enable needs an explicit human actor', { field: 'actor' });
   }
   if (!FREEZE_SCOPES.includes(scope)) {
     throw guardianError('FREEZE_SCOPE_UNKNOWN', `a freeze scope must be one of ${FREEZE_SCOPES.join('|')}`, { scope });
   }
+  const resolvedScopeId = resolveFreezeScopeId(scope, tenantId, scopeId);
+  if (!repositories.killSwitches.isActive(tenantId, scope, resolvedScopeId)) {
+    throw guardianError('NO_ACTIVE_FREEZE', `no active ${scope} freeze for ${resolvedScopeId}`, {
+      scope,
+      scope_id: resolvedScopeId,
+    });
+  }
   const when = at ?? new Date().toISOString();
-  const row = repositories.killSwitches.reEnable(tenantId, scope, scopeId, { actor, at: when });
+  const row = repositories.killSwitches.reEnable(tenantId, scope, resolvedScopeId, { actor, at: when });
   repositories.auditEvents.append({
     tenant_id: tenantId,
     actor,
     action: 'guardian.re-enable',
-    subject: `${scope}:${scopeId}`,
-    details: { scope, scope_id: scopeId },
+    subject: `${scope}:${resolvedScopeId}`,
+    details: { scope, scope_id: resolvedScopeId },
     occurred_at: when,
   });
-  return { re_enabled: true, scope, scope_id: scopeId, row };
+  return { re_enabled: true, scope, scope_id: resolvedScopeId, row };
 }
 
 /**

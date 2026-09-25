@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { openDatabase } from '../../src/data/db.js';
 import { createRepositories } from '../../src/data/repositories.js';
 import { buildApp } from '../../src/api/routes.js';
-import { decisionNonce } from '../../src/policy/kernel.js';
+import { createKernel, decisionNonce, DEFAULT_SIGNING_SECRET } from '../../src/policy/kernel.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'approvals-api-'));
 const db = openDatabase(join(dir, 'app.db'));
@@ -314,4 +314,53 @@ test('an approval whose class no longer matches the row\'s action is refused, no
   assert.equal(status, 403);
   assert.equal(body.code, 'AUTONOMY_NOT_EARNED');
   assert.equal(body.details.reason, 'action-mismatch');
+});
+
+test('THE WRITE PATH RE-GATES AN APPROVAL-BACKED CAPABILITY against the approval row it names', async () => {
+  // The gate used to run only where capabilities were minted, so an envelope
+  // outlived the decision that authorised it. The re-gate runs on the write
+  // path too, and it is fed the STORED envelope's own authority — the
+  // capability below names an approval that is no longer there.
+  const approvalId = fixture();
+  const kernel = createKernel({ secret: DEFAULT_SIGNING_SECRET, policyVersion: '1', ...{ killSwitches: { isActive: () => false }, nonces: { seen: () => false } } });
+  const envelope = kernel.issueCapability({
+    tenant_id: TENANT,
+    action_class: 'campaign-status',
+    action: 'set_campaign_status',
+    resource: 'campaign_001',
+    constraints: { status: 'PAUSED' },
+    maturity: 0.83,
+  }, { nowIso: new Date().toISOString(), approvalId, nonce: decisionNonce(approvalId) });
+  repositories.capabilities.create({ tenant_id: TENANT, capability_id: envelope.capability_id, envelope, expires_at: envelope.expiry });
+  assert.deepEqual(envelope.authority, { kind: 'human-approval', approval_id: approvalId });
+
+  // The row goes away underneath it, which is the whole hazard: a signature
+  // does not keep an approval alive.
+  db.prepare('DELETE FROM approvals WHERE tenant_id = ? AND approval_id = ?').run(TENANT, approvalId);
+
+  const { status, body } = await post('/v1/actions/execute', envelope);
+  assert.equal(status, 403);
+  assert.equal(body.code, 'AUTONOMY_NOT_EARNED');
+  assert.equal(body.details.reason, 'malformed');
+  assert.equal(body.details.approval_id, approvalId);
+  assert.equal(repositories.actionRecords.getByNonce(TENANT, envelope.nonce), null, 'no receipt for a write nobody approved');
+
+  // ...and a capability whose approval is still there goes through on the same
+  // path, so the re-gate is not simply a wall.
+  const live = fixture();
+  const admitted = kernel.issueCapability({
+    tenant_id: TENANT,
+    action_class: 'campaign-status',
+    action: 'set_campaign_status',
+    resource: 'campaign_001',
+    constraints: { status: 'PAUSED' },
+    maturity: 0.83,
+  }, { nowIso: new Date().toISOString(), approvalId: live, nonce: decisionNonce(live) });
+  repositories.capabilities.create({ tenant_id: TENANT, capability_id: admitted.capability_id, envelope: admitted, expires_at: admitted.expiry });
+  const allowed = await post('/v1/actions/execute', admitted);
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.body.executed, true);
+  // The receipt is filed against the decision the STORED authority names, not
+  // against anything the request said about itself.
+  assert.equal(repositories.actionRecords.getByNonce(TENANT, admitted.nonce).approval_id, live);
 });

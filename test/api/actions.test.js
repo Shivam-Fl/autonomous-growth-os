@@ -7,13 +7,14 @@
 import { test, after } from 'node:test';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
+import { createHmac, randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../../src/data/db.js';
 import { createRepositories } from '../../src/data/repositories.js';
 import { buildApp } from '../../src/api/routes.js';
-import { ACTION_CLASSES } from '../../src/policy/kernel.js';
+import { ACTION_CLASSES, DEFAULT_SIGNING_SECRET } from '../../src/policy/kernel.js';
 import { POSTURE_LABELS, postureFor } from '../../src/policy/trust.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'actions-api-'));
@@ -38,6 +39,16 @@ async function post(path, body) {
 }
 
 const issue = (body) => post('/v1/capabilities', { tenant_id: TENANT, ...body });
+
+/** An offline forger, so a forgery does not go through the code that mints
+ * capabilities: the exact signed bytes, with the secret the kernel publishes. */
+const SIGNED_FIELD_ORDER = [
+  'tenant', 'action_class', 'action', 'resource', 'constraints', 'maturity', 'band', 'expiry', 'nonce', 'policy_version', 'authority',
+];
+function forge(fields) {
+  const bytes = JSON.stringify(SIGNED_FIELD_ORDER.map((field) => fields[field] ?? null));
+  return { ...fields, signature: createHmac('sha256', DEFAULT_SIGNING_SECRET).update(bytes).digest('hex') };
+}
 
 const intents = {
   'campaign-status': { action: 'set_campaign_status', resource: 'campaign_001', constraints: { status: 'PAUSED' } },
@@ -115,6 +126,77 @@ test('a tampered envelope is refused BAD_SIGNATURE and never reaches the provide
   assert.equal(status, 403);
   assert.equal(body.code, 'BAD_SIGNATURE');
   assert.equal(repositories.actionRecords.getByNonce(TENANT, tampered.nonce), null);
+});
+
+test('AN ENVELOPE ASSEMBLED BY HAND IS REFUSED OVER HTTP, whatever its signature', async () => {
+  // The dev signing secret is published in src/policy/kernel.js, so a caller
+  // can produce an envelope that verifies perfectly. These two are the writes
+  // worth forging: a new geography (a campaign created where the gate would
+  // have asked for a human) and a large budget move.
+  const forgeries = [
+    { action_class: 'new-geography', action: 'create_campaign', resource: 'campaign_004', constraints: { name: 'Retargeting — forged' } },
+    { action_class: 'budget-change', action: 'update_campaign_budget', resource: 'adset_001', constraints: { delta_micros: 900_000_000 } },
+  ];
+  for (const forged of forgeries) {
+    const envelope = forge({
+      capability_id: `cap_${randomUUID().replaceAll('-', '').slice(0, 20)}`,
+      tenant: TENANT,
+      ...forged,
+      maturity: 0.83,
+      band: 'moderate',
+      expiry: new Date(Date.now() + 600_000).toISOString(),
+      nonce: `nce_forged_${randomUUID().slice(0, 8)}`,
+      policy_version: '1',
+      authority: { kind: 'autonomous' },
+    });
+    const { status, body } = await post('/v1/actions/execute', envelope);
+    assert.equal(status, 403, forged.action_class);
+    // A STABLE code, not a stack trace and not a provider error: the caller
+    // can tell this one apart from a quota problem.
+    assert.equal(body.code, 'CAPABILITY_NOT_ISSUED', forged.action_class);
+    assert.equal(body.details.reason, 'unknown-capability', forged.action_class);
+    assert.equal(body.stack, undefined, forged.action_class);
+    assert.equal(repositories.actionRecords.getByNonce(TENANT, envelope.nonce), null, `${forged.action_class} wrote a receipt`);
+    assert.equal(repositories.capabilities.get(TENANT, envelope.capability_id), null, `${forged.action_class} was stored`);
+  }
+});
+
+test('a capability that WAS issued still executes, still writes one receipt, and still dedupes to it', async () => {
+  // The positive half, over the same route the forgery above was refused by.
+  // Without it, CAPABILITY_NOT_ISSUED could pass by refusing everything.
+  const issued = await issue({ action_class: 'campaign-status', ...intents['campaign-status'] });
+  assert.equal(issued.status, 201);
+  const envelope = issued.body.envelope;
+  assert.deepEqual(envelope.authority, { kind: 'autonomous' });
+
+  const first = await post('/v1/actions/execute', envelope);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.executed, true);
+  assert.equal(first.body.reconciliation, 'agreed');
+  const receipt = first.body.receipt_id;
+  assert.equal(receipt, `rcp_${envelope.capability_id.replace(/^cap_/, '')}`);
+
+  const second = await post('/v1/actions/execute', envelope);
+  assert.equal(second.status, 200);
+  assert.equal(second.body.duplicate, true);
+  assert.equal(second.body.receipt_id, receipt, 'the same receipt, not a second one');
+  assert.equal(repositories.actionRecords.listForTenant(TENANT, { limit: 200 })
+    .filter((row) => row.nonce === envelope.nonce).length, 1);
+});
+
+test('an intent whose action_class is absent or is not a class is refused with a named reason', async () => {
+  // Both used to reach the roster lookup as undefined and be reported as an
+  // object, which read like a server fault rather than a refusal.
+  for (const body of [
+    { action: 'set_campaign_status', resource: 'campaign_001' },
+    { action_class: { x: 1 }, action: 'set_campaign_status', resource: 'campaign_001' },
+  ]) {
+    const refused = await issue(body);
+    assert.equal(refused.status, 403, JSON.stringify(body));
+    assert.equal(refused.body.code, 'AUTONOMY_NOT_EARNED', JSON.stringify(body));
+    assert.equal(refused.body.details.reason, 'unknown-class', JSON.stringify(body));
+    assert.equal(refused.body.envelope, undefined, JSON.stringify(body));
+  }
 });
 
 test('an envelope with a field removed is 400 MALFORMED_CAPABILITY', async () => {

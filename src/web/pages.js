@@ -40,7 +40,7 @@ export function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function layout({ route, state, title, tenantName, content }) {
+function layout({ route, state, title, tenantName, content, announcement = '' }) {
   const nav = [
     ['/', 'Dashboard'],
     ['/journal', 'Decision journal'],
@@ -75,7 +75,7 @@ function layout({ route, state, title, tenantName, content }) {
 <span class="tenant-name" id="tenant-name" data-testid="tenant-name">${escapeHtml(tenantName)}</span>
 </div>
 </header>
-<div id="live-region" class="visually-hidden" aria-live="polite" role="status"></div>
+<div id="live-region" class="visually-hidden" aria-live="polite" role="status">${escapeHtml(announcement)}</div>
 <main id="main">
 ${heading}
 ${content}
@@ -146,23 +146,69 @@ function guardianBanner(repositories, tenant) {
   return `<div class="banner banner-warn" role="status" data-testid="guardian-banner">Automation is frozen (${escapeHtml(rows)}). Approve nothing until a human re-enables it.</div>`;
 }
 
-export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null, filters = null } = {}) {
+/**
+ * The sentence a decision hand-off announces, and the panel it paints.
+ *
+ * It is SERVER-rendered because the outcome has to survive a navigation: a
+ * client.js that painted a receipt into the page it then reloaded destroyed
+ * the receipt before the browser composited a frame of it, so the outcome
+ * travels in the URL instead and is painted here, where the operator is
+ * looking. Both halves of the copy come from the response the decision POST
+ * actually made — the receipt id and the reconciliation are the same strings
+ * the receipt row holds.
+ *
+ * Every value is escaped on the way in, a receipt id is rendered only when it
+ * is a real one, and an absent or unrecognised decision renders nothing at
+ * all: the panel is a normal page again the moment the parameters are gone.
+ */
+function decisionResult(decision) {
+  if (!decision) {
+    return { panel: '', announcement: '' };
+  }
+  if (decision.decision === 'approved') {
+    // No receipt id, no receipt: the sentence exists to name it, so a
+    // parameter set that carries none renders nothing rather than a sentence
+    // with a hole in it.
+    if (typeof decision.receipt !== 'string' || decision.receipt.length === 0) {
+      return { panel: '', announcement: '' };
+    }
+    const sentence = `Executed. Receipt ${decision.receipt}. Reconciliation: ${decision.reconciliation ?? 'unknown'}.`;
+    return {
+      announcement: sentence,
+      panel: `<div data-testid="approval-toast"><p>${escapeHtml(sentence)}</p></div>`,
+    };
+  }
+  if (decision.decision === 'rejected') {
+    const sentence = `Rejected. ${decision.approval ?? ''} will not run.`;
+    return {
+      announcement: sentence,
+      panel: `<div data-testid="approval-rejected"><p>${escapeHtml(sentence)}</p></div>`,
+    };
+  }
+  return { panel: '', announcement: '' };
+}
+
+export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null, filters = null, decision = null } = {}) {
   if (!ROUTES.includes(route)) {
     throw new Error(`unknown page route ${route}`);
   }
   const state = resolveState(route, override, repositories);
   const tenant = firstTenant(repositories);
-  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError, filters });
+  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError, filters, decision });
   // The header must never disagree with the body: chrome follows the effective
   // (post-override) state, so ?state=empty reads 'No connected account' even
   // when the store holds a tenant.
   const tenantName = state === 'empty' ? 'No connected account' : tenant ? tenant.name : 'No connected account';
   const banner = guardianBanner(repositories, tenant);
+  const decided = decisionResult(decision);
   return layout({
     route,
     state,
     title: TITLES[route],
     tenantName,
+    // The live region carries the decision sentence, so the announcement
+    // survives the navigation instead of dying with the page that made it.
+    announcement: decided.announcement,
     content: banner ? `${banner}\n${content}` : content,
   });
 }
@@ -979,7 +1025,12 @@ function lapsedPanel(lapsed) {
   });
 }
 
-function approvals(state, { repositories, tenant }) {
+function approvals(state, { repositories, tenant, decision = null }) {
+  // The decision hand-off is rendered HERE, inside the result region client.js
+  // writes into, so the server-painted sentence and a client-painted one land
+  // in the same place and cannot stack up.
+  const result = decisionResult(decision);
+  const decided = result.panel;
   if (state === 'loading') {
     return panel({ title: 'Loading approval queue', body: skeletonRows(3, 'skeleton-card') });
   }
@@ -1023,10 +1074,10 @@ function approvals(state, { repositories, tenant }) {
 
   if (state === 'partial') {
     return `<div class="banner banner-warn" role="status">Expired approvals are shown as lapsed instead of vanishing.</div>
-<div data-testid="approval-decision-result"></div>
+<div data-testid="approval-decision-result">${decided}</div>
 ${regions}`;
   }
 
-  return `<div data-testid="approval-decision-result"></div>
+  return `<div data-testid="approval-decision-result">${decided}</div>
 ${regions}`;
 }

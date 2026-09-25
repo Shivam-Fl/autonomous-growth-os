@@ -17,7 +17,12 @@
 
   var state = document.body.dataset.state || 'live';
   var page = document.title.split('·')[0].trim();
-  announce(page + (state ? ' is showing the ' + state + ' preview state' : ' is live'));
+  // The page-level announcement is the DEFAULT, not an overwrite: a decision
+  // the server rendered into this region on purpose has to survive the load,
+  // or the hand-off that carried it through the navigation announces nothing.
+  if (!region || region.textContent.trim() === '') {
+    announce(page + (state ? ' is showing the ' + state + ' preview state' : ' is live'));
+  }
 
   function stripPreviewOverride(href) {
     var url = new URL(href, window.location.origin);
@@ -164,6 +169,45 @@
   // instead of a successful one.
   var decisionResult = document.querySelector('[data-testid="approval-decision-result"]');
 
+  // The parameters a decision hand-off arrives in. They are the receipt, not
+  // the page's state: once the server has painted the sentence the query has
+  // done its job, and a manual refresh must not replay a receipt id the
+  // operator has already read. Stripped, never reloaded — ?meta_error= and
+  // ?state= belong to the page and stay exactly where they are.
+  var DECISION_PARAMS = ['decision', 'receipt', 'reconciliation', 'drift', 'approval'];
+
+  function stripDecisionParams() {
+    if (!window.history || !window.history.replaceState) {
+      return;
+    }
+    var url = new URL(window.location.href);
+    var present = DECISION_PARAMS.some(function (name) { return url.searchParams.has(name); });
+    if (!present) {
+      return;
+    }
+    DECISION_PARAMS.forEach(function (name) { url.searchParams.delete(name); });
+    window.history.replaceState(null, '', url.pathname + (url.search ? url.search : '') + url.hash);
+  }
+
+  // The destination a decision navigates to: this page, its own ?meta_error
+  // carried forward so the simulation the operator is testing survives the
+  // reload, and the outcome in the query for the server to render.
+  function decisionHandoff(params) {
+    var url = new URL(window.location.href);
+    DECISION_PARAMS.forEach(function (name) { url.searchParams.delete(name); });
+    url.searchParams.set('decision', params.decision);
+    Object.keys(params).forEach(function (name) {
+      if (name !== 'decision' && params[name] !== null && params[name] !== undefined) {
+        url.searchParams.set(name, String(params[name]));
+      }
+    });
+    return url.pathname + url.search;
+  }
+
+  // The first paint is done; the receipt is on the page; the query has served
+  // its purpose.
+  stripDecisionParams();
+
   function resultNode(testid, lines) {
     var box = document.createElement('div');
     box.setAttribute('data-testid', testid);
@@ -231,13 +275,19 @@
       .then(function (answer) {
         var payload = answer.payload;
         if (payload.executed === true) {
-          var toast = 'Executed. Receipt ' + String(payload.receipt_id) + '. Reconciliation: ' + String(payload.reconciliation) + '.';
-          announce(toast);
-          showResult(resultNode('approval-toast', [toast]));
-          // The card is NOT optimistically removed: the queue is re-read from
-          // the server, so a receipt that never landed cannot be shown as one
+          // The outcome travels through the NAVIGATION rather than being
+          // painted into a page about to be destroyed: a toast composed and
+          // reloaded in the same task is never seen, and what the operator
+          // needs to read is still there a second later. The card is NOT
+          // optimistically removed — the queue that renders on the far side is
+          // the server's, so a receipt that never landed cannot be shown as one
           // that did.
-          window.location.reload();
+          window.location.assign(decisionHandoff({
+            decision: 'approved',
+            receipt: payload.receipt_id,
+            reconciliation: payload.reconciliation,
+            drift: payload.drift,
+          }));
           return;
         }
         if (payload.decided === true) {
@@ -250,12 +300,15 @@
           var rejected = 'Rejected. ' + String(payload.approval_id ?? '') + ' will not run.';
           announce(rejected);
           showResult(resultNode('approval-rejected', [rejected]));
-          window.location.reload();
+          window.location.assign(decisionHandoff({ decision: 'rejected', approval: payload.approval_id }));
           return;
         }
         if (payload.duplicate === true) {
           // A duplicate is neither a success nor a failure: the receipt exists,
-          // nothing ran twice, and reloading would only hide the answer.
+          // nothing ran twice, and reloading would only hide the answer. The
+          // parameters a previous hand-off left behind are dropped, so this
+          // card is not answered under a dead decision's URL.
+          stripDecisionParams();
           var already = 'Already decided. Receipt ' + String(payload.receipt_id) + '. Nothing was executed a second time.';
           announce(already);
           showResult(resultNode('approval-already-decided', [already]));
@@ -272,8 +325,10 @@
         }
         announce(failed);
         showResult(resultNode('approval-failed', lines));
-        // No reload: the card is still on the page and the typed reason is
-        // still in its input.
+        // No navigation: the card is still on the page and the typed reason is
+        // still in its input. Same reason this branch drops any stale decision
+        // parameters rather than inheriting them.
+        stripDecisionParams();
         control.disabled = false;
         if (card) {
           card.removeAttribute('data-busy');
@@ -284,6 +339,7 @@
         if (card) {
           card.removeAttribute('data-busy');
         }
+        stripDecisionParams();
         var offline = 'Approval action failed. Reconciliation: unknown. The item stays pending and nothing was executed.';
         announce(offline);
         showResult(resultNode('approval-failed', [offline, 'The request could not reach the server.']));

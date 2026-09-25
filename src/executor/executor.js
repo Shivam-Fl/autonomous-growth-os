@@ -3,22 +3,51 @@
 // through here, and the checks below run in the order written because the
 // order is the safety property:
 //
-//   (0) tenant   — the envelope's own tenant, not the caller's word for it
-//   (1) dedupe   — durably, in the repository, before the provider is touched
-//   (2) kernel   — signature, expiry, scope, replay and the kill switches
-//   (3) resolve  — the write method from the SIGNED action, never from the caller
-//   (4) re-read  — through the READ interface, against the instance that wrote
-//   (5) receipt  — one row, plus the idempotency effect and the audit event
+//   (0) tenant    — the envelope's own tenant, not the caller's word for it
+//   (1) dedupe    — durably, in the repository, before the provider is touched
+//   (2) kernel    — signature, expiry, scope, replay and the kill switches
+//   (3) provenance — the bytes are one this server ISSUED, read back from the
+//                    capabilities table rather than believed from the request
+//   (4) the gate  — the SAME kernel.validateIntent, re-run here on the STORED
+//                    envelope with the posture, the approval and the maturity
+//                    read live, so a check that lived only at the minting route
+//                    is a check this path cannot get past
+//   (5) resolve   — the write method from the SIGNED action, never from the caller
+//   (6) re-read   — through the READ interface, against the instance that wrote
+//   (7) receipt   — one row, plus the idempotency effect and the audit event
+//
+// A SIGNATURE IS NOT AN AUTHORISATION. It proves the bytes have not moved since
+// issuance, and a signature computed over a published dev secret proves that
+// about an envelope the server never minted — which is why (3) exists and why
+// the envelope is acted on only after it has been read back from storage.
 //
 // The provider is INJECTED and never constructed here: it is per request, and
 // a module that built its own would have no way to honour the request's
 // ?meta_error simulation, nor hold the state it just wrote for the re-read.
 
 import { ACTION_WRITES } from '../integrations/meta_ads/index.js';
+import { AUTHORITY_KINDS, approvalIdFromAuthority, intentFromEnvelope } from '../policy/kernel.js';
 
 const CONSUMER = 'executor';
 
 const DRIFT_SOURCES = new Set(['manual', 'platform', 'third-party']);
+
+/** The signed fields plus the signature, as the pair the capabilities table
+ * stores: what issuance wrote and what execution must find again. */
+const ENVELOPE_FIELDS = Object.freeze(['authority', 'capability_id', 'signature']);
+
+/**
+ * The re-gate port, called with the STORED envelope's own values. It is
+ * REQUIRED and not defaulted, for the same reason the kernel's two read ports
+ * are: an executor with no way to ask the gate is an executor that stopped
+ * enforcing it, and a default that admitted everything would be indistinguishable
+ * from a working one.
+ */
+function assertGatePort(revalidate) {
+  if (typeof revalidate !== 'function') {
+    throw new Error('executor: revalidate is a required port (the same kernel.validateIntent the issuance routes call)');
+  }
+}
 
 /**
  * The write's arguments, derived from the SIGNED envelope through ONE named
@@ -141,20 +170,21 @@ function classifyDrift(provider, reconciliation) {
   return reconciliation === 'agreed' ? 'none' : 'platform';
 }
 
-export function createExecutor({ repositories, provider, kernel, auditClock }) {
+export function createExecutor({ repositories, provider, kernel, auditClock, revalidate }) {
+  assertGatePort(revalidate);
+
   /**
    * Run one capability. Every branch that did NOT reach the provider releases
    * the claim it took, so a refused or failed write leaves a nonce unspent and
    * the caller's retry is a genuine retry rather than a swallowed claim.
    *
-   * approvalId is the QUEUE ROW this execution satisfies, supplied by the
-   * caller rather than read off the envelope: a signed capability is the
-   * authority to write, and which approval it was spent against is the
-   * caller's claim about its own request. It is null on the autonomous route,
-   * which is exactly what keeps an autonomous receipt out of the queue's
-   * executed-receipts panel.
+   * There is NO approvalId option. Which queue row this execution satisfies is
+   * read out of the STORED envelope's signed authority, because it was the
+   * caller's claim about its own request when it was an option — and a
+   * receipt filed against an approval nobody approved is worse than one filed
+   * against no approval at all.
    */
-  async function execute(capability, { actor, tenantId, approvalId = null }) {
+  async function execute(capability, { actor, tenantId }) {
     const nowIso = auditClock();
 
     // (0) TENANT. A capability is bearer material: it says which tenant it is
@@ -197,18 +227,61 @@ export function createExecutor({ repositories, provider, kernel, auditClock }) {
 
     const release = () => repositories.idempotency.release(capability.tenant, nonce, CONSUMER);
 
-    // (2) THE GATE.
+    // (2) THE STRUCTURAL GATE.
     const validated = kernel.validateCapability(capability, { nowIso, tenantId });
     if (!validated.ok) {
       release();
       return { executed: false, duplicate: false, error: validated.error };
     }
 
-    // (3) THE WRITE, resolved from the SIGNED action. An action the contract
+    // (3) PROVENANCE. The signature above proves the bytes have not moved; it
+    // does not prove this server ever issued them, and with the dev secret
+    // published it cannot. So the envelope is read back out of the capabilities
+    // table by its own primary key and required to be the SAME envelope, field
+    // for field across everything issuance wrote. Everything after this point
+    // acts on the STORED one, so a value that survived this comparison is a
+    // value the server wrote.
+    const issued = repositories.capabilities.get(capability.tenant, capability.capability_id);
+    const stored = issued?.envelope ?? null;
+    // A stored authority of no recognised kind names no approval, and treating
+    // it as autonomous would turn a row this build never wrote into the one
+    // thing the write path admits without a human.
+    const altered = stored === null
+      || !AUTHORITY_KINDS.includes(stored.authority?.kind)
+      || ENVELOPE_FIELDS.some((field) => JSON.stringify(capability[field]) !== JSON.stringify(stored[field]));
+    if (altered) {
+      release();
+      return {
+        executed: false,
+        duplicate: false,
+        error: {
+          code: 'CAPABILITY_NOT_ISSUED',
+          message: stored === null
+            ? 'this capability was not issued by this server'
+            : 'the delivered capability differs from the one this server issued',
+          details: { reason: stored === null ? 'unknown-capability' : 'altered-envelope', capability_id: capability.capability_id },
+        },
+      };
+    }
+    const approvalId = approvalIdFromAuthority(stored.authority);
+
+    // (4) THE GATE, again, on the write path. Same pure kernel.validateIntent
+    // the issuance routes ran, fed the STORED envelope's own values and the
+    // server's own reading of the world: the live posture, the approval row the
+    // envelope's own authority names, and the maturity measured now. A
+    // correctness fix (a policy class, a cap, a trusted band) is worth what the
+    // rules said, not what the rules said when the envelope was minted.
+    const reGated = revalidate(stored.tenant, intentFromEnvelope(stored), { nowIso, approvalId });
+    if (!reGated.ok) {
+      release();
+      return { executed: false, duplicate: false, error: reGated.error };
+    }
+
+    // (5) THE WRITE, resolved from the SIGNED action. An action the contract
     // does not map is a malformed capability, not a default to something
     // adjacent: a signed envelope naming a write this build does not implement
     // is refused, never quietly routed.
-    const methodName = ACTION_WRITES[capability.action];
+    const methodName = ACTION_WRITES[stored.action];
     if (methodName === undefined) {
       release();
       return {
@@ -216,12 +289,12 @@ export function createExecutor({ repositories, provider, kernel, auditClock }) {
         duplicate: false,
         error: {
           code: 'MALFORMED_CAPABILITY',
-          message: `no provider write is registered for ${capability.action}`,
+          message: `no provider write is registered for ${stored.action}`,
           details: { field: 'action' },
         },
       };
     }
-    const args = writeArgsFor(capability.action, capability);
+    const args = writeArgsFor(stored.action, stored);
     const written = await provider[methodName](args);
 
     if (!written.ok) {
@@ -236,35 +309,35 @@ export function createExecutor({ repositories, provider, kernel, auditClock }) {
       };
     }
 
-    // (4) THE RE-READ, through the READ interface against the SAME provider
+    // (6) THE RE-READ, through the READ interface against the SAME provider
     // instance that performed the write, so one request reconciles against the
     // state it just wrote.
     const applied = written.data?.reported ?? null;
-    const readBackState = await readBack(capability.action, capability, provider);
+    const readBackState = await readBack(stored.action, stored, provider);
     const reconciliation = classify(applied, readBackState);
     const drift = classifyDrift(provider, reconciliation);
 
-    // (5) THE RECEIPT. maturity and band are COPIED from the signed envelope
+    // (7) THE RECEIPT. maturity and band are COPIED from the signed envelope
     // rather than recomputed: without that, the two audit columns would be null
     // on every autonomous receipt and a receipt could not answer which band was
     // actually enforced.
-    const receiptId = `rcp_${String(capability.capability_id).replace(/^cap_/, '')}`;
+    const receiptId = `rcp_${String(stored.capability_id).replace(/^cap_/, '')}`;
     const executedAt = auditClock();
     const { appended } = repositories.actionRecords.append({
-      tenant_id: capability.tenant,
+      tenant_id: stored.tenant,
       receipt_id: receiptId,
       approval_id: approvalId,
-      capability_id: capability.capability_id,
+      capability_id: stored.capability_id,
       nonce,
-      action_class: capability.action_class,
-      action: capability.action,
-      resource: capability.resource,
+      action_class: stored.action_class,
+      action: stored.action,
+      resource: stored.resource,
       requested: args,
       reported: readBackState ?? {},
       reconciliation,
       drift,
-      maturity_at_decision: capability.maturity ?? null,
-      band_at_decision: capability.band ?? null,
+      maturity_at_decision: stored.maturity ?? null,
+      band_at_decision: stored.band ?? null,
       actor,
       executed_at: executedAt,
     });
@@ -273,7 +346,7 @@ export function createExecutor({ repositories, provider, kernel, auditClock }) {
       // Lost the UNIQUE nonce race between 1a and here. Release the claim and
       // hand back the receipt that won, rather than reporting a second write.
       release();
-      const winner = repositories.actionRecords.getByNonce(capability.tenant, nonce);
+      const winner = repositories.actionRecords.getByNonce(stored.tenant, nonce);
       return {
         executed: false,
         duplicate: true,
@@ -283,21 +356,21 @@ export function createExecutor({ repositories, provider, kernel, auditClock }) {
       };
     }
 
-    repositories.idempotency.record(capability.tenant, nonce, CONSUMER, { receipt_id: receiptId });
+    repositories.idempotency.record(stored.tenant, nonce, CONSUMER, { receipt_id: receiptId });
     repositories.auditEvents.append({
-      tenant_id: capability.tenant,
+      tenant_id: stored.tenant,
       actor,
       action: 'action.executed',
       subject: receiptId,
-      capability_id: capability.capability_id,
+      capability_id: stored.capability_id,
       details: {
-        action_class: capability.action_class,
-        action: capability.action,
-        resource: capability.resource,
+        action_class: stored.action_class,
+        action: stored.action,
+        resource: stored.resource,
         reconciliation,
         drift,
-        band: capability.band ?? null,
-        maturity: capability.maturity ?? null,
+        band: stored.band ?? null,
+        maturity: stored.maturity ?? null,
       },
       occurred_at: executedAt,
     });
