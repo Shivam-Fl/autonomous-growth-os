@@ -7,12 +7,19 @@
 // defects across three files and a function to write — worded like a work order — and then runs
 // a hidden suite over what it left. The work is kept, so a person can read the code too.
 //
-//   MODELS=a,b node .sdlc/bin/agent-trial.mjs <out.json> <work-dir>   (claude on PATH, ANTHROPIC_* set)
+// Two tasks. `ledger`: four small functions against a spec, 16 hidden tests, a few minutes' work.
+// `adtrack` (trials/adtrack.json): an HTTP service — validation, idempotent ingest under concurrent
+// requests, atomic storage, UTC date ranges, last-touch attribution, refunds — with the defects
+// spread through eight files and 33 hidden tests; closer to one of the pipeline's real tickets.
+//
+//   MODELS=a,b TRIAL_TASK=ledger|adtrack node .sdlc/bin/agent-trial.mjs <out.json> <work-dir>
+//   (claude on PATH, ANTHROPIC_* set)
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 const exec = promisify(execFile);
@@ -162,23 +169,53 @@ const noCtx = () => { const env = { ...process.env }; delete env.NODE_TEST_CONTE
 
 /** node --test over `files` in `cwd`: pass/fail counts and the failing test names. */
 async function runTests(cwd, files) {
-  const r = await exec('node', ['--test', '--test-reporter=tap', ...files], { cwd, env: noCtx(), timeout: 120_000, maxBuffer: 16 << 20 })
+  // Per test too: a server that never answers would otherwise hold the whole suite.
+  const r = await exec('node', ['--test', '--test-reporter=tap', '--test-timeout=15000', ...files], { cwd, env: noCtx(), timeout: 300_000, maxBuffer: 16 << 20 })
     .then((x) => x.stdout).catch((e) => `${e.stdout ?? ''}`);
   const n = (k) => Number(new RegExp(`^# ${k} (\\d+)`, 'm').exec(r)?.[1] ?? 0);
   const failed = [...r.matchAll(/^\s*not ok \d+ - (.+)$/gm)].map((m) => m[1]).filter((t) => !/\.test\.js$/.test(t));
   return { pass: n('pass'), total: n('tests'), failed };
 }
 
-export async function trial(model, { claude = 'claude', timeoutMs = 25 * 60_000, keep } = {}) {
+const code = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : '').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+const adtrack = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'trials/adtrack.json'), 'utf8'));
+
+/** What each task hands over, what it hides, and the signals read from the code it gets back. */
+export const TASKS = {
+  ledger: {
+    files: FILES, hidden: HIDDEN, task: TASK, timeoutMs: 25 * 60_000,
+    // Secondary: the hidden suite already checks exactness (0.29 -> 29). Integer arithmetic on the
+    // parsed parts is fine; parsing the decimal as a float is the defect. Read without comments:
+    // a model that writes "no parseFloat here" is not using it.
+    signals: (dir) => ({ float_free: !/parseFloat|Math\.(round|floor|ceil)\([^)]*\* ?100|toFixed/.test(code(dir, 'src/money.js')) }),
+  },
+  adtrack: {
+    files: adtrack.files, hidden: adtrack.hidden, task: adtrack.task, timeoutMs: adtrack.timeout_minutes * 60_000,
+    signals: (dir) => {
+      const src = existsSync(join(dir, 'src')) ? readdirSync(join(dir, 'src')).map((f) => code(dir, join('src', f))).join('\n') : '';
+      let pkg = {};
+      try { pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')); } catch { /* none left */ }
+      return {
+        atomic_write: /\brename(Sync)?\(/.test(src),
+        float_free: !/parseFloat|toFixed/.test(src),
+        no_dependencies: !Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).length,
+      };
+    },
+  },
+};
+
+export async function trial(model, { task: name = 'ledger', claude = 'claude', timeoutMs, keep } = {}) {
+  const task = TASKS[name];
+  if (!task) throw new Error(`no trial task "${name}" — one of ${Object.keys(TASKS).join(', ')}`);
   const dir = mkdtempSync(join(tmpdir(), 'agent-trial-'));
-  for (const [f, body] of Object.entries(FILES)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), body); }
+  for (const [f, body] of Object.entries(task.files)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), body); }
   const visibleSha = sha(join(dir, 'test/visible.test.js'));
   const t0 = Date.now();
   let res = {};
   let error = null;
   try {
-    const p = exec(claude, ['-p', TASK, '--model', model, '--allowedTools', 'Bash,Read,Edit,Write,Grep,Glob',
-      '--output-format', 'json'], { cwd: dir, timeout: timeoutMs, maxBuffer: 64 << 20 });
+    const p = exec(claude, ['-p', task.task, '--model', model, '--allowedTools', 'Bash,Read,Edit,Write,Grep,Glob',
+      '--output-format', 'json'], { cwd: dir, timeout: timeoutMs ?? task.timeoutMs, maxBuffer: 64 << 20 });
     p.child.stdin?.end();
     const { stdout } = await p;
     try { res = JSON.parse(stdout); } catch { /* judged by the work alone */ }
@@ -192,17 +229,15 @@ export async function trial(model, { claude = 'claude', timeoutMs = 25 * 60_000,
   const visible = await runTests(dir, [join(dir, 'test/visible.test.js')]);
   const theirs = await runTests(dir, own.map((f) => join(dir, 'test', f)));
   mkdirSync(join(dir, '.hidden'));
-  writeFileSync(join(dir, '.hidden/hidden.test.js'), HIDDEN);
+  writeFileSync(join(dir, '.hidden/hidden.test.js'), task.hidden);
   const hidden = await runTests(dir, [join(dir, '.hidden/hidden.test.js')]);
-  const money = existsSync(join(dir, 'src/money.js')) ? readFileSync(join(dir, 'src/money.js'), 'utf8') : '';
-  if (keep) cpSync(dir, join(keep, model.replace(/[^\w.-]/g, '_')), { recursive: true, filter: (p) => !p.includes('node_modules') });
+  if (keep) cpSync(dir, join(keep, `${name}-${model.replace(/[^\w.-]/g, '_')}`), { recursive: true, filter: (p) => !p.includes('node_modules') });
+  const signals = task.signals(dir);
   return {
-    model, secs, turns: res.num_turns ?? null, error,
+    model, task: name, secs, turns: res.num_turns ?? null, error,
     hidden, visible, visible_untouched: visibleUntouched,
     own_tests: { files: own, ...theirs },
-    // A secondary signal: the hidden suite already checks exactness (0.29 -> 29). Integer
-    // arithmetic on the parsed parts is fine; parsing the decimal as a float is the defect.
-    float_free: !/parseFloat|Math\.(round|floor|ceil)\([^)]*\* ?100|toFixed/.test(money),
+    signals, float_free: signals.float_free,
     reply: String(res.result ?? '').slice(0, 1500),
   };
 }
@@ -213,12 +248,13 @@ if (isMain) {
   const keep = process.argv[3] || 'trial-work';
   mkdirSync(keep, { recursive: true });
   const results = [];
-  for (const m of models) results.push(await trial(m, { keep }));
+  const task = process.env.TRIAL_TASK || 'ledger';
+  for (const m of models) results.push(await trial(m, { task, keep }));
   writeFileSync(process.argv[2] || 'trial.json', `${JSON.stringify(results, null, 2)}\n`);
   for (const r of results) {
     process.stdout.write(`${r.model}: hidden ${r.hidden.pass}/${r.hidden.total}, visible ${r.visible.pass}/${r.visible.total}` +
       `, own tests ${r.own_tests.files.length} file(s) ${r.own_tests.pass}/${r.own_tests.total}, ${r.secs}s, ${r.turns ?? '?'} turns` +
-      `${r.visible_untouched ? '' : ', CHANGED THE VISIBLE TESTS'}${r.float_free ? '' : ', still floats'}${r.error ? ` — ${r.error}` : ''}\n`);
+      `${r.visible_untouched ? '' : ', CHANGED THE VISIBLE TESTS'} ${JSON.stringify(r.signals)}${r.error ? ` — ${r.error}` : ''}\n`);
     for (const f of r.hidden.failed) process.stdout.write(`  hidden fail: ${f}\n`);
   }
 }

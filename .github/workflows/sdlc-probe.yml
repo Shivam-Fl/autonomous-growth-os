@@ -21,8 +21,9 @@ on:
       # Another gateway to probe on (https), in place of runtime.provider.base_url — to prove a
       # model before switching to it, e.g. OpenCode's free models on Zen while the config says Go.
       gateway: { required: false, type: string, default: '' }
-      # A real piece of work per model (agent-trial.mjs), graded on tests it never sees. The
-      # bridged models go through the translator, the others straight to the gateway.
+      # A real piece of work per model (agent-trial.mjs), graded on tests it never sees: `true` or
+      # `ledger` for the short task, `adtrack` for the service. The bridged models go through the
+      # translator, the others straight to the gateway.
       trial: { required: false, type: string, default: '' }
 
 permissions:
@@ -88,8 +89,9 @@ jobs:
           node .sdlc/bin/agent-check.mjs agent.json
           tail -40 /tmp/litellm.log || true
       - name: A real piece of work per model, graded on tests it never sees
-        if: inputs.trial == 'true'
+        if: inputs.trial != ''
         env:
+          TRIAL_TASK: ${{ inputs.trial == 'true' && 'ledger' || inputs.trial }}
           ANTHROPIC_BASE_URL: ${{ inputs.bridge != '' && 'http://127.0.0.1:4000' || steps.prov.outputs.base_url }}
           ANTHROPIC_CUSTOM_HEADERS: ${{ inputs.bridge == '' && steps.prov.outputs.headers || '' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
