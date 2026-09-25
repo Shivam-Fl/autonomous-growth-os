@@ -27,8 +27,14 @@ import {
   validateDecisionRecord,
 } from '../domain/decisions.js';
 import { FakeMetaAdsProvider, FAILURE_MODES } from '../integrations/meta_ads/fake.js';
+import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { validateOpportunity, scoreOpportunity, expectedContribution } from '../domain/opportunities.js';
 import { validateExperiment, evaluateExperiment } from '../domain/experiments.js';
+import { createKernel, DEFAULT_SIGNING_SECRET, decisionNonce, ACTION_CLASSES } from '../policy/kernel.js';
+import { postureFor } from '../policy/trust.js';
+import { visibleReason, reasonRejection, isPendingApproval } from '../domain/approvals.js';
+import { createExecutor } from '../executor/executor.js';
+import * as guardian from '../strategy/guardian.js';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -36,11 +42,50 @@ const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // simulation; anything else is ignored, exactly like an unknown ?state=.
 const META_ERROR_PARAMS = new Set([...FAILURE_MODES].filter((mode) => mode !== 'ok'));
 
-function packageVersion() {
+/**
+ * The ONE place a request's provider is built, and the single source of its
+ * failure injection. Every read route AND both write routes call it: the
+ * ?meta_error browser clause is a write-path clause, and a convention applied
+ * to one write route and forgotten on the next is how a ?meta_error=quota
+ * approval silently succeeds instead of producing the failure panel the
+ * acceptance criterion names. An unknown value means 'ok', exactly as it does
+ * for the page loop.
+ */
+function providerForRequest(request) {
+  const failureMode = META_ERROR_PARAMS.has(request.query.meta_error) ? request.query.meta_error : 'ok';
+  return new FakeMetaAdsProvider({ failureMode });
+}
+
+/** The package version, read once here so /health and the composition root
+ * (src/index.js stamps it onto every capability) can never report different
+ * numbers for the same build. */
+export function packageVersion() {
   return JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
 }
 
 const FUNNEL_TYPES = ['spend.observed', 'lead_qualified'];
+
+/**
+ * The tenant's maturity, computed ONCE and from one helper, because the gate
+ * and the metric surface must not be able to drift apart.
+ *
+ * A tenant with NO events returns maturity: null rather than the 0 the display
+ * surface shows. That difference is deliberate and is asserted in
+ * test/api/actions.test.js: a display reading "0" means "no data, the number
+ * is a placeholder", while the gate reading 0 would mean "we measured nothing
+ * and it is worth 0.06" — and policyBand(0) admits an emergency-only class. A
+ * missing measurement is not a small measurement (TR-24).
+ */
+function tenantMaturity(repositories, tenantId, nowIso) {
+  const rows = repositories.rawEvents.listByTypes(tenantId, FUNNEL_TYPES);
+  const latest = dataThrough(rows);
+  if (latest === null) {
+    return { maturity: null, band: null, data_through: null };
+  }
+  const ageHours = (Date.parse(nowIso) - Date.parse(latest)) / 3_600_000;
+  const maturity = maturityFor(ageHours);
+  return { maturity, band: policyBand(maturity).label, data_through: latest };
+}
 
 /**
  * Single-operator v1 tenant resolution: an explicit tenant_id (the POST route
@@ -78,9 +123,27 @@ function evaluationMinSample(experiment, requested) {
   return ask === null ? stored : Math.max(ask, stored);
 }
 
-export function buildApp({ repositories }) {
+export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, policyVersion = '1', capabilityTtlMs = 900_000 }) {
   const app = express();
   app.disable('x-powered-by');
+
+  // The policy kernel, bound to the two READ-ONLY ports. The nonce port is
+  // backed by action_records rather than by capabilities: a capability row
+  // exists from the moment of issuance, so binding there would report every
+  // nonce as already spent and refuse every execution.
+  const kernel = createKernel({
+    secret: policySecret,
+    policyVersion,
+    ttlMs: capabilityTtlMs,
+    killSwitches: { isActive: (tenantId, scope, scopeId) => repositories.killSwitches.isActive(tenantId, scope, scopeId) },
+    nonces: { seen: (tenantId, nonce) => repositories.actionRecords.getByNonce(tenantId, nonce) !== null },
+  });
+
+  /** The posture for a class, from the same row the page renders. */
+  function postureForClass(tenantId, actionClass) {
+    const roster = ACTION_CLASSES.find((entry) => entry.action_class === actionClass) ?? null;
+    return postureFor(actionClass, repositories.trustLedger.get(tenantId, actionClass), roster, null);
+  }
 
   app.get('/health', (request, response) => {
     response.status(200).json({ status: 'ok', version: packageVersion() });
@@ -96,18 +159,17 @@ export function buildApp({ repositories }) {
   for (const route of ['/', '/journal', '/opportunities', '/experiments', '/approvals']) {
     app.get(route, async (request, response) => {
       // A per-request provider: the fake holds no state across requests, so
-      // one browser tab cannot see another's simulated failure.
-      const metaError = META_ERROR_PARAMS.has(request.query.meta_error)
-        ? request.query.meta_error
-        : null;
-      const metaProvider = new FakeMetaAdsProvider({ failureMode: metaError ?? 'ok' });
+      // one browser tab cannot see another's simulated failure. Built by the
+      // same helper the write routes use, so the ?meta_error convention has
+      // exactly one definition.
+      const metaProvider = providerForRequest(request);
       response
         .type('html')
         .send(await renderPage(route, {
           repositories,
           override: request.query.state ?? null,
           metaProvider,
-          metaError,
+          metaError: META_ERROR_PARAMS.has(request.query.meta_error) ? request.query.meta_error : null,
           // The journal's class/status filters come from the two GET selects;
           // unknown values are ignored downstream.
           filters: route === '/journal'
@@ -169,10 +231,14 @@ export function buildApp({ repositories }) {
     // foreign-currency spend rows legacy batches may still hold.
     const tenantCurrency = repositories.tenants.get(tenantId)?.currency ?? 'INR';
     const funnel = computeFunnel(rows, tenantCurrency);
-    const latest = dataThrough(rows);
     const now = utcNow();
-    const ageHours = latest ? (Date.parse(now) - Date.parse(latest)) / 3_600_000 : 0;
-    const maturity = maturityFor(ageHours);
+    const measured = tenantMaturity(repositories, tenantId, now);
+    // The wire shape is unchanged: the display surface shows 0 for a tenant
+    // with no data because the card needs a number, while the GATE refuses the
+    // same tenant outright. The two deliberately differ, and
+    // test/api/actions.test.js pins both halves in one case so they cannot
+    // quietly converge or quietly diverge.
+    const maturity = measured.maturity ?? 0;
     const band = policyBand(maturity);
     response.json({
       tenant_id: tenantId,
@@ -183,9 +249,9 @@ export function buildApp({ repositories }) {
       band: band.label,
       gated_strategic: band.gated,
       maturity_coverage: coverageOf(rows),
-      data_through: latest,
-      stale: isStale(now, latest),
-      stale_age: staleAgeHours(now, latest) ?? null,
+      data_through: measured.data_through,
+      stale: isStale(now, measured.data_through),
+      stale_age: staleAgeHours(now, measured.data_through) ?? null,
     });
   });
 
@@ -487,6 +553,348 @@ export function buildApp({ repositories }) {
       // raw-events POST precedent).
       appended,
       duplicate: !appended,
+    });
+  });
+
+  // The write path (issue #20, TR-3/4/5/19/24). Nothing here touches a
+  // provider except through the executor, and nothing mints a capability
+  // except through the kernel — the two routes that can produce one are the
+  // autonomous issuance route and the human approval route below.
+
+  /** The intent an approval row authorises, in the shape the gate reads. */
+  function intentFor(tenantId, { action_class: actionClass, action, resource, constraints }) {
+    return { tenant_id: tenantId, action_class: actionClass, action, resource, constraints: constraints ?? {} };
+  }
+
+  /** A provider refusal rather than a gate refusal, decided by the contract's
+   * own error codes so a new adapter code is a refusal too. */
+  function isProviderError(error) {
+    return Boolean(error) && Object.values(META_ERROR_CODES).includes(error.code);
+  }
+
+  app.post('/v1/capabilities', (request, response) => {
+    const body = request.body ?? {};
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const nowIso = utcNow();
+    const intent = intentFor(tenantId, {
+      action_class: body.action_class,
+      action: body.action,
+      resource: body.resource,
+      constraints: body.constraints,
+    });
+    // NOTHING ELSE mints a capability: this route, with the approval row
+    // deliberately null, and the approve route below with it supplied.
+    const maturity = tenantMaturity(repositories, tenantId, nowIso).maturity;
+    const validated = kernel.validateIntent(intent, {
+      nowIso,
+      posture: postureForClass(tenantId, body.action_class),
+      approval: null,
+      maturity,
+    });
+    if (!validated.ok) {
+      return errorResponse(response, 403, validated.error);
+    }
+    const capability = kernel.issueCapability({ ...intent, maturity }, { nowIso });
+    repositories.capabilities.create({
+      tenant_id: tenantId,
+      capability_id: capability.capability_id,
+      envelope: capability,
+      expires_at: capability.expiry,
+    });
+    repositories.auditEvents.append({
+      tenant_id: tenantId,
+      actor: 'operator',
+      action: 'capability.issued',
+      subject: capability.capability_id,
+      capability_id: capability.capability_id,
+      details: { action_class: intent.action_class, action: intent.action, resource: intent.resource, band: capability.band },
+      occurred_at: nowIso,
+    });
+    response.status(201).json({
+      capability_id: capability.capability_id,
+      // The whole signed capability, so a caller can POST this body straight
+      // back to /v1/actions/execute without reconstructing it.
+      envelope: capability,
+      expiry: capability.expiry,
+    });
+  });
+
+  app.post('/v1/approvals/:approvalId/approve', async (request, response) => {
+    const body = request.body ?? {};
+    const approvalId = request.params.approvalId;
+    // An explicit tenant is what makes a cross-tenant id 404 below rather than
+    // execute somebody else's approval, and what the browser sends on the
+    // control it rendered the card from.
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const nowIso = utcNow();
+
+    // (0) REDELIVERY, first and deliberately outside the gate. The gate
+    // refuses an approval row whose status is 'executed' as terminal, so a
+    // duplicate resolved after it would 403 forever and the browser's
+    // re-decide control could never be answered. It is not a second owner of
+    // the gate: it mints nothing, issues no capability, calls no provider and
+    // mutates no row — it answers about a receipt that already exists.
+    const prior = repositories.actionRecords.getByNonce(tenantId, decisionNonce(approvalId));
+    if (prior) {
+      return response.status(200).json({
+        approval_id: approvalId,
+        status: 'executed',
+        executed: false,
+        duplicate: true,
+        receipt_id: prior.receipt_id,
+        reconciliation: prior.reconciliation,
+        drift: prior.drift,
+      });
+    }
+
+    // (1) REASON.
+    const reason = visibleReason(body.reason);
+    if (reason === null) {
+      return errorResponse(response, 400, reasonRejection(body.reason));
+    }
+
+    // (2) THE ROW.
+    const row = repositories.approvals.get(tenantId, approvalId);
+    if (!row) {
+      return errorResponse(response, 404, { code: 'APPROVAL_NOT_FOUND', message: `no approval ${approvalId}`, details: { approval_id: approvalId } });
+    }
+    if (!isPendingApproval(row, { nowIso })) {
+      return errorResponse(response, 409, {
+        code: 'APPROVAL_NOT_PENDING',
+        message: `approval ${approvalId} is not awaiting a decision`,
+        details: { approval_id: approvalId, status: row.status, lapsed: Date.parse(row.expires_at) <= Date.parse(nowIso) },
+      });
+    }
+
+    // (3) THE GATE, with the row it is executing supplied as the approval.
+    const intent = intentFor(tenantId, row);
+    const maturity = tenantMaturity(repositories, tenantId, nowIso).maturity;
+    const validated = kernel.validateIntent(intent, {
+      nowIso,
+      posture: postureForClass(tenantId, row.action_class),
+      approval: row,
+      maturity,
+    });
+    if (!validated.ok) {
+      return errorResponse(response, 403, validated.error);
+    }
+
+    // (4) ISSUE AND EXECUTE. The nonce is the one definition of the approval
+    // decision's nonce, and the provider comes from the SAME helper the execute
+    // route uses, named here so the omission that made the ?meta_error failure
+    // clause unobservable cannot recur.
+    const actor = typeof body.actor === 'string' && body.actor.trim().length > 0 ? body.actor.trim() : 'operator';
+    const capability = kernel.issueCapability({ ...intent, maturity }, {
+      nowIso,
+      // The approval's own stamp caps the authority it granted.
+      expiresAtCap: row.expires_at,
+      nonce: decisionNonce(approvalId),
+    });
+    repositories.capabilities.create({
+      tenant_id: tenantId,
+      capability_id: capability.capability_id,
+      envelope: capability,
+      expires_at: capability.expiry,
+    });
+    const executor = createExecutor({ repositories, provider: providerForRequest(request), kernel, auditClock: utcNow });
+    const result = await executor.execute(capability, { actor, tenantId, approvalId });
+
+    // (5) PERSIST. A provider refusal writes NO status change: the item stays
+    // pending, which is what the criterion asserts and what a genuine retry
+    // needs.
+    if (result.executed) {
+      repositories.approvals.decide(tenantId, approvalId, { status: 'executed', reason, actor, decided_at: nowIso });
+      repositories.auditEvents.append({
+        tenant_id: tenantId,
+        actor,
+        action: 'approval.approved',
+        subject: approvalId,
+        capability_id: capability.capability_id,
+        details: { reason, receipt_id: result.receipt_id, reconciliation: result.reconciliation, drift: result.drift },
+        occurred_at: nowIso,
+      });
+      return response.status(200).json({
+        approval_id: approvalId,
+        status: 'executed',
+        executed: true,
+        receipt_id: result.receipt_id,
+        reconciliation: result.reconciliation,
+        drift: result.drift,
+        band: capability.band,
+        maturity: capability.maturity,
+      });
+    }
+    if (result.error?.code === 'KILL_SWITCH_ACTIVE') {
+      return errorResponse(response, 409, result.error);
+    }
+    if (isProviderError(result.error)) {
+      return response.status(200).json({
+        approval_id: approvalId,
+        status: 'pending',
+        executed: false,
+        duplicate: false,
+        outcome: 'provider_refused',
+        error: result.error,
+        reconciliation: 'unknown',
+      });
+    }
+    const status = result.error?.code === 'TENANT_MISMATCH' ? 403 : 409;
+    return errorResponse(response, status, result.error);
+  });
+
+  app.post('/v1/approvals/:approvalId/reject', (request, response) => {
+    const body = request.body ?? {};
+    const approvalId = request.params.approvalId;
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const nowIso = utcNow();
+
+    const reason = visibleReason(body.reason);
+    if (reason === null) {
+      return errorResponse(response, 400, reasonRejection(body.reason));
+    }
+    const row = repositories.approvals.get(tenantId, approvalId);
+    if (!row) {
+      return errorResponse(response, 404, { code: 'APPROVAL_NOT_FOUND', message: `no approval ${approvalId}`, details: { approval_id: approvalId } });
+    }
+    if (!isPendingApproval(row, { nowIso })) {
+      return errorResponse(response, 409, {
+        code: 'APPROVAL_NOT_PENDING',
+        message: `approval ${approvalId} is not awaiting a decision`,
+        details: { approval_id: approvalId, status: row.status, lapsed: Date.parse(row.expires_at) <= Date.parse(nowIso) },
+      });
+    }
+    // A rejection mints no capability and never reaches the executor, so it
+    // cannot fail for any reason a provider could invent.
+    const actor = typeof body.actor === 'string' && body.actor.trim().length > 0 ? body.actor.trim() : 'operator';
+    repositories.approvals.decide(tenantId, approvalId, { status: 'rejected', reason, actor, decided_at: nowIso });
+    repositories.auditEvents.append({
+      tenant_id: tenantId,
+      actor,
+      action: 'approval.rejected',
+      subject: approvalId,
+      details: { reason },
+      occurred_at: nowIso,
+    });
+    response.status(200).json({ approval_id: approvalId, status: 'rejected', decided: true });
+  });
+
+  app.post('/v1/actions/execute', async (request, response) => {
+    const body = request.body ?? {};
+    // This route's body is the signed envelope, and the tenant it names is a
+    // SIGNED field - so a caller that sends the envelope and nothing else has
+    // already said which tenant it is for. Falling through to the single-tenant
+    // default instead would resolve 'tenant_demo' on any database that has
+    // grown a second tenant, and refuse the caller's own capability. An
+    // explicit tenant_id still wins, which is what makes a caller that claims
+    // somebody else's tenant fail closed on the executor's TENANT_MISMATCH.
+    const tenantId = resolveTenantId(repositories, body.tenant_id ?? body.tenant);
+    // ONE provider for the write AND the re-read, so one request reconciles
+    // against the state it just wrote.
+    const executor = createExecutor({ repositories, provider: providerForRequest(request), kernel, auditClock: utcNow });
+    const result = await executor.execute(body, {
+      actor: typeof body?.actor === 'string' ? body.actor : 'executor',
+      tenantId,
+    });
+
+    if (result.executed) {
+      return response.status(200).json({
+        executed: true,
+        receipt_id: result.receipt_id,
+        requested: result.requested,
+        reported: result.reported,
+        reconciliation: result.reconciliation,
+        drift: result.drift,
+      });
+    }
+    if (result.duplicate) {
+      return response.status(200).json({
+        executed: false,
+        duplicate: true,
+        receipt_id: result.receipt_id,
+        reconciliation: result.reconciliation,
+        drift: result.drift,
+      });
+    }
+    const code = result.error?.code;
+    if (code === 'MALFORMED_CAPABILITY') {
+      return errorResponse(response, 400, result.error);
+    }
+    if (isProviderError(result.error)) {
+      return errorResponse(response, 502, result.error);
+    }
+    if (code === 'EXPIRED_CAPABILITY' || code === 'BAD_SIGNATURE' || code === 'OVER_SCOPE' || code === 'REPLAYED_NONCE' || code === 'TENANT_MISMATCH') {
+      return errorResponse(response, 403, result.error);
+    }
+    return errorResponse(response, 409, result.error);
+  });
+
+  app.post('/v1/guardian/trigger', (request, response) => {
+    const body = request.body ?? {};
+    const kind = request.query.kind ?? body.kind;
+    const fixture = guardian.GUARDIAN_FIXTURES[kind];
+    if (!fixture) {
+      return errorResponse(response, 400, {
+        code: 'GUARDIAN_KIND_UNKNOWN',
+        message: `no guardian detector for ${kind}`,
+        details: { kind: kind ?? null, known: [...guardian.GUARDIAN_KINDS] },
+      });
+    }
+    const nowIso = utcNow();
+    const evaluation = guardian.evaluate(fixture, { nowIso });
+    if (!evaluation.tripped) {
+      return response.status(200).json({ frozen: false, kind, details: evaluation.details });
+    }
+    // The scope falls back to guardian.freeze's OWN defaults, so the row the
+    // demo writes is the row the banner and GET /v1/guardian read back.
+    // The kill-switch write is an ON CONFLICT upsert, so a second trigger
+    // after a re-enable re-freezes the SAME row with no database reset.
+    const frozen = guardian.freeze({
+      repositories,
+      tenantId: resolveTenantId(repositories, body.tenant_id),
+      kind,
+      details: { ...evaluation.details, reason: `${kind} tripped` },
+      actor: typeof body.actor === 'string' && body.actor.trim().length > 0 ? body.actor.trim() : 'guardian',
+      ...(typeof body.scope === 'string' && body.scope.length > 0 ? { scope: body.scope } : {}),
+      ...(typeof body.scope_id === 'string' && body.scope_id.length > 0 ? { scopeId: body.scope_id } : {}),
+      at: nowIso,
+    });
+    response.status(201).json({
+      ...frozen,
+      incidents: repositories.guardianIncidents.listForTenant(resolveTenantId(repositories, body.tenant_id), { limit: 20 }),
+    });
+  });
+
+  app.post('/v1/guardian/re-enable', (request, response) => {
+    const body = request.body ?? {};
+    // The actor check runs BEFORE any write, so a request without one changes
+    // nothing at all.
+    if (typeof body.actor !== 'string' || body.actor.trim().length === 0) {
+      return errorResponse(response, 400, {
+        code: 'RE_ENABLE_ACTOR_REQUIRED',
+        message: 'a re-enable needs an explicit human actor',
+        details: { field: 'actor' },
+      });
+    }
+    const result = guardian.reEnable({
+      repositories,
+      tenantId: resolveTenantId(repositories, body.tenant_id),
+      actor: body.actor.trim(),
+      ...(typeof body.scope === 'string' && body.scope.length > 0 ? { scope: body.scope } : {}),
+      ...(typeof body.scope_id === 'string' && body.scope_id.length > 0 ? { scopeId: body.scope_id } : {}),
+    });
+    // The response echoes the RESOLVED scope, not the requested one, so a
+    // caller that guessed wrong can see what it actually cleared.
+    response.status(200).json({ re_enabled: result.re_enabled, scope: result.scope, scope_id: result.scope_id });
+  });
+
+  app.get('/v1/guardian', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    response.json({
+      tenant_id: tenantId,
+      // activeFor returns every scope for the tenant, so this answers with the
+      // provider-scoped row the demo's trigger writes.
+      switches: repositories.killSwitches.activeFor(tenantId),
+      incidents: repositories.guardianIncidents.listForTenant(tenantId, { limit: 20 }),
     });
   });
 
