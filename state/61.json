@@ -212,5 +212,143 @@
   },
   "validated_from": "plan",
   "validated_at": "2026-09-25T22:25:52.630Z",
-  "validated_ac_changes": []
+  "validated_ac_changes": [],
+  "approved_work_order": {
+    "issue": 61,
+    "version": 1,
+    "kind": "bug",
+    "understanding": "All three review findings from PR #60 still reproduce on main, and I confirmed each by running the suite rather than reading it alone. (1) ORDER IS UNASSERTED: `skipLinkFocusesMain` at test/web/pages.test.js:146-159 finds the skip link by scanning every `<a>` in the document for `href=\"#main\"` and finds `<main>` by a bare `/<main\\b([^>]*)>/`, with no comparison between the two offsets. I applied the reviewer's relocation to src/web/pages.js (moved the skip link from pages.js:68 to after `</main>`) and ran `node --test test/web/pages.test.js`: 51 pass / 0 fail, unchanged from baseline. The bypass the ticket exists for is destroyed and the suite is green. (2) NO FORCED-COLORS CARVE-OUT: src/web/styles.css:116-118 sets `outline: none` on `#main:focus` unconditionally. `grep -rn 'forced-colors' src/ test/` returns nothing, so no mode restores an indicator. (3) UNDECLARED MATCHER RELAXATION: test/web/pages.test.js:116 is `/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/` — the `id=\"main\"` requirement present before #52 is gone, so the heading-hierarchy assertion now holds for *some* `<main>` rather than the skip link's target. I verified the reviewer's proposed replacement `/<main\\b[^>]*\\bid=\"main\"[^>]*>([\\s\\S]*?)<\\/main>/` against all five shapes: it matches `<main id=\"main\">`, `<main id=\"main\" tabindex=\"-1\">` and `<main tabindex=\"-1\" id=\"main\">` (and tolerates a fourth attribute), and rejects both `<main>` and `<main id=\"other\">`, where the current regex accepts both. These are one ticket, not three: (1) and (3) are the same defect class in the same helper family nine lines apart, and (2) is the stylesheet half of the same skip-link bypass. I take the reviewer's primary fix in all three cases; on (2) I am restoring the indicator rather than documenting the omission, because in forced-colors Chromium honours `outline: none` and substitutes nothing while every other focusable element keeps its ring, leaving `<main>` the only focusable thing on the page with no indicator.",
+    "root_cause": "The #52 guard checks each element's own attributes but never their relationship. `skipLinkFocusesMain` proves the link exists, the class is right, and main is focusable — but 'exists somewhere in the document' satisfies all three while the link sits below `</main>`. The same helper family then relaxed `mainOf` past the point the work order described, dropping the `id=\"main\"` requirement along with the tag text, and the stylesheet rule that suppresses the focus ring was written without considering the mode that strips author colours.",
+    "approach": "Three edits, two files. The test helper gains an offset comparison; `mainOf` regains its `id` requirement; the stylesheet gains one `@media (forced-colors: active)` block appended after the `#main:focus` rule, and its comment is rewritten so the omission-or-restoration reads as a decision.\n\n**1. Ordering — test/web/pages.test.js:146-159.** Capture the `<main>` MATCH (not just its attribute string, so `.index` is available) and the skip link's match index, then require the link to come first. `matchAll` results carry `.index`, so the two offsets are directly comparable. Keep the existing rationale intact: this is not a pin on the link being the *first* element, only on it preceding `<main>`, so the brand and the nav may still sort before it (that is what the reviewer's fix says, and the third pin case below proves it). Order the `&&` chain so `main.index` is only read after `mainAttrs` is known non-empty — I confirmed the chain short-circuits to `false` rather than throwing on a document with no `<main>`, no `<a>`, or an empty string.\n\n**2. mainOf — test/web/pages.test.js:116.** Use the reviewer's regex verbatim. It is attribute-order independent (so the `tabindex` #52 added still matches) and keeps the heading-hierarchy assertion tied to the skip link's actual target.\n\n**3. Forced colors — src/web/styles.css:116-118.** Append immediately after the existing rule:\n\n```css\n@media (forced-colors: active) {\n  #main:focus {\n    outline: 2px solid CanvasText;\n  }\n}\n```\n\n`CanvasText` is a CSS system colour, so it resolves to the user's chosen foreground rather than a hardcoded value — the same reason the rest of the file uses tokens. The block must come AFTER the bare rule to win on source order at equal specificity (`#main:focus` is 1,1,0 in both). I verified against the patched stylesheet that the existing test at test/web/pages.test.js:204-209 still matches the first `#main:focus` rule and still sees `outline: none` — the carve-out does not disturb it, because that regex takes the first match and the plain rule still comes first.\n\nAppend to the rule's comment (after the existing 'nothing inside main is affected' sentence) a short paragraph recording *why*: the suppression is about the authored ring, and in forced-colors Chromium honours `outline: none` and substitutes no system colour, so the carve-out restores one there. The reviewer explicitly asked that the omission read as a decision rather than an oversight; this comment makes it one either way.\n\n**What this deliberately does not do.** No change to `pages.js` — the shipped markup already places the skip link before `<main>` (pages.js:68 vs 77); only the lock was missing. No change to the `outline: none` itself: the ring-around-1100px-of-main problem the rule solves is real, and the carve-out is additive.",
+    "files": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "Two edits. (a) In `skipLinkFocusesMain` (line 146-159): change the main capture from `const mainAttrs = /<main\\b([^>]*)>/.exec(html)?.[1] ?? '';` to capture the whole match — `const main = /<main\\b([^>]*)>/.exec(html);` then `const mainAttrs = main?.[1] ?? '';` — and add a final clause `&& skip.index < main.index` to the returned Boolean. The existing find over `matchAll` already yields an object carrying `.index`; only the destructuring `([, attrs]) => attrs` needs to become `([, attrs]) => attrs` with the match kept in the accumulator. Keep the clause LAST in the chain so `main.index` is never read on a null match. Do not change the three existing negative pins or the 'attribute order is not pinned' positives. (b) In `mainOf` (line 116): replace the regex with `/<main\\b[^>]*\\bid=\"main\"[^>]*>([\\s\\S]*?)<\\/main>/`, keeping the `?? ''` fallback. Update the comment above the matcher, which currently cites only issue #46, to also name #61 and say the id is load-bearing. (c) Extend the pin block at the end of the skip-link test (lines 185-197) with the new positive and negative cases named in tests[].cases.",
+        "why": "Findings 1 and 3. Both are gaps in the lock #52 added, in the same helper family; the offsets were never compared and the id requirement was dropped past what the work order described."
+      },
+      {
+        "path": "src/web/styles.css",
+        "action": "edit",
+        "change": "After the `#main:focus { outline: none; }` rule (currently lines 116-118), append `@media (forced-colors: active) { #main:focus { outline: 2px solid CanvasText; } }` — indented two spaces per the file, with the media block's inner rule at two spaces and the closing brace at column 0, matching the existing `@media (prefers-reduced-motion: reduce)` block at line 299. Also append to the comment block ending 'outline is not inherited, so nothing inside main is affected.' (line 115) a paragraph stating that the reasoning covers the authored ring only, that Chromium honours `outline: none` in forced-colors and substitutes no system colour, and that the carve-out below restores an indicator using a system colour so it survives the mode. Do not alter the existing comment text, the `outline: none` declaration, or the `max-width` `#main` rule below it.",
+        "why": "Finding 2. `grep -rn 'forced-colors' src/ test/` returns nothing today, so the suppression is unconditional in exactly the mode where the user is most likely to be reading the indicator."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "the skip-link pin block gains a POSITIVE case proving the fix is not a pin on the link being the document's first element: `assert.ok(skipLinkFocusesMain('<header>brand nav</header><a class=\"skip-link\" href=\"#main\">Skip to content</a><main id=\"main\" tabindex=\"-1\"></main>'), 'brand and nav may sort before the skip link')` — this is the reviewer's stated rationale and it must keep passing.",
+          "the skip-link pin block gains a NEGATIVE case for the defect itself: `assert.ok(!skipLinkFocusesMain('<main id=\"main\" tabindex=\"-1\"></main><a class=\"skip-link\" href=\"#main\">Skip to content</a>'), 'a skip link after </main> is not a bypass, however well-formed it is')`. This is the assertion whose absence made PR #60's suite stay green under the reviewer's relocation, and it is the one that must be seen to go red.",
+          "the skip-link pin block keeps its three existing negatives (missing tabindex, wrong href target, link without the skip-link class) and its two existing positives (reordered attributes, a tolerated third attribute) unchanged — the new ordering clause must not break any of them.",
+          "a short guard that the helper returns false rather than throwing on a document with no <main> (`assert.equal(skipLinkFocusesMain('<a class=\"skip-link\" href=\"#main\">S</a>'), false, 'no main landmark is not a bypass')`), on one with no <a> at all, and on the empty string — reading `main.index` on a null match is the one way the new clause could turn a false into a TypeError.",
+          "the heading-hierarchy test ('every route renders exactly one h1 that opens the hierarchy, in every state') continues to pass over all 25 shells with the id-restored `mainOf`, unchanged in what it asserts.",
+          "a new pin for the restored `mainOf` regex, mirroring the existing H1_HOOK pin at line 215: it matches `<main id=\"main\"><h1>X</h1></main>`, `<main id=\"main\" tabindex=\"-1\">…`, and `<main tabindex=\"-1\" id=\"main\">…`; and it does NOT match `<main><h1>X</h1></main>` or `<main id=\"other\"><h1>X</h1></main>`. Those two rejections are what #52 lost and must be asserted, or the relaxation returns silently.",
+          "the new forced-colors test reads src/web/styles.css and asserts the media block exists and restores an outline: match `/@media\\s*\\(forced-colors:\\s*active\\)\\s*\\{[^@]*?#main:focus\\s*\\{([^}]*)\\}/` against the file, assert the match exists, then assert its body matches `/outline:\\s*2px\\s+solid\\s+CanvasText\\s*;/`. Deleting the carve-out block must turn this test red — I verified that mutation against the patched stylesheet.",
+          "the existing '#main focus suppression still carries the declaration the skip target depends on' test (line 204) must still pass unmodified: the first `#main:focus` rule in the file is still the bare one, so the regex still captures `outline: none`."
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "On every route and in every state, the skip link is the first focusable element a keyboard reaches from a fresh page load, and it precedes the main landmark in document order.",
+        "how_to_verify": "Load http://localhost:3000/ , then each of /journal, /opportunities, /experiments, /approvals. Press Tab once from a fresh load with no prior interaction: the first element to receive focus is the skip link (it becomes visible at top-left on focus, per `.skip-link:focus`). Confirm it is a link to #main and that the main container it targets is the one holding the page's h1. Repeat once with ?state=error on /journal to cover a non-ideal shell. The order is also asserted at the DOM level: `document.querySelector('.skip-link').compareDocumentPosition(document.getElementById('main')) & Node.DOCUMENT_POSITION_FOLLOWING` must be truthy on every route and state.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "Activating the skip link moves keyboard focus to the main landmark, and that landmark paints a focus indicator when the browser is in forced-colors mode.",
+        "how_to_verify": "Tab to the skip link, press Enter, and confirm focus lands inside the main landmark (the h1 'Command dashboard' on /) rather than back on <body> — this is the #52 behaviour and must not regress. For the forced-colors half, the stylesheet is not observable in a default browser session, so it is verified by the named test: 'the #main focus suppression is restored inside forced-colors so the landmark is not the one focusable thing with no indicator' in test/web/pages.test.js, which reads src/web/styles.css, asserts the `@media (forced-colors: active)` block exists and declares `outline: 2px solid CanvasText`, and goes red if the block is deleted. The existing test 'the #main focus suppression still carries the declaration the skip target depends on' must still pass, proving the default-mode suppression was not simply removed.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-3",
+        "check": "The heading-hierarchy assertion remains tied to the main landmark that carries id=\"main\" — the skip link's target — and not to some other <main> element.",
+        "how_to_verify": "No browser can see which regex the test uses, so this is the named test: 'the main matcher still requires id=\"main\" on the landmark it captures' in test/web/pages.test.js. It must assert the matcher matches `<main id=\"main\">`, `<main id=\"main\" tabindex=\"-1\">` and `<main tabindex=\"-1\" id=\"main\">` and rejects both `<main>` and `<main id=\"other\">`. CI runs it under `npm run sdlc:verify`; the two rejections are the specific coverage #52 dropped.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-4",
+        "check": "The full suite stays green: `npm run sdlc:verify` (`npm ci --no-audit --no-fund && node --test`) reports 0 failures across every test file, not only the one edited here.",
+        "how_to_verify": "Run `npm run sdlc:verify` and read the `# fail 0` line. test/web/pages.test.js reports 51 passing before this change; the count may rise by the pins added here but no test anywhere may fail.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "npm run sdlc:verify — confirm 0 failures repo-wide, not just in test/web/pages.test.js.",
+      "Boot the app (`npm run sdlc:ready` as the readiness probe, `PORT=3000 npm run sdlc:serve` to run it) and load each of /, /journal, /opportunities, /experiments, /approvals.",
+      "On each route: press Tab once from a fresh load and confirm the FIRST focus stop is the visible skip link, not the brand or the nav. This is the property that was mutation-invisible before this change.",
+      "On each route, confirm the skip link precedes the main landmark in document order (compareDocumentPosition), including under ?state=loading, ?state=partial and ?state=error, since the guard is locked across the route x state matrix.",
+      "Activate the skip link with the keyboard and confirm focus lands inside the main landmark on the h1, not on <body> — the #52 behaviour this change must not regress.",
+      "Confirm the focused main landmark still paints NO accent ring in the default colour mode (the ring-around-1100px problem the rule solves is real and the carve-out is additive, not a replacement).",
+      "Optional, if the browser session can be put into forced-colors emulation: the focused main landmark should then paint a visible indicator. The deterministic proof is the named test in AC-2; treat the emulated check as corroboration only.",
+      "Run the 'every route renders exactly one h1 that opens the hierarchy, in every state' test and confirm it still passes over all 25 shells with the id-restored matcher.",
+      "Confirm no page renders a second <main> landmark, which the restored matcher would now distinguish."
+    ],
+    "risks": [
+      "The ordering clause is new logic in a helper with three existing negative pins. If `&& skip.index < main.index` is placed anywhere but last in the chain, `main.index` is read on a null match and a false becomes a TypeError. The cases entry above pins that.",
+      "The ordering clause could be over-tightened into a pin on the skip link being the document's FIRST element, which would break a future change that moves the brand or nav. The positive pin case ('brand and nav may sort before the skip link') exists to stop that, and is the reviewer's stated rationale.",
+      "Appending the `@media (forced-colors: active)` block before the bare `#main:focus` rule would lose on source order at equal specificity and silently not apply. It must come after.",
+      "The forced-colors carve-out is unobservable in QA's default browser session; AC-2 leans on a stylesheet-reading test for that half. If a reviewer prefers a browser check, that needs a forced-colors emulation step QA can actually perform — noted rather than assumed.",
+      "No forbidden path is touched. Both edited files (src/web/styles.css, test/web/pages.test.js) are outside forbidden_paths, and the planner's own never-touch list (.sdlc/memory/**, docs/spec/**, docs/prd.md, docs/trd.md, docs/ui.md, .github/**, .sdlc/**) is untouched — worth noting only because .sdlc/memory/decisions/ was read for context.",
+      "The change adds no host, request or dependency. It sends no data anywhere, so env.api_allowlist is not a constraint and QA will not be blocked on it."
+    ],
+    "out_of_scope": [
+      "Moving the skip link in src/web/pages.js. The shipped markup is already correct (pages.js:68 precedes the <main> at line 77) — only the lock was missing. Changing working markup here would be scope creep.",
+      "Replacing `outline: none` outright. The ring around 1100px of main is a real defect the rule exists to solve; the carve-out is additive and mode-scoped.",
+      "Any other matcher in test/web/pages.test.js. Finding 3 is specifically about `mainOf`; the H1_HOOK matcher and `levelsOf` are already pinned or unaffected, and touching them widens the diff past the ticket.",
+      "Adding a skip link, or a bypass, to any screen other than the five in ROUTES. The shell is shared and all five are already covered by the route x state matrix.",
+      "Auditing the rest of styles.css for other unconditional `outline: none` declarations. `grep -rn 'forced-colors' src/` returning nothing is about this one rule, and a stylesheet-wide audit would ship on its own if this ticket did not exist."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Document in the file comment that a non-interactive landmark never warrants a focus indicator, even in forced-colors, instead of adding the carve-out.",
+        "rejected_because": "The reviewer offered this as the alternative but the reasoning behind the original rule does not survive the mode: Chromium honours `outline: none` under forced-colors and substitutes no system colour, while every OTHER focusable element keeps its ring because the UA maps the accent to a system colour. That leaves <main> as the single focusable thing on the page with no indicator — and the case at issue is precisely the moment a forced-colors user needs to know the bypass ran. Adopting it would also be a decision made by an implementer-by-default rather than one this repo's convention asks to be explicit about."
+      },
+      {
+        "approach": "Pin the skip link as the document's first focusable element (assert it precedes <header> as well as <main>).",
+        "rejected_because": "Over-tightens. The existing comment at test/web/pages.test.js:148-149 states the link is found by target 'so the brand and the nav are not depended on to sort before it', and the reviewer's fix explicitly preserves that rationale. Only the link-before-main relation is what the bypass needs; anything earlier is a layout decision, not an accessibility one."
+      },
+      {
+        "approach": "Fix the heading-hierarchy test by giving it its own independent copy of the main regex rather than editing `mainOf` in place.",
+        "rejected_because": "Two copies of a load-bearing matcher is how they drift apart. `mainOf` has exactly one call site (line 126), verified by grep across the repo, so editing it in place is the whole fix and leaves no second copy to keep in sync."
+      },
+      {
+        "approach": "Fix the ordering gap in the test only and defer the forced-colors carve-out, on the grounds that they are separable.",
+        "rejected_because": "They are one ticket by the reviewer's own framing ('one ticket for the lot') and share a cause: the #52 bypass was specified as markup plus a stylesheet rule, and both halves were under-specified. Splitting them ships the bypass with the ring problem still open. The issue body says to split only if the findings turn out to be unrelated; they are the same feature, nine lines apart in the same helper family for (1) and (3), and the stylesheet half of the same bypass for (2)."
+      },
+      {
+        "approach": "Drop finding 3, on the argument that the new skip-link test asserts /\\bid=\"main\"/ against the same tag so the id cannot silently disappear anyway.",
+        "rejected_because": "The reviewer's own impact note concedes the loss is confined but real: the heading-hierarchy test loses its independence from the new test, and a future second <main> (the regex is non-greedy and takes the first) would satisfy it silently. I verified the fix costs two negative pin cases and no change to the 25-shell loop, which is a small price for restoring the file's own stated rule at test/web/pages.test.js:140-142."
+      }
+    ],
+    "assumptions": [
+      "src/web/pages.js on main is the same file PR #60 edited — the skip link at line 68 and <main id=\"main\" tabindex=\"-1\"> at line 77. I confirmed both by reading main, and confirmed the ordering finding by editing main's copy and running the suite.",
+      "The suite state I measured (test/web/pages.test.js, 51 pass / 0 fail after `npm ci`) is the baseline the implementer starts from. Note that the file fails to import at all on a runner without node_modules — I hit that first and installed before measuring; that is not a defect in this ticket.",
+      "The 25-shell route x state matrix and the five states are the full surface the guards run over. No other route exists to extend them to."
+    ],
+    "unknowns": [
+      "Whether QA's browser session can be put into forced-colors emulation. If it can, AC-2's second half could be verified in the browser as well as by test; I have specified the test as the deterministic proof because the emulation capability is not something the ticket can assume."
+    ],
+    "confidence": 92,
+    "confidence_rationale": "Every claim here was executed rather than inferred. Finding 1 was reproduced end to end (relocation applied, 51/0 measured, tree restored) and the fix verified against seven cases including the two null-match shapes. Finding 3's replacement regex was run against all six relevant shapes, including a decoy `<main>` preceding the real one. Finding 2's carve-out was tested against the patched stylesheet for both the new assertion and its mutation, and against the existing test at line 204 to confirm it does not disturb it. The route (plan, implement, review, qa) is already correct for a change touching a test guard and a stylesheet rule, so no route change is requested. The remaining 8% is the one genuinely unexercisable claim: forced-colors rendering is a browser behaviour no local assertion can prove, and the work order leans on a stylesheet-reading test for it.",
+    "reproduced": true,
+    "evidence": [
+      "Finding 1 reproduced: moved the skip link from src/web/pages.js:68 to after `</main>`, ran `node --test test/web/pages.test.js` -> 51 pass / 0 fail, identical to the unmutated baseline. The suite cannot see the relocation.",
+      "Finding 1 fix verified in isolation against 7 cases: accepts reordered attributes, a tolerated third attribute, and brand/nav sorting before the link; rejects missing tabindex, wrong href, link without the skip-link class, and — the new one — the link placed after <main>. Also returns false without throwing on a document with no <main>, no <a>, or an empty string.",
+      "Finding 3 confirmed by reading test/web/pages.test.js:116: `/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/` with no `id=\"main\"` requirement, against the pre-#52 form the comment at line 140-142 says was `/<main id=\"main\">/`.",
+      "Finding 3 fix verified against 6 shapes: the proposed regex matches `<main id=\"main\">`, `<main id=\"main\" tabindex=\"-1\">`, `<main tabindex=\"-1\" id=\"main\">` and `<main tabindex=\"-1\" id=\"main\" lang=\"en\">`; rejects `<main>` and `<main id=\"other\">`, both of which the current regex accepts. With a decoy `<main>` before the real one it still selects the id=\"main\" element, because `[^>]*` cannot span a tag boundary.",
+      "Finding 2 confirmed by grep: `grep -rn 'forced-colors' src/ test/` returns nothing, and `grep -n '@media' src/web/styles.css` shows only `@media (prefers-reduced-motion: reduce)` at line 299 and two `@media (max-width: 900px)` blocks. The `outline: none` at src/web/styles.css:116-118 is unconditional.",
+      "Finding 2 fix verified against the patched stylesheet: the new media block is found and its `outline: 2px solid CanvasText` is asserted; deleting the block turns the assertion red; and the pre-existing test at test/web/pages.test.js:204-209 still matches the first `#main:focus` rule and still sees `outline: none`, so the default-mode suppression is preserved.",
+      "Blast radius checked: `grep -rn 'mainOf|skipLinkFocusesMain'` finds both defined and used only inside test/web/pages.test.js — `mainOf` has one call site (line 126), `skipLinkFocusesMain` has one production loop and five pin calls, all in the same file. No other file reads `styles.css` for assertions.",
+      "Working tree restored after verification: `git status --porcelain` shows only the untracked `plan/` directory and `git diff --stat` is empty. No source or test file was modified by the planner."
+    ],
+    "residual_risks": [
+      "A future change that adds a second <main> to a page is now caught by the restored matcher rather than silently satisfying the heading-hierarchy test. That is the intended effect, but it means a future layout change could fail this suite for a reason its author did not anticipate. The rejection pins in tests[].cases make the reason legible at the point of failure."
+    ],
+    "mode": "committed"
+  },
+  "approved_too_high": false
 }
