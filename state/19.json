@@ -137,17 +137,9 @@
     "reproduced": true
   },
   "touch_paths": [
-    "src/domain/decisions.js",
-    "src/data/db.js",
-    "src/data/repositories.js",
-    "src/api/routes.js",
-    "src/web/pages.js",
     "src/web/client.js",
-    "scripts/seed.js",
-    "test/fixtures/replay-scenarios.json",
-    "test/domain/decisions.test.js",
-    "test/api/decisions.test.js",
-    "test/web/pages.test.js"
+    "test/web/drawer.test.js",
+    "test/web/drawer.test.js"
   ],
   "acceptance": [],
   "planned_route": [
