@@ -82,6 +82,13 @@ export function validateEvent(envelope) {
  * `store` abstracts the idempotency table: { has(key), record(key) }.
  * The key is recorded only after the effect succeeds, so a failed effect
  * leaves the event free to be retried.
+ *
+ * Spec helper staged with the envelope (work order): production consumers
+ * do NOT call this directly — scheduler.consume plus the idempotency
+ * repository own live exactly-once delivery, keyed per (tenant, event,
+ * consumer) and durable across restarts. A first real caller here should
+ * back its store with that repository, not an in-memory map, or dedupe
+ * resets on every process restart.
  */
 export async function applyOnce(store, event, effect) {
   const key = `${event.tenant_id}:${event.event_id}`;
