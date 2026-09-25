@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openDatabase } from '../../src/data/db.js';
 import { createRepositories, replayRawToDerived } from '../../src/data/repositories.js';
 import { validateEvent } from '../../src/domain/events.js';
@@ -960,4 +961,38 @@ test('the experiment caps render through the same helper on both the ideal and t
     assert.equal((card.match(/₹200\.00/g) ?? []).length, 1, 'the max downside cap appears exactly once');
     assert.doesNotMatch(card, /₹NaN/);
   }
+});
+
+// Issue #51 finding 1: the pinning test at the top of this file exercises
+// H1_HOOK itself, so reverting the production call site to the pre-#46
+// class-coupled regex leaves the file green. Pin the call site itself.
+test('the production h1 assertion goes through H1_HOOK, not an inline regex', () => {
+  const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const callSite = source.split('\n').find((line) => line.includes('the h1 carries the page-title hook'));
+  assert.ok(callSite, 'the 25-shell h1 assertion is still in this file');
+  assert.match(callSite, /assert\.match\(html, H1_HOOK,/, 'the call site uses the pinned constant');
+  assert.doesNotMatch(callSite, /class="page-title"/, 'the call site inlines no class-coupled regex');
+});
+
+// Issue #51 finding 2: this is the one place in the suite that asserts on a
+// class name, and deliberately so. The class is a styling hook, not a hook a
+// behavioural test may depend on, but it is the only thing that reaches the
+// .page-title rule — so the coupling is declared here instead of accidental.
+test('the shipped page h1 carries the styling class the stylesheet rules on', async () => {
+  const html = await renderPage('/', { repositories: freshRepos() });
+  const h1 = /<h1[^>]*>/.exec(html)?.[0] ?? '';
+  assert.match(h1, /data-testid="page-title"/, 'the page h1 is the hook under test');
+  assert.equal(/\bclass="([^"]*)"/.exec(h1)?.[1], 'page-title', 'the emitted h1 still carries the styling class');
+});
+
+// Issue #51 finding 4: the other end of the same link. Asserting the
+// stylesheet's own contents is convention-clean under
+// .sdlc/memory/qa/selectors.md and makes AC-2's claim machine-checkable.
+test('the .page-title rule still carries the declarations the page title depends on', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const rule = /\.page-title\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, 'src/web/styles.css defines a .page-title rule');
+  assert.match(rule[1], /margin:\s*0\s*;/, 'the browser default h1 margin is cancelled');
+  assert.match(rule[1], /font-size:\s*1\.4rem\s*;/, 'the page title keeps the display size');
+  assert.match(rule[1], /line-height:\s*1\.25\s*;/, 'the page title keeps its line height');
 });
