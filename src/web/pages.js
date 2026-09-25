@@ -74,7 +74,7 @@ function layout({ route, state, title, tenantName, content }) {
 </div>
 </header>
 <div id="live-region" class="visually-hidden" aria-live="polite" role="status"></div>
-<main id="main">
+<main id="main" tabindex="-1">
 ${heading}
 ${content}
 </main>

@@ -104,6 +104,19 @@ a {
   font-weight: 600;
 }
 
+/* The skip link points at #main, so activating it focuses the whole container.
+   Chromium then reports :focus-visible and paints the global accent ring above
+   around all 1100px of it, which reads as two stray bars at the viewport edges
+   rather than as "you are in the content". The landmark is not a control, so it
+   needs no ring; the skip link showed its own focus as it was activated.
+   This suppression works by ID specificity: #main:focus is 1,1,0 against the
+   bare :focus-visible above at 0,1,0, so lowering the selector to main:focus
+   loses it silently. outline is not inherited, so nothing inside main is
+   affected. */
+#main:focus {
+  outline: none;
+}
+
 #main {
   max-width: 1100px;
   margin: 0 auto;
