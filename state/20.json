@@ -1217,5 +1217,8 @@
       "The test fixture that made it unreachable: test/executor/executor.test.js:233 and :248 each re-deliver the same `capability` object the test has already spent, so the body under test is the server's own envelope by construction."
     ],
     "version": 4
-  }
+  },
+  "retry_after": "2026-09-26T00:32:38.905Z",
+  "retry_stage": "plan",
+  "parked_at": "2026-09-25T20:32:38.905Z"
 }
