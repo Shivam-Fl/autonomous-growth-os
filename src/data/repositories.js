@@ -62,7 +62,6 @@ function createRawEventRepository(db) {
     'SELECT event_id, event_type, occurred_at, tenant_id, schema_version, payload FROM raw_events WHERE tenant_id = ? ORDER BY occurred_at, event_id LIMIT ?',
   );
   const countForTenant = db.prepare('SELECT COUNT(*) AS n FROM raw_events WHERE tenant_id = ?');
-  const latestForTenant = db.prepare('SELECT MAX(occurred_at) AS latest FROM raw_events WHERE tenant_id = ?');
 
   return {
     /**
@@ -97,11 +96,6 @@ function createRawEventRepository(db) {
         `SELECT event_id, event_type, occurred_at, tenant_id, schema_version, payload FROM raw_events WHERE tenant_id = ? AND event_type IN (${placeholders}) ORDER BY occurred_at, event_id LIMIT ?`,
       );
       return select.all(tenantId, ...types, limit).map(toEnvelope);
-    },
-
-    /** Max occurred_at for the tenant, or null — for data-through/staleness. */
-    latestTimestamp(tenantId) {
-      return latestForTenant.get(tenantId).latest ?? null;
     },
 
     count(tenantId) {

@@ -8,7 +8,7 @@
 // workflow runs this to choose the reviewer; post-work-order runs it again for every producer,
 // root-cause included, and acts on the answer. Outputs only: acting is the caller's.
 import { readFileSync } from 'node:fs';
-import { setOutput, loadConfig, trustedComments, repo as repoOf } from './lib/actions.js';
+import { gh, setOutput, loadConfig, trustedComments, isPipelineAuthor, repo as repoOf } from './lib/actions.js';
 import { planGate } from './lib/routing.js';
 import { effectiveGates } from './lib/route.js';
 import { readLedger } from './lib/state-io.js';
@@ -37,7 +37,15 @@ const kind = from === 'debug' ? 'bug' : wo.kind;
 // debugger diagnosing a reported bug nobody has watched happen. Applied to root-cause, it sent
 // growth-os's v2 work order to a person as "never reproduced" minutes after QA had reproduced the
 // crash on the exact commit, and skipped the plan reviewer that should have read it.
-const observed = from === 'root-cause';
+//
+// So is a bug the pipeline filed itself: its reviewer's follow-ups, cited to the line, or a
+// pre-existing bug QA hit in a live run. growth-os #31 — three review findings, re-checked by the
+// planner against main with five file:line citations, and honestly `reproduced: false` because
+// dead code and a missing argument are not things you run — waited half an hour for a person.
+// The author is GitHub's, not the plan's: nobody else can open an issue as the pipeline.
+const filedByPipeline = kind === 'bug' && from !== 'debug' && await gh(['api', `repos/${repoOf()}/issues/${issue}`, '--jq', '.user.login'])
+  .then((login) => isPipelineAuthor(login.trim())).catch(() => false);
+const observed = from === 'root-cause' || filedByPipeline;
 const judged = kind === 'bug'
   ? { ...wo, kind, reproduced: observed || (wo.reproduced === true && (wo.evidence ?? []).length > 0) }
   : wo;

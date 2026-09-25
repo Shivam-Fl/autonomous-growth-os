@@ -339,7 +339,9 @@ function kpiStrip(state, { repositories, tenant }) {
     return `<section class="kpi-strip" aria-label="KPIs"></section>`;
   }
   const rows = repositories.rawEvents.listByTypes(tenant.id, ['spend.observed', 'lead_qualified']);
-  const funnel = computeFunnel(rows);
+  // Same tenant-currency exclusion GET /v1/metrics applies (routes.js): the
+  // tenant row's currency leaves foreign-currency legacy spend out of the sum.
+  const funnel = computeFunnel(rows, tenant.currency ?? 'INR');
   const coverage = coverageOf(rows);
   const through = dataThrough(rows);
   const nowIso = new Date().toISOString();
