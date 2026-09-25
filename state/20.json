@@ -749,7 +749,7 @@
     "decided_at": "2026-09-25T15:09:11.695Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "root-cause",
+  "dispatched_stage": "plan",
   "validated_from": "root-cause",
   "validated_at": "2026-09-25T20:27:22.394Z",
   "validated_ac_changes": [
