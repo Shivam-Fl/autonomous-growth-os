@@ -165,7 +165,12 @@
       "Whether the maintainer wants '/' to read 'Dashboard' (the nav label) or 'Command dashboard' (the TITLES and <title> value) as its visible heading. This plan uses 'Command dashboard' because it makes the heading and the document title identical, which AC-3 then enforces; if the maintainer prefers the nav label, it is a one-word change in TITLES plus the corresponding test, not a redesign."
     ]
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/web/pages.js",
+    "src/web/styles.css",
+    ".sdlc/memory/qa/selectors.md",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
