@@ -459,25 +459,21 @@
     "pr": 29,
     "head": "fd7c4d96c004ef6172acb8c6f687f0de37a666ee",
     "stage": "qa",
-    "attempt": 3,
+    "attempt": 4,
     "occurrences": 1,
     "error_type": "unknown",
-    "error_signature": "920c725738addd65",
-    "raw_excerpt": "sdlc: the QA report's evidence does not hold up:\n  - T-1, T-4, T-8, T-9, T-10, T-11, T-12, T-13 prove a passing criterion and cite no evidence file\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.\nsdlc: the QA report's evidence does not hold up:\n  - T-1, T-4, T-8, T-9, T-10, T-11, T-12, T-13 prove a passing criterion and cite no evidence file\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.",
+    "error_signature": "6229df2bce83e59f",
+    "raw_excerpt": "sdlc: the QA report does not hold up against what QA was handed:\n  - AC-1 cites \"ci\" as its proof, but the work order has QA verify it in the running app",
     "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
     "decision": "triage",
     "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
     "context": {
       "work_order_version": 2,
-      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36111460449",
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36112382000",
       "prior_signatures": [
-        "qa:schema-invalid:76cd1d55a86b314d"
+        "qa:schema-invalid:76cd1d55a86b314d",
+        "qa:unknown:920c725738addd65"
       ]
-    },
-    "triage": {
-      "verdict": "resume",
-      "diagnosis": "The QA agent returned verdict pass with all 8 acceptance criteria claimed pass, but its 8 API-level tests (T-1 for AC-1, T-4 for AC-3, T-8/T-9/T-10/T-11 for AC-7, T-12/T-13 for AC-8) cite no evidence file, so check-evidence.mjs correctly rejected the report at the last gate. No project-code defect was proven: BUG-1 and BUG-2 both retest fixed, no new bugs were filed, and the browser ACs (AC-2/AC-4/AC-5) do carry screenshots plus HARs. The implement fix survives untouched on the PR branch, so QA must run again and re-capture the API criteria with response bodies and HARs saved under QA_EVIDENCE_DIR and cited per test, as the previous-output feedback already instructs.",
-      "evidence": "failed-run.log check-evidence.mjs: 'T-1, T-4, T-8, T-9, T-10, T-11, T-12, T-13 prove a passing criterion and cite no evidence file' (files=18); qa-report.json from artifact 10853243570: verdict=pass, next_action=merge, evidence:[] on exactly those 8 tests, retest BUG-1/BUG-2 fixed, bugs:[]; schema validation printed 'valid'; prior_signatures=[qa:schema-invalid] is a different signature; gh pr view 29: OPEN at fd7c4d96c004ef6172acb8c6f687f0de37a666ee."
     }
   },
   "triage_history": [
