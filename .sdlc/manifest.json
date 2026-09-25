@@ -1,5 +1,5 @@
 {
-  "source_sha": "c807620aa07d17bf0aa3a8a35f7043796d827c9c",
+  "source_sha": "f889f2d76b41e98ac7facb86f19cc1d3cdcfc31a",
   "source_repo": "Shivam-Fl/automated-ai-sdlc",
   "files": {
     ".github/workflows/ci-verify.yml": "e70d32c31bc0a09bfa049641664ea88027ffda2703b0058272ce14fa9ea250fd",
@@ -13,7 +13,7 @@
     ".github/workflows/sdlc-plan.yml": "906ea064d688473c2f45a4040398262ba6f0e3b96939d0f162de6068109ac0af",
     ".github/workflows/sdlc-probe.yml": "a6639ced32bedb5a3b240ed06b784f5f6edfedecc85585080a0ad45b2e6f4a23",
     ".github/workflows/sdlc-project.yml": "70b455851b533411d693cf3b941a39b710151e16ded7e7011e6e26f137bb0342",
-    ".github/workflows/sdlc-qa.yml": "aa7a4e9a184b93be91b92ccc2fc2efb71d64df765b28daf0a928d252bd14136d",
+    ".github/workflows/sdlc-qa.yml": "aec0d21c1ff3ded86c13e9e698812fc8dadd89df95d2ae59e65305c0f2a5f2e9",
     ".github/workflows/sdlc-release.yml": "93d35a875b505c974d7ed694668a9670c87430b1dafa40eab2d2f3d516559447",
     ".github/workflows/sdlc-review.yml": "127aadcbcb27226b93e5f89cea17bc022343f42aaaac967994e29f47f4a473c4",
     ".github/workflows/sdlc-root-cause.yml": "962202e8017fc95203848d52d657c25a4b983234a7e679da348af35f504d04d6",
@@ -36,7 +36,7 @@
     ".sdlc/agents/plan-reviewer.md": "fc31026f3fea5d05d21cce466275c53e86023f13e339638739ab2b2d72950635",
     ".sdlc/agents/planner.md": "fa7e960c8579b5fe7f7c7bf1954321bcf077b5f951bf03576f18a6c491d1b0ef",
     ".sdlc/agents/project-planner/project-planner.md": "7efad97ec8c69f5078c3c371c3d7f938e0b2e1c570632508b9f5e0d75be20612",
-    ".sdlc/agents/qa.md": "dcbc41e85a007711857c4e0dba347dec9afe65a5dc7b8418814105d18b42d224",
+    ".sdlc/agents/qa.md": "6e181920203c9649cef7a0d4c272ec7544c6a8a99c9e44556962b1ecbfd2e0f8",
     ".sdlc/agents/release.md": "74d5c63112e07fae7c42360f8f83d39372f921c14dbfd7569e4c963aa11c5860",
     ".sdlc/agents/review-council/1-correctness.md": "f0a1bd664fa11575a432891759a0f7b70873b5394b49acf88f2cd776e47ceced",
     ".sdlc/agents/review-council/2-design.md": "7f8d09d20514473f598c072ba167e61e3fb4862c99a351b572a09be530e51fd0",
