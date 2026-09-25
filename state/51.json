@@ -306,7 +306,54 @@
         "detail": "The comment at 749-752 declares this the suite's only class-name assertion and a deliberate exception to .sdlc/memory/qa/selectors.md, but that document still reads, without qualification, that class names are 'styling hooks, not assertions' — and the work order correctly notes it cannot edit it. So the PR lands a test that the next agent to read selectors.md will read as a violation of the convention, and the realistic outcomes are both bad: deleting the pin as redundant (reopening the exact hole this PR closes), or adding a second one. The exception currently survives only as a comment in the file it constrains. This is not fixable inside this PR — .sdlc/memory/** is reserved for the Librarian — so the finding is about making sure the exception is recorded somewhere durable rather than about the code.\n\n`test/web/pages.test.js:749`\n\nEvidence: .sdlc/memory/qa/selectors.md: 'Prefer `data-testid` and `data-*` hooks — they survive copy and layout changes; class names (`.panel`, `.kpi-card`, `.skeleton`) are styling hooks, not assertions.' No mention of .page-title or of a permitted exception anywhere in the file. .sdlc/agents/planner.md:170-175 confirms `.sdlc/memory/**` is the Librarian's and that the guard refuses the whole plan for it. The work order's own risks bullet 4 states this gap in the same terms. The suite baseline is 230 tests with this as the single class-name assertion, so the exception is genuinely unique and worth recording.\n\nFix: Do not change the code. Leave a note on issue #51 for the Librarian to record in .sdlc/memory/qa/selectors.md that the class-to-rule link for the page title is deliberately pinned from both ends, and that the pin in 'the shipped page h1 carries the styling class the stylesheet rules on' is the sanctioned exception — so the next agent neither rediscovers the hole nor removes the pin as redundant. Raising it as a follow-up is the correct route; the work order's judgement that this ticket cannot carry it is right and I am not asking for it to be overridden."
       }
     ],
-    "pr": "54"
+    "pr": "54",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "title": "A later higher-specificity CSS rule silently overrides .page-title, breaking AC-2 with a fully green suite",
+        "area": "test guard / styling",
+        "severity": "minor",
+        "expected": "Any change to how the page title actually renders fails the suite. The work order states that the new stylesheet test 'forbids a rule that quietly stops existing or stops carrying the values the heading depends on', and that it 'makes AC-2's claim machine-checkable'.",
+        "actual": "Appending `#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }` to src/web/styles.css leaves the .page-title rule and all three of its declarations exactly as they were, and `node --test` reports 230 pass / 0 fail. The heading then measures font-size 38.4px and margin-top 24px on all 25 shells — AC-2 is false in the browser while every test is green. The h1 renders larger than the KPI values, which is precisely the three-step type scale the comment above .page-title says the rule exists to protect. Severity is minor by user impact only: nothing a user sees is broken at the commit under test, this is a hole in a guard rather than a live defect.",
+        "repro": [
+          "Check out the repository at 72048158c61deda6511a180032da88046bcb7e5a and run npm ci --no-audit --no-fund",
+          "Append to src/web/styles.css: a blank line, then `#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }`",
+          "Run node --test — it reports 230 pass and 0 fail, including all three new cases",
+          "Run PORT=3001 node src/index.js and open http://localhost:3001/ — the 'Command dashboard' h1 is visibly oversized and pushed down, and getComputedStyle(h1[data-testid=\"page-title\"]).fontSize reads 38.4px, not 22.4px",
+          "Revert the stylesheet edit; the rendered heading returns to 22.4px and margin-top 0"
+        ],
+        "evidence": [
+          "qa-evidence/bug1-override-h1.png",
+          "qa-evidence/bug1-override.har",
+          "qa-evidence/bug1-control-h1.png",
+          "qa-evidence/tripwires.txt"
+        ],
+        "suspected_cause": "The new case 'the .page-title rule still carries the declarations the page title depends on' extracts the rule body with /\\.page-title\\s*\\{([^}]*)\\}/ and asserts on the three declarations as text. That pins the declaration, not the result: a rule declared later in the file and winning the cascade is invisible to it. The behavioural 25-shell test is class-free and never reads a computed style either, so nothing in the suite observes what the browser actually renders. A test that asserted the computed font-size and margin-top of the rendered h1 — in a browser test, or a jsdom-free check that the .page-title declarations are not outranked — would close this. Pre-existing and narrowed, not created: on the base commit grep -rn 'styles.css' test/ returns 0 hits, so there was no stylesheet assertion at all. This PR adds one that covers the declaration and misses the cascade.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      },
+      {
+        "id": "BUG-2",
+        "title": "The delivered tests reject a coordinated rename that the work order says is allowed on purpose",
+        "area": "work order / test guard",
+        "severity": "minor",
+        "expected": "work-order.json out_of_scope[2] states: 'A coordinated rename of the markup and the stylesheet passes these tests on purpose — the class name is a styling decision, and only its presence and the values behind it are load-bearing.'",
+        "actual": "Renaming the class to pageHeading on both sides produces 2 failures out of 230. 'the shipped page h1 carries the styling class the stylesheet rules on' fails because the emitted class is now pageHeading, and 'the .page-title rule still carries the declarations the page title depends on' fails because no .page-title rule remains. The same work order contradicts itself: risks[0] says none of the three tests 'forbids a coordinated rename'. A reviewer checking the delivered tests against out_of_scope[2] will find the statement does not hold.",
+        "repro": [
+          "Check out the repository at 72048158c61deda6511a180032da88046bcb7e5a and run npm ci --no-audit --no-fund",
+          "In src/web/styles.css, change `.page-title {` to `.pageHeading {`",
+          "In src/web/pages.js:56, change the h1 to `<h1 class=\"pageHeading\" data-testid=\"page-title\">`",
+          "Run node --test — it reports 228 pass and 2 fail, not 230 pass",
+          "Revert both edits; the suite returns to 230 pass"
+        ],
+        "evidence": [
+          "qa-evidence/tripwires.txt"
+        ],
+        "suspected_cause": "Both new cases hard-code the literal string 'page-title' rather than resolving the class from the markup and looking it up in the stylesheet. The work order considered and rejected the dynamic alternative in alternatives_considered[3] — it would have permitted the rename, but it pins no values — and then described the permitted outcome in out_of_scope anyway. Filed as pre-existing because the inaccurate claim lives in work-order.json, which this diff does not touch, and because the direction of the error is safe: the tests fail loud on a rename rather than passing silently, and no shipped behaviour regresses. It should not block a correct test-only PR; a human should decide whether to correct out_of_scope[2] or loosen the two tests.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      }
+    ]
   },
   "qa": {
     "verdict": "pass",
