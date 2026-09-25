@@ -474,6 +474,11 @@
         "qa:schema-invalid:76cd1d55a86b314d",
         "qa:unknown:920c725738addd65"
       ]
+    },
+    "triage": {
+      "verdict": "rerun",
+      "diagnosis": "QA agent skipped live verification of AC-1: its report cited \"ci\" as proof, but work-order v2 marks AC-1 verify:\"api\" requiring live POST/GET checks in the running app per qa_script steps 1-3. The judge's consistency check (post-qa-report.mjs) correctly rejected the report at the final step. No project-code, plan, environment, or framework defect; a first-occurrence agent citation error, and the next QA run receives previous-output.json with this rejection reason so it cites a live T-xxx test instead.",
+      "evidence": "failed-run.log:2124-2125 judge Post the report and route: 'sdlc: the QA report does not hold up against what QA was handed: - AC-1 cites \"ci\" as its proof, but the work order has QA verify it in the running app'; previous-work-order.json acceptance[0]: id AC-1, verify \"api\"; failure-packet.json occurrences 1, signature 6229df2bce83e59f absent from prior_signatures; PR 29 OPEN at fd7c4d96, mergeable MERGEABLE"
     }
   },
   "triage_history": [
@@ -492,6 +497,14 @@
       "confidence": 85,
       "diagnosis": "The QA agent returned verdict pass with all 8 acceptance criteria claimed pass, but its 8 API-level tests (T-1 for AC-1, T-4 for AC-3, T-8/T-9/T-10/T-11 for AC-7, T-12/T-13 for AC-8) cite no evidence file, so check-evidence.mjs correctly rejected the report at the last gate. No project-code defect was proven: BUG-1 and BUG-2 both retest fixed, no new bugs were filed, and the browser ACs (AC-2/AC-4/AC-5) do carry screenshots plus HARs. The implement fix survives untouched on the PR branch, so QA ",
       "run": "36111460449"
+    },
+    {
+      "at": "2026-09-25T08:33:57.573Z",
+      "stage": "qa",
+      "verdict": "rerun",
+      "confidence": 85,
+      "diagnosis": "QA agent skipped live verification of AC-1: its report cited \"ci\" as proof, but work-order v2 marks AC-1 verify:\"api\" requiring live POST/GET checks in the running app per qa_script steps 1-3. The judge's consistency check (post-qa-report.mjs) correctly rejected the report at the final step. No project-code, plan, environment, or framework defect; a first-occurrence agent citation error, and the next QA run receives previous-output.json with this rejection reason so it cites a live T-xxx test in",
+      "run": "36112382000"
     }
   ],
   "qa": {
