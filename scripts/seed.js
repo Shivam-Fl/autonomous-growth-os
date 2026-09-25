@@ -340,7 +340,7 @@ function seedOpportunities(repositories) {
       const unreadable = unreadableComponents(previous.record);
       throw opportunityError(
         'OPP_STALE_RECORD',
-        `OPP_STALE_RECORD: seed opportunity ${candidate.opportunity_id}: this build cannot read the stored record's component(s) ${unreadable.join(', ')} — money must be a non-negative integer number of micros and every other component a finite number; delete the database and re-seed (the seed is idempotent by fixed id and never rewrites a stored record)`,
+        `OPP_STALE_RECORD: seed opportunity ${candidate.opportunity_id}: this build cannot read the stored record's component(s) ${unreadable.join(', ')} — money must be a non-negative integer number of micros, the probability components (pSuccess, fit, reversibility) must be between 0 and 1, and the remaining multipliers (infoValue, downside, delay) must be non-negative; delete the database and re-seed (the seed is idempotent by fixed id and never rewrites a stored record)`,
         { opportunity_id: candidate.opportunity_id, unreadable_components: unreadable },
       );
     }

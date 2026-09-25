@@ -448,6 +448,173 @@ test('two evaluations in the same millisecond report the collision instead of a 
   t.mock.timers.reset();
 });
 
+// BUG-4 (issue #40, second round). The read rule and the write rule were two
+// different rules: the read side asked "is this a number the build can print",
+// the write side asked "is this a value this key accepts". A pSuccess of 1.5
+// failed the second and passed the first, which is how a body got eight
+// readable components beside a null contribution — with no component a client
+// could point at. Driven over HTTP rather than in the domain, because the
+// self-contradictory body is only observable on the wire.
+
+/** Plant a stored record directly, then re-POST a well-formed body over it, so
+ * the response describes the STORED row rather than the discarded one — the way
+ * QA drove the running app. */
+async function repostStored({ opportunity_id, tenant_id, record, score }) {
+  repositories.opportunities.create({ tenant_id, opportunity_id, record, score });
+  const body = await (await fetch(url('/v1/opportunities'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...EXPENSIVE, opportunity_id, tenant_id }),
+  })).json();
+  assert.equal(body.created, false, `${opportunity_id}: the well-formed body did not overwrite the stored row`);
+  assert.equal(Object.keys(body.components).length, 8, `${opportunity_id}: eight component keys, whatever the record is missing`);
+  return body;
+}
+
+/** HEALTHY-ish record with `overrides` written over it and `drop` removed
+ * outright — a key that was never stored rather than one stored badly. */
+function storedBody({ drop = [], ...overrides }) {
+  const record = { name: 'Stored bet', value_micros: 3_000_000_000, pSuccess: 0.5, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_000_000, downside: 2, delay: 1, ...overrides };
+  for (const key of drop) {
+    delete record[key];
+  }
+  return record;
+}
+
+test('BUG-4: an out-of-range pSuccess is null on the wire, and the contribution follows it', async () => {
+  // The QA fixture, planted verbatim. value_micros is MAX_SAFE_INTEGER and
+  // pSuccess is 1.5: on the previous rule every one of the eight components
+  // projected non-null, and then the arithmetic's own safe-integer guard
+  // returned null — a second path to a null contribution that the wire
+  // contract never accounted for. The null is now on pSuccess, where a client
+  // can see it.
+  const body = await repostStored({
+    opportunity_id: 'opp_qa_ovf_014',
+    tenant_id: 'tenant_demo',
+    score: 0.9208,
+    record: {
+      name: 'QA overflow contribution',
+      value_micros: 9_007_199_254_740_991, pSuccess: 1.5, fit: 0.5, infoValue: 1,
+      reversibility: 0.9, cost_micros: 0, downside: 2, delay: 1,
+    },
+  });
+
+  assert.equal(body.components.pSuccess, null, 'the component the write side would reject is the one reported as unknown');
+  assert.equal(body.expected_contribution_micros, null);
+  // The money beside it is a perfectly readable amount and stays readable: the
+  // record is not wholesale discarded, one component of it is.
+  assert.equal(body.components.value_micros, 9_007_199_254_740_991);
+  assert.equal(body.components.cost_micros, 0);
+  assert.equal(body.score, 0.9208, 'the stored score still rides on the row');
+  assert.deepEqual(
+    Object.values(body.components).filter((value) => value === null),
+    [null],
+    'exactly one null, and it is on a key the contribution reads',
+  );
+});
+
+test('the other direction: a null the formula does not read leaves the contribution a number', async () => {
+  // What QA did not file, and the reason a one-direction comment does not
+  // work. The contribution reads value_micros, pSuccess and cost_micros and
+  // nothing else, so `fit: null` is a real amount reported beside a component
+  // this build cannot read — deliberately, with no exception. Any comment
+  // claiming the field is null whenever *a* component is null is refuted by
+  // this exact body.
+  const { fit, ...withoutFit } = storedBody({ value_micros: 3_000_000_000, pSuccess: 0.5, cost_micros: 1_000_000 });
+  const body = await repostStored({ opportunity_id: 'opp_gamma_nofit', tenant_id: 'tenant_gamma', score: 0.4, record: withoutFit });
+
+  assert.equal(body.components.fit, null, 'the component the build cannot read is null');
+  assert.equal(
+    body.expected_contribution_micros,
+    1_499_000_000,
+    'trunc(3e9 x 0.5) - 1e6: a number, because all three of the formula keys are readable',
+  );
+  assert.equal(body.components.value_micros, 3_000_000_000, 'the two money components and pSuccess are all real');
+  assert.equal(body.components.pSuccess, 0.5);
+  assert.equal(body.components.cost_micros, 1_000_000);
+});
+
+test('the wire contract holds in BOTH directions across every corrupt shape', async () => {
+  // What the two tests above assert, run over a table instead of twice — the
+  // contract has two directions and a test of only one of them cannot tell
+  // which a change broke. Every row is a stored record; the assertion is on
+  // the POSTED body, so it is the wire that is checked.
+  const shapes = [
+    ['opp_contract_healthy', { tenant_id: 'tenant_gamma', record: storedBody({}) }],
+    ['opp_contract_prerename', { tenant_id: 'tenant_gamma', record: { name: 'Pre-rename', value: 6000, cost: 1900, pSuccess: 0.5, fit: 0.9, infoValue: 1.2, reversibility: 0.9, downside: 2, delay: 1 } }],
+    ['opp_contract_float_value', { tenant_id: 'tenant_gamma', record: storedBody({ value_micros: 5_000_000.5 }) }],
+    ['opp_contract_string_value', { tenant_id: 'tenant_gamma', record: storedBody({ value_micros: '2000000000' }) }],
+    ['opp_contract_negative_value', { tenant_id: 'tenant_gamma', record: storedBody({ value_micros: -1_000_000 }) }],
+    ['opp_contract_absent_value', { tenant_id: 'tenant_gamma', record: storedBody({ drop: ['value_micros'] }) }],
+    ['opp_contract_absent_psuccess', { tenant_id: 'tenant_gamma', record: storedBody({ drop: ['pSuccess'] }) }],
+    ['opp_contract_absent_cost', { tenant_id: 'tenant_gamma', record: storedBody({ drop: ['cost_micros'] }) }],
+    ['opp_contract_string_psuccess', { tenant_id: 'tenant_gamma', record: storedBody({ pSuccess: '0.5' }) }],
+    ['opp_contract_psuccess_high', { tenant_id: 'tenant_gamma', record: storedBody({ pSuccess: 1.5 }) }],
+    // The QA overflow shape. It is in the table rather than only in the test
+    // above so the biconditional itself is a regression guard: on the old rule
+    // every component here is readable and the contribution is null, which is
+    // the one row where the table would catch a widening of the read rule back
+    // to a number check.
+    ['opp_contract_overflow', { tenant_id: 'tenant_gamma', record: storedBody({ value_micros: 9_007_199_254_740_991, pSuccess: 1.5, cost_micros: 0 }) }],
+    ['opp_contract_psuccess_low', { tenant_id: 'tenant_gamma', record: storedBody({ pSuccess: -1 }) }],
+    ['opp_contract_psuccess_zero', { tenant_id: 'tenant_gamma', record: storedBody({ pSuccess: 0 }) }],
+    ['opp_contract_psuccess_one', { tenant_id: 'tenant_gamma', record: storedBody({ pSuccess: 1 }) }],
+    ['opp_contract_fit_high', { tenant_id: 'tenant_gamma', record: storedBody({ fit: 2 }) }],
+    ['opp_contract_downside_negative', { tenant_id: 'tenant_gamma', record: storedBody({ downside: -1 }) }],
+    ['opp_contract_breakeven', { tenant_id: 'tenant_gamma', record: storedBody({ value_micros: 500_000_000, pSuccess: 0.5, cost_micros: 250_000_000 }) }],
+  ];
+  for (const [opportunity_id, { tenant_id, record }] of shapes) {
+    const body = await repostStored({ opportunity_id, tenant_id, score: 0.4, record });
+    const formulaReadsANull = ['value_micros', 'pSuccess', 'cost_micros'].some((key) => body.components[key] === null);
+    assert.equal(
+      body.expected_contribution_micros === null,
+      formulaReadsANull,
+      `${opportunity_id}: contribution null iff value_micros, pSuccess or cost_micros is null — got ${JSON.stringify(body.expected_contribution_micros)} with ${JSON.stringify(body.components)}`,
+    );
+    if (!formulaReadsANull) {
+      assert.equal(
+        Number.isSafeInteger(body.expected_contribution_micros),
+        true,
+        `${opportunity_id}: all three formula keys readable, so the contribution is a number, never a second null`,
+      );
+    }
+  }
+  // The break-even control, which is why null and not 0 has to mean unknown.
+  const control = await repostStored({ opportunity_id: 'opp_contract_zero_control', tenant_id: 'tenant_gamma', score: 0.4, record: storedBody({ value_micros: 1_000_000_000, pSuccess: 0.5, cost_micros: 500_000_000 }) });
+  assert.equal(control.expected_contribution_micros, 0, 'a genuine zero is a number on the wire, not an unknown');
+});
+
+test('a value the domain ACCEPTS is never nulled by the read rule', async () => {
+  // The direction the widened rule must not overshoot into. A pSuccess of
+  // exactly 0 or exactly 1, an infoValue above 1 and a downside above 1 are all
+  // valid, and the projection has to pass every one of them through as itself.
+  // These go through the real POST, so they are values validateOpportunity
+  // actually accepted rather than shapes invented here.
+  for (const [opportunity_id, overrides] of [
+    ['opp_gamma_endpoint_low', { pSuccess: 0 }],
+    ['opp_gamma_endpoint_high', { pSuccess: 1, fit: 1, reversibility: 1 }],
+    ['opp_gamma_wide_multipliers', { infoValue: 4, downside: 2, delay: 3 }],
+  ]) {
+    const sent = { ...EXPENSIVE, opportunity_id, tenant_id: 'tenant_gamma', ...overrides };
+    const response = await fetch(url('/v1/opportunities'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sent),
+    });
+    assert.equal(response.status, 201, `${opportunity_id}: the write side accepts ${JSON.stringify(overrides)}`);
+    const body = await response.json();
+    assert.deepEqual(body.components, {
+      value_micros: sent.value_micros, pSuccess: sent.pSuccess, fit: sent.fit, infoValue: sent.infoValue,
+      reversibility: sent.reversibility, cost_micros: sent.cost_micros, downside: sent.downside, delay: sent.delay,
+    }, `${opportunity_id}: the projection is the record the write side accepted, byte for byte — nothing valid is hidden`);
+    assert.equal(
+      Number.isSafeInteger(body.expected_contribution_micros),
+      true,
+      `${opportunity_id}: and a record the domain accepts always yields a number`,
+    );
+  }
+});
+
 test('a pre-rename row comes back with all eight component keys and explicit nulls', async () => {
   // A row stored before the micros rename carries value/cost, not
   // value_micros/cost_micros. The repository projects both money keys as null

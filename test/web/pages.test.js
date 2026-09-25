@@ -622,6 +622,41 @@ test('a component stored as a numeric string renders the placeholder, not the st
   assert.doesNotMatch(row, /₹NaN/);
 });
 
+test('a component stored out of range renders the em-dash, not the number', async () => {
+  // The view half of the read-rule change, on two different keys so the row is
+  // not pinned on pSuccess alone. A pSuccess of 1.5 and a downside of -1 are
+  // now unreadable, so they project as null and opportunityRow renders the
+  // em-dash for any null — the same path a missing component takes. No edit to
+  // pages.js is involved; this is what stops the next person concluding that
+  // the renderer needs one, and it pins the degradation the browser check in
+  // the acceptance criteria walks past.
+  for (const [opportunity_id, component, label, value] of [
+    ['opp_range_psuccess', 'pSuccess', 'success probability', 1.5],
+    ['opp_range_downside', 'downside', 'downside', -1],
+  ]) {
+    const repos = freshRepos();
+    repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+    repos.opportunities.create({
+      tenant_id: 'tenant_demo',
+      opportunity_id,
+      score: 0.4,
+      record: {
+        name: 'Out of range', value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9,
+        infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+        [component]: value,
+      },
+    });
+
+    const row = (await renderPage('/opportunities', { repositories: repos }))
+      .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+    assert.match(row, new RegExp(`data-component="${component}">${label} —</`), `${component} ${value}: the em-dash`);
+    assert.doesNotMatch(row, new RegExp(`${label} ${value}`), `${component} ${value}: never the out-of-range number itself`);
+    // The rest of the row still renders, so the em-dash is a statement about
+    // that one component and not about the whole record.
+    assert.match(row, /data-component="value_micros">value ₹6,000\.00</);
+  }
+});
+
 test('the seeded underpowered experiment renders the Inconclusive badge, never Win or Loss', async () => {
   const repos = seededRepos('pages-exp-badge-');
   const html = await renderPage('/experiments', { repositories: repos });

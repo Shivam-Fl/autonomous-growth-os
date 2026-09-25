@@ -365,12 +365,19 @@ export function buildApp({ repositories }) {
       // the body is discarded, and the response must describe the record that
       // exists rather than the one that was ignored.
       // CONTRACT: components and this field are two halves of one rule, and
-      // both come from the same domain predicate, so they agree: a component
-      // this build cannot stand behind is null in `components` above, and
-      // this field is null exactly when one or more of the components in this
-      // same body is null. A client that null-checks one can rely on the
-      // other agreeing — a body never reports an unknown contribution and then
-      // hands the client a float or a string it cannot trust.
+      // both come from the same domain predicate, so they agree. This field is
+      // null exactly when value_micros, pSuccess or cost_micros is null in
+      // this same body — the three keys the formula reads, and no others. The
+      // other five components do not enter `trunc(value x p) - cost` at all,
+      // so a null among them leaves this field a number, deliberately and
+      // with no exception: a client cannot infer anything about this field
+      // from those five keys, in either direction. When all three are
+      // readable the result is a number rather than null, because a readable
+      // value_micros is a non-negative safe integer and a readable pSuccess is
+      // in [0,1], so the product cannot leave the safe-integer range. A client
+      // that null-checks this field can rely on those three agreeing — a body
+      // never reports an unknown contribution and then hands the client a
+      // float or a string it cannot trust.
       //
       // null, never 0: a row stored before the micros rename has no
       // value_micros/cost_micros to compute from. null is an honest unknown;

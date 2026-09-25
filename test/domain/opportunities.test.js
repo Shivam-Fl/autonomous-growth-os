@@ -5,6 +5,7 @@ import {
   scoreOpportunity,
   rankOpportunities,
   expectedContribution,
+  isReadableComponent,
 } from '../../src/domain/opportunities.js';
 
 const EXPENSIVE = {
@@ -152,6 +153,29 @@ test('a negative amount is a number this build cannot stand behind, so the contr
   // the same fixtures.
 });
 
+test('the arithmetic overflow guard is unreachable through the read rule, at both endpoints', () => {
+  // The two shapes that make that claim a proof rather than a hope. A readable
+  // value_micros is a non-negative safe integer and a readable pSuccess is in
+  // [0,1], so `trunc(value x p) - cost` is always a safe integer — and the
+  // extremes of a CLOSED range are where that is worth testing, since an
+  // endpoint is exactly what an open interval would have let through.
+  //
+  // These are the bodies QA filed: on the previous rule, MAX_SAFE_INTEGER with
+  // a pSuccess of 1.5 put eight readable components beside a null contribution.
+  const atMax = { ...GENERIC, value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 1, cost_micros: 0 };
+  assert.equal(isReadableComponent('value_micros', Number.MAX_SAFE_INTEGER), true, 'the largest safe integer is readable money');
+  assert.equal(expectedContribution(atMax), Number.MAX_SAFE_INTEGER, 'the product is exactly MAX_SAFE_INTEGER, a number and not null');
+
+  const atZero = { ...GENERIC, value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 0, cost_micros: 1_000_000 };
+  assert.equal(expectedContribution(atZero), -1_000_000, 'pSuccess 0 is 0 minus the cost: a negative number, still not null');
+
+  // And the readable range is what rules the overflow shape out at the source,
+  // rather than the guard catching it on the way past.
+  const overflowShape = { ...GENERIC, value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 1.5, cost_micros: 0 };
+  assert.equal(isReadableComponent('pSuccess', 1.5), false, 'pSuccess 1.5 is not readable, so the product never happens');
+  assert.equal(expectedContribution(overflowShape), null, 'which is why the shape is refused at the guard, not at the arithmetic');
+});
+
 test('a zero cost is floored at one currency unit in micros, never infinite and never throws', () => {
   const validated = validateOpportunity({ ...GENERIC, cost_micros: 0 });
   assert.equal(validated.ok, true);
@@ -170,24 +194,68 @@ test('zero downside and zero delay are floored the same way as cost', () => {
   assert.ok(Number.isFinite(score) && score > 0, 'no divide-by-zero and no infinite score');
 });
 
+test('validateOpportunity and isReadableComponent are ONE rule, not two that agree today', () => {
+  // The property the wire contract actually rests on. The two paths used to
+  // hold separate rules — a range rule on write, a "is it a number" check on
+  // read — and the gap between them was reachable: a pSuccess of 1.5 was
+  // rejected on the way in and readable on the way out, which is how a body
+  // ended up with eight readable components beside a null contribution. If
+  // either side grows its own copy of the rule again, this fails.
+  //
+  // Every one of the eight keys appears on both sides, so a table that covers
+  // only the money keys cannot pass.
+  const accepted = [
+    ['pSuccess', 0], ['pSuccess', 1], ['fit', 0], ['fit', 1], ['reversibility', 0], ['reversibility', 1],
+    ['infoValue', 0], ['infoValue', 1.2], ['downside', 0], ['delay', 1],
+    ['value_micros', 0], ['value_micros', 6_000_000_000],
+    ['cost_micros', 0], ['cost_micros', 1_900_000_000],
+  ];
+  const refused = [
+    ['pSuccess', -1], ['pSuccess', 1.5], ['fit', 2], ['reversibility', -0.1],
+    ['infoValue', -1], ['downside', -1], ['delay', -1],
+    ['value_micros', -1], ['value_micros', 1.5], ['cost_micros', '500000000'],
+  ];
+  for (const [key, value] of accepted) {
+    assert.equal(isReadableComponent(key, value), true, `${key} ${JSON.stringify(value)} is readable`);
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_rule', [key]: value });
+    assert.equal(result.ok, true, `${key} ${JSON.stringify(value)}: the write side accepts it too${result.error ? ` — ${result.error.message}` : ''}`);
+  }
+  for (const [key, value] of refused) {
+    assert.equal(isReadableComponent(key, value), false, `${key} ${JSON.stringify(value)} is unreadable`);
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_rule', [key]: value });
+    assert.equal(result.ok, false, `${key} ${JSON.stringify(value)}: the write side refuses it too`);
+  }
+});
+
 test('invalid components reject with OPP_BAD_COMPONENT', () => {
-  for (const bad of [
-    { ...GENERIC, opportunity_id: 'opp_bad', pSuccess: 1.5 },
-    { ...GENERIC, opportunity_id: 'opp_bad', fit: -1 },
-    { ...GENERIC, opportunity_id: 'opp_bad', infoValue: Number.NaN },
-    { ...GENERIC, opportunity_id: 'opp_bad', reversibility: 'high' },
+  // The exact message, not just a non-empty one: the ranges now answer through
+  // the same per-key table the read side asks, and a caller-facing string that
+  // changed on the way is a wire break this change must not ship.
+  for (const [bad, message] of [
+    [{ pSuccess: 1.5 }, 'pSuccess: must be between 0 and 1'],
+    [{ pSuccess: -1 }, 'pSuccess: must be between 0 and 1'],
+    [{ fit: -1 }, 'fit: must be between 0 and 1'],
+    [{ fit: 2 }, 'fit: must be between 0 and 1'],
+    [{ reversibility: 2 }, 'reversibility: must be between 0 and 1'],
+    [{ infoValue: Number.NaN }, 'infoValue: must be a finite number, got null'],
+    [{ infoValue: -1 }, 'infoValue: must be non-negative'],
+    [{ reversibility: 'high' }, 'reversibility: must be a finite number, got "high"'],
+    [{ downside: -1 }, 'downside: must be non-negative'],
+    [{ delay: -0.5 }, 'delay: must be non-negative'],
   ]) {
-    const result = validateOpportunity(bad);
-    assert.equal(result.ok, false);
-    assert.equal(result.error.code, 'OPP_BAD_COMPONENT');
-    assert.ok(result.error.message.length > 0);
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', ...bad });
+    assert.equal(result.ok, false, `${JSON.stringify(bad)} must reject`);
+    assert.equal(result.error.code, 'OPP_BAD_COMPONENT', `${JSON.stringify(bad)} reports the component code`);
+    assert.equal(result.error.message, message);
   }
 });
 
 test('a negative, fractional or unsafe cost or value rejects with OPP_BAD_MONEY', () => {
   // Money is integer micros: a fractional rupee and anything above
   // MAX_SAFE_INTEGER cannot be stored exactly, so it is rejected at the door
-  // rather than rounded into a different amount than the caller sent.
+  // rather than rounded into a different amount than the caller sent. The
+  // message is the same one it has always been, down to the interpolated
+  // amount — the money rule moved into the shared table, the wording did not.
   for (const bad of [
     { value_micros: -5 },
     { value_micros: 6_000_000.5 },
@@ -196,10 +264,14 @@ test('a negative, fractional or unsafe cost or value rejects with OPP_BAD_MONEY'
     { cost_micros: 1_900_000_000.5 },
     { cost_micros: 1e303 },
   ]) {
+    const key = Object.keys(bad)[0];
     const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', ...bad });
-    assert.equal(result.ok, false, `${Object.keys(bad)[0]} ${bad[Object.keys(bad)[0]]} must reject`);
+    assert.equal(result.ok, false, `${key} ${bad[key]} must reject`);
     assert.equal(result.error.code, 'OPP_BAD_MONEY', `${JSON.stringify(bad)} reports the money code`);
-    assert.ok(result.error.message.length > 0);
+    assert.equal(
+      result.error.message,
+      `${key}: must be a non-negative integer number of micros, got ${JSON.stringify(bad[key])}`,
+    );
   }
 });
 
@@ -211,7 +283,10 @@ test('components whose product overflows are rejected, so an infinite score is n
   const result = validateOpportunity({ ...GENERIC, value_micros: 9_007_199_254_740_991, infoValue: 1e308 });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, 'OPP_BAD_COMPONENT');
-  assert.ok(result.error.message.length > 0);
+  assert.equal(
+    result.error.message,
+    'components: the product of value_micros, pSuccess, fit, infoValue and reversibility must be a finite number',
+  );
 });
 
 test('an unscorable record scores finite and ranks last, never above a real bet', () => {

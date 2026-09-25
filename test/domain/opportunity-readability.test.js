@@ -106,6 +106,68 @@ test('the predicate, the projection and the contribution agree on every fixture'
   }
 });
 
+test('the contribution is null exactly when one of the THREE keys it reads is null', () => {
+  // The contract src/api/routes.js states about the wire body, as a table
+  // rather than as prose. It is the regression guard for this attempt, because
+  // the four consumers already agreed with each other about readability and
+  // still shipped a body nobody could reconcile: a pSuccess of 1.5 beside a
+  // MAX_SAFE_INTEGER value is eight readable components and a null
+  // contribution, with no component to point at.
+  //
+  // Every existing fixture plus the QA shapes, and the five keys the formula
+  // does NOT read are in the table on purpose (opp_read_nofit,
+  // opp_read_fitabove): they are the direction a "one or more of the
+  // components" reading gets wrong, and they are the reason a one-direction
+  // comment would still be false. opp_read_nofit answers the largest number the
+  // table can while `fit` is null.
+  const rows = [
+    ...FIXTURES.map(({ id, record }) => [id, record]),
+    ['opp_read_nofit', storedRecord({ name: 'No fit', drop: ['fit'] })],
+    ['opp_read_fitabove', storedRecord({ name: 'Fit above one', fit: 2 })],
+    ['opp_read_pstr', storedRecord({ name: 'String probability', pSuccess: '0.5' })],
+    ['opp_read_pabove', storedRecord({ name: 'Probability above one', pSuccess: 1.5 })],
+    ['opp_read_pbelow', storedRecord({ name: 'Negative probability', pSuccess: -1 })],
+    ['opp_read_pzero', storedRecord({ name: 'Certain failure', pSuccess: 0 })],
+    ['opp_read_pone', storedRecord({ name: 'Certain win', pSuccess: 1 })],
+    ['opp_read_breakeven', storedRecord({ name: 'Break-even', value_micros: 200_000_000, pSuccess: 0.5, cost_micros: 100_000_000 })],
+  ];
+
+  for (const [id, record] of rows) {
+    // The projection first, because that is what the route feeds the
+    // arithmetic: the contract is about the BODY, so it is asserted on the
+    // same value the route computes from.
+    const components = readableComponents(record);
+    const formulaReadsANull = ['value_micros', 'pSuccess', 'cost_micros'].some((key) => components[key] === null);
+    const contribution = expectedContribution(components);
+    if (formulaReadsANull) {
+      assert.equal(contribution, null, `${id}: null, because the formula reads an unreadable key`);
+    } else {
+      assert.equal(
+        Number.isSafeInteger(contribution),
+        true,
+        `${id}: a number, because all three of the formula's keys are readable — got ${JSON.stringify(contribution)}`,
+      );
+    }
+    // The same verdict straight off the stored record, so the projection and
+    // the arithmetic cannot agree on a record while disagreeing on its source.
+    assert.equal(contribution === null, expectedContribution(record) === null, `${id}: the record and its projection agree`);
+  }
+
+  // The empty case, spelled out because it is the row QA filed: eight
+  // components cannot all be readable with an unrepresentable contribution
+  // any more, which is what makes the comment above a theorem and not a hope.
+  const overflowing = storedRecord({ name: 'Overflow', value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 1.5, cost_micros: 0 });
+  const projection = readableComponents(overflowing);
+  assert.equal(projection.pSuccess, null, 'the out-of-range probability is what the body reports as unknown');
+  assert.equal(projection.value_micros, Number.MAX_SAFE_INTEGER, 'the money beside it is readable and stays readable');
+  assert.equal(expectedContribution(projection), null);
+  assert.deepEqual(
+    Object.values(projection).filter((value) => value === null).length,
+    1,
+    'exactly one null, and it is on a key the formula reads',
+  );
+});
+
 test('the projection carries all eight keys, on the wire, for every fixture', () => {
   // BUG-1: the projection wrote `pSuccess: record.pSuccess`, and JSON.stringify
   // removes an undefined value — so a record missing pSuccess went out with
@@ -143,23 +205,51 @@ test('the rule is a number check, not a coercion', () => {
   assert.equal(isReadableComponent('value_micros', -1), false, 'a negative amount is not money');
   assert.equal(isReadableComponent('value_micros', 1.5), false, 'a fractional rupee is not money');
   assert.equal(isReadableComponent('value_micros', 2 ** 53), false, 'and neither is a value above MAX_SAFE_INTEGER');
-  assert.equal(isReadableComponent('pSuccess', -0.5), true, 'a negative multiplier is out of range, not unreadable');
 });
 
-test('a component that is out of range but a real number stays readable', () => {
-  // The deliberate boundary, pinned so a later agent cannot widen the read path
-  // into a full re-validation by accident: this rule answers "can the build
-  // stand behind this number", not "does this record satisfy every domain
-  // range". pSuccess 1.5 is not a valid probability and is still a number the
-  // build can print, so it stays on the wire rather than vanishing from a
-  // display path.
-  const record = storedRecord({ name: 'Out of range', pSuccess: 1.5, infoValue: -1, downside: -3 });
-  assert.deepEqual(unreadableComponents(record), [], 'out of range is not unreadable');
-  assert.equal(readableComponents(record).pSuccess, 1.5, 'and it stays on the wire');
-  // validateOpportunity still rejects it on the way in — the write side keeps
-  // every range rule, unchanged.
-  const components = readableComponents(record);
-  assert.equal(expectedContribution(components), Math.trunc(6_000_000_000 * 1.5) - 1_900_000_000);
+test('a component outside its range is unreadable, which is a reversal of the previous boundary', () => {
+  // WHY THIS BOUNDARY MOVED. This test used to read 'a component that is out
+  // of range but a real number stays readable', and it was pinned there on
+  // purpose: the read rule used to answer only "is this a number the build can
+  // print", so a stored pSuccess of 1.5 stayed on the wire even though
+  // validateOpportunity rejects one on the way in. The read side and the write
+  // side were two different rules, and the gap between them was reachable.
+  //
+  // It cost a real body. A stored value_micros of MAX_SAFE_INTEGER with a
+  // pSuccess of 1.5 has all eight components readable — the arithmetic's own
+  // MAX_SAFE_INTEGER product is not, so expectedContribution returned null
+  // beside a fully-populated `components`. No client can reconcile those two.
+  // Narrowing the read rule to the domain's own per-key rule removes the second
+  // path to a null contribution rather than documenting it: a readable pSuccess
+  // is in [0,1] and a readable value_micros is a non-negative safe integer, so
+  // the product is always a safe integer and the guard is unreachable through
+  // the wire. The cross-consumer theorem below is the regression guard.
+  //
+  // DO NOT MOVE IT BACK. If a future change needs the read path to be looser
+  // than the write path again, the arithmetic's overflow guard has to be
+  // revisited in the same change, and the wire contract with it.
+  for (const [key, value] of [['pSuccess', 1.5], ['pSuccess', -1], ['fit', 2], ['downside', -1]]) {
+    const record = storedRecord({ name: 'Out of range', [key]: value });
+    assert.deepEqual(
+      unreadableComponents(record),
+      [key],
+      `${key} ${value} is outside its range, so it is unreadable rather than merely wrong`,
+    );
+    assert.equal(readableComponents(record)[key], null, `${key}: and it does not stay on the wire`);
+  }
+  // A closed range, not "any positive number": both endpoints stay readable, so
+  // this is a range rule and not a sign check.
+  for (const value of [0, 1]) {
+    const record = storedRecord({ name: 'Endpoint', pSuccess: value });
+    assert.deepEqual(unreadableComponents(record), [], `pSuccess ${value} is a real probability`);
+    assert.equal(readableComponents(record).pSuccess, value);
+  }
+  // The consequence for the record this ticket exists for: the contribution
+  // now follows the component to null instead of reporting a number beside a
+  // component the projection calls unknown.
+  const overflow = storedRecord({ name: 'Overflow', value_micros: Number.MAX_SAFE_INTEGER, pSuccess: 1.5 });
+  assert.equal(readableComponents(overflow).pSuccess, null);
+  assert.equal(expectedContribution(readableComponents(overflow)), null, 'a null contribution, not a null beside eight readable numbers');
 });
 
 test('the wire projection, the contribution and the page renderer never disagree', async () => {

@@ -101,6 +101,17 @@ test('a pre-rename row makes the seed throw OPP_STALE_RECORD and name the recove
     assert.match(thrown.message, new RegExp(key), `the message names ${key}, the component this build cannot read`);
   }
   assert.match(thrown.message, /non-negative integer number of micros/, 'and states the rule those components failed');
+  // The rule as it now stands is per key, not "a finite number" — the message
+  // is the only guidance an operator gets, and this change moved what the seed
+  // enforces, so the wording has to move with it. Asserting the range rule here
+  // is what stops the next person to touch this from silently shipping a
+  // message that describes a rule the guard is not running.
+  assert.match(thrown.message, /between 0 and 1/, 'and the range the probability components are held to');
+  assert.doesNotMatch(
+    thrown.message,
+    /every other component a finite number/,
+    'the old "a finite number" wording described the rule this change replaced, and leaving it would misdescribe what just failed',
+  );
   assert.match(thrown.message, /delete the database and re-seed/i, 'and the recovery that actually works');
   assert.equal(thrown.details.opportunity_id, 'opp_seed_expensive');
   assert.deepEqual(
@@ -169,6 +180,47 @@ test('a money component this build cannot stand behind also throws, whichever wa
     assert.equal(thrown.code, 'OPP_STALE_RECORD', label);
     assert.match(thrown.message, /value_micros/, `${label}: the message names value_micros`);
     assert.deepEqual(thrown.details.unreadable_components, unreadable, `${label}: and names exactly the keys that are wrong`);
+  }
+});
+
+test('a component stored OUT OF RANGE throws, on a probability and on a multiplier alike', () => {
+  // The shape this change makes reachable. A finite out-of-range number used to
+  // be readable — the read rule asked "is this a number" while the write rule
+  // asked "is this a value this key accepts", so a record the API would have
+  // refused sailed through the seed and reported a clean exit-0 no-op. It
+  // exits 0 on the old code and non-zero on this one.
+  //
+  // Two keys on purpose: a guard that only learned about pSuccess would pass the
+  // second row, and the second row is the one that shows the rule is the
+  // domain's per-key table rather than a new special case for the key QA
+  // happened to plant.
+  for (const [label, component, value] of [
+    ['a probability above one', 'pSuccess', 1.5],
+    ['a fit above one', 'fit', 2],
+    ['a negative downside', 'downside', -1],
+  ]) {
+    const dbPath = freshDbPath('seed-stale-range-');
+    seed({ dbPath });
+    const stored = JSON.parse(
+      openDatabase(dbPath).prepare("SELECT record FROM opportunities WHERE opportunity_id = 'opp_seed_expensive'").get().record,
+    );
+    // Both money keys stay valid safe integers, so nothing but the range fails.
+    plantRecord(dbPath, 'opp_seed_expensive', { ...stored, [component]: value });
+
+    let thrown = null;
+    try {
+      seed({ dbPath });
+    } catch (error) {
+      thrown = error;
+    }
+    assert.ok(thrown, `${label}: a re-seed must not exit cleanly over an out-of-range component`);
+    assert.equal(thrown.code, 'OPP_STALE_RECORD', label);
+    assert.match(thrown.message, new RegExp(component), `${label}: the message names ${component}`);
+    assert.deepEqual(
+      thrown.details.unreadable_components,
+      [component],
+      `${label}: and names exactly the keys that are wrong — a guard that hardcoded the field could not pass`,
+    );
   }
 });
 
