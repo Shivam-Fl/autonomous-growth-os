@@ -605,7 +605,7 @@
     }
   ],
   "epic": 14,
-  "resume_at": null,
+  "resume_at": "implement",
   "flow_plan": {
     "kind": "feature",
     "confidence": 90,
@@ -614,7 +614,7 @@
     "councils": {},
     "decided_at": "2026-09-24T18:59:52.190Z"
   },
-  "stopped_at": null,
+  "stopped_at": "root-cause",
   "dispatched_stage": "root-cause",
   "validated_from": "plan",
   "validated_at": "2026-09-24T19:03:21.257Z",
