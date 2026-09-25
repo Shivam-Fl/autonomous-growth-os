@@ -640,19 +640,30 @@ function evidenceRefsCell(event) {
 // desc, id asc — and are never re-sorted in the view.
 
 const COMPONENT_LABELS = [
-  ['value', 'value'],
+  ['value_micros', 'value'],
   ['pSuccess', 'success probability'],
   ['fit', 'fit'],
   ['infoValue', 'information value'],
   ['reversibility', 'reversibility'],
-  ['cost', 'cost'],
+  ['cost_micros', 'cost'],
   ['downside', 'downside'],
   ['delay', 'delay'],
 ];
 
+// The two money components are integer micros and render as money, so a reader
+// never has to guess whether 6000000000 is rupees or micros; the other six are
+// dimensionless multipliers and stay as plain numbers.
+const MONEY_COMPONENTS = new Set(['value_micros', 'cost_micros']);
+
 function opportunityRow(row) {
   const components = COMPONENT_LABELS
-    .map(([key, label]) => `<span class="score-component" data-component="${key}">${escapeHtml(label)} ${escapeHtml(String(row.components[key] ?? '—'))}</span>`)
+    .map(([key, label]) => {
+      // An absent component — a record stored before the micros rename, say —
+      // keeps the '—' placeholder: money(undefined) would print ₹NaN.
+      const raw = row.components[key];
+      const shown = raw == null ? '—' : MONEY_COMPONENTS.has(key) ? money(raw) : String(raw);
+      return `<span class="score-component" data-component="${key}">${escapeHtml(label)} ${escapeHtml(shown)}</span>`;
+    })
     .join('');
   return `<li class="opportunity-row" data-testid="opportunity-row" data-opportunity-id="${escapeHtml(row.opportunity_id)}">
 <strong>${escapeHtml(row.name)}</strong>
@@ -725,8 +736,7 @@ function experimentCard(experiment) {
   const caps = experiment.record?.caps ?? {};
   return `<li class="experiment-card" data-testid="experiment-card" data-experiment-id="${escapeHtml(experiment.experiment_id)}">
 <strong>${escapeHtml(experiment.name)}</strong>
-<span>Max spend ${escapeHtml(money(caps.max_spend_micros))} · max downside ${escapeHtml(money(caps.max_downside_micros))}</span>
-<div data-testid="caps">caps: max spend ${escapeHtml(money(caps.max_spend_micros))}, max downside ${escapeHtml(money(caps.max_downside_micros))}</div>
+<span data-testid="caps">Max spend ${escapeHtml(money(caps.max_spend_micros))} · max downside ${escapeHtml(money(caps.max_downside_micros))}</span>
 <div data-testid="stop-rules">stop rules: minimum runtime ${escapeHtml(String(stopRules.min_runtime_hours ?? '—'))}h, minimum sample ${escapeHtml(String(stopRules.min_sample ?? '—'))}, success threshold ${escapeHtml(String(stopRules.success_threshold ?? '—'))}, harm threshold ${escapeHtml(String(stopRules.harm_threshold ?? '—'))}</div>
 <span class="maturity-label" data-testid="exp-state">${escapeHtml(badge)}${experiment.evaluation_reason && (inconclusive || experiment.state === 'stopped') ? ` (${escapeHtml(experiment.evaluation_reason)})` : ''}</span>
 <span class="maturity-label" data-testid="data-through">data through ${escapeHtml(experiment.data_through ?? '—')}</span>

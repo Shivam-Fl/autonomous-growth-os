@@ -25,17 +25,17 @@ const url = (path) => `http://127.0.0.1:${server.address().port}${path}`;
 const EXPENSIVE = {
   opportunity_id: 'opp_alpha_expensive',
   tenant_id: 'tenant_alpha',
-  value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+  value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
 };
 const CHEAP = {
   opportunity_id: 'opp_alpha_cheap',
   tenant_id: 'tenant_alpha',
-  value: 2000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost: 100, downside: 2, delay: 1,
+  value_micros: 2_000_000_000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost_micros: 100_000_000, downside: 2, delay: 1,
 };
 const LOW = {
   opportunity_id: 'opp_alpha_low',
   tenant_id: 'tenant_alpha',
-  value: 1000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost: 500, downside: 2, delay: 2,
+  value_micros: 1_000_000_000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost_micros: 500_000_000, downside: 2, delay: 2,
 };
 
 const EXPERIMENT = {
@@ -61,7 +61,7 @@ test('POST /v1/opportunities stores the record, computed score and all eight com
   assert.equal(body.score, 0.9208);
   assert.equal(body.expected_contribution_micros, 1_700_000_000);
   assert.deepEqual(body.components, {
-    value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
   });
 });
 
@@ -164,6 +164,8 @@ test('evaluating a known experiment appends an evaluation row and updates state 
   assert.equal(underpowered.outcome, 'inconclusive');
   assert.equal(underpowered.reason, 'underpowered');
   assert.equal(underpowered.next_state, 'inconclusive');
+  assert.equal(underpowered.appended, true, 'the evaluation row landed');
+  assert.equal(underpowered.duplicate, false);
 
   const after1 = await (await fetch(url('/v1/experiments?tenant_id=tenant_alpha'))).json();
   assert.equal(after1.experiments[0].state, 'inconclusive', 'inconclusive persists as the card state');
@@ -187,6 +189,8 @@ test('evaluating a known experiment appends an evaluation row and updates state 
   })).json();
   assert.equal(win.outcome, 'win');
   assert.equal(win.next_state, 'matured');
+  assert.equal(win.appended, true);
+  assert.equal(win.duplicate, false);
   const matured = repositories.experiments.get('tenant_alpha', 'exp_alpha_budget');
   assert.equal(matured.state, 'matured');
   assert.equal(matured.evaluation_result, 'win');
@@ -200,6 +204,27 @@ test('the evaluation row resists mutation through the repository surface too', (
   const rows = repositories.evaluations.listForExperiment('tenant_alpha', 'exp_alpha_budget');
   assert.equal(rows.length, 2, 'both evaluations survived, unmutated');
   assert.deepEqual(rows.map((row) => row.result), ['inconclusive', 'win']);
+});
+
+test('a duplicate evaluation append is a no-op the caller is told about', () => {
+  // The value the evaluate route now puts on the wire: two settlements of the
+  // same experiment at the same millisecond collide on the append-only row, and
+  // the second is deduplicated rather than overwriting the first (TR-20).
+  const at = '2026-09-25T10:00:00.000Z';
+  const append = (result) => repositories.evaluations.append({
+    tenant_id: 'tenant_alpha',
+    experiment_id: 'exp_alpha_dupe',
+    evaluated_at: at,
+    result,
+    reason: null,
+    counts: { control_conversions: 30, control_exposures: 1000, treatment_conversions: 70, treatment_exposures: 1000 },
+  });
+  const first = append('win');
+  assert.deepEqual(first, { appended: true });
+  const second = append('win');
+  assert.deepEqual(second, { appended: false }, 'the duplicate is reported, not silently dropped');
+  const rows = repositories.evaluations.listForExperiment('tenant_alpha', 'exp_alpha_dupe');
+  assert.equal(rows.length, 1, 'one row, not two');
 });
 
 test('a body min_sample below the stored stop rule cannot force a verdict', async () => {
@@ -277,7 +302,7 @@ test('an idempotent re-post reports the stored row, not the discarded body', asy
     body: JSON.stringify({
       ...EXPENSIVE,
       opportunity_id: 'opp_alpha_repost',
-      value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
     }),
   })).json();
   assert.equal(ignored.created, true);
@@ -292,12 +317,12 @@ test('an idempotent re-post reports the stored row, not the discarded body', asy
     body: JSON.stringify({
       ...EXPENSIVE,
       opportunity_id: 'opp_alpha_repost',
-      value: 100, pSuccess: 0.1, fit: 0.1, infoValue: 0.1, reversibility: 0.1, cost: 9999, downside: 9, delay: 9,
+      value_micros: 100_000_000, pSuccess: 0.1, fit: 0.1, infoValue: 0.1, reversibility: 0.1, cost_micros: 9_999_000_000, downside: 9, delay: 9,
     }),
   })).json();
   assert.equal(repost.created, false);
   assert.equal(repost.score, 0.9208, 'the stored score, not the discarded body');
-  assert.equal(repost.components.value, 6000, 'the stored components, not the discarded body');
+  assert.equal(repost.components.value_micros, 6_000_000_000, 'the stored components, not the discarded body');
   assert.equal(
     repost.expected_contribution_micros,
     1_700_000_000,
@@ -312,7 +337,7 @@ test('an opportunity whose component product overflows is rejected and never ran
     body: JSON.stringify({
       ...CHEAP,
       opportunity_id: 'opp_alpha_overflow',
-      value: 1e308, infoValue: 1e308,
+      value_micros: 9_007_199_254_740_991, infoValue: 1e308,
     }),
   });
   assert.equal(response.status, 400);
@@ -327,6 +352,31 @@ test('an opportunity whose component product overflows is rejected and never ran
   for (const row of listing.opportunities) {
     assert.equal(Number.isFinite(row.score), true, `${row.opportunity_id} has a finite stored score`);
   }
+});
+
+test('money that is not integer micros is rejected, never stored and never nulled on the wire', async () => {
+  // The failure this closes: a raw-unit float as large as 1e308 validated, and
+  // its contribution came back Infinity, which JSON.stringify turned into null
+  // on the response. Money is safe-integer micros now, so the request is
+  // refused before anything is written.
+  for (const bad of [{ value_micros: 6_000_000_000.5 }, { value_micros: 1e303 }, { cost_micros: -1 }]) {
+    const response = await fetch(url('/v1/opportunities'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...CHEAP, opportunity_id: 'opp_alpha_bad_money', ...bad }),
+    });
+    assert.equal(response.status, 400, JSON.stringify(bad));
+    const body = await response.json();
+    assert.equal(body.code, 'OPP_BAD_MONEY', JSON.stringify(bad));
+    assert.equal(body.expected_contribution_micros, undefined, 'no contribution on a rejected post');
+  }
+
+  const listing = await (await fetch(url('/v1/opportunities?tenant_id=tenant_alpha'))).json();
+  assert.equal(
+    listing.opportunities.some((row) => row.opportunity_id === 'opp_alpha_bad_money'),
+    false,
+    'nothing was stored',
+  );
 });
 
 test('tenant B cannot read tenant A rows through either listing', async () => {

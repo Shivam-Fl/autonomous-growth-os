@@ -7,18 +7,29 @@
 //   Score = value x pSuccess x fit x infoValue x reversibility
 //         / cost / downsideRisk / opportunityDelay
 //
-// Divisor floors: cost, downside and delay each act as a divisor floored at
-// 1, so a zero cost can never divide by zero or score infinite. The stored
-// score is the ONLY rank key everywhere (score desc, id asc);
+// Money is integer micros of the currency's major unit, like every other
+// record in this app (TR-1/TR-20, conventions, money.js): value_micros and
+// cost_micros are non-negative safe integers, and the other six components are
+// dimensionless multipliers. The score is scale-free — value_micros divided by
+// cost_micros is the same ratio either way.
+//
+// Divisor floors: cost is floored at one currency unit in micros and downside
+// and delay at 1, so a zero cost can never divide by zero or score infinite.
+// The stored score is the ONLY rank key everywhere (score desc, id asc);
 // expectedContribution is a stored display field, never a sort key.
 
-const COMPONENTS = ['value', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost', 'downside', 'delay'];
+const COMPONENTS = ['value_micros', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost_micros', 'downside', 'delay'];
 const RATIO_COMPONENTS = ['pSuccess', 'fit', 'reversibility', 'infoValue'];
-const DIVISORS = ['cost', 'downside', 'delay'];
+const MONEY_COMPONENTS = ['value_micros', 'cost_micros'];
 
 /** Divisor floor (spec section 26): a zero-cost opportunity is scored with
- * cost treated as 1, never as a divide-by-zero or an infinite score. */
-const DIVISOR_FLOOR = 1;
+ * cost treated as one currency unit, never as a divide-by-zero or an infinite
+ * score. The floor carries the money unit with it, or the zero-cost score
+ * would silently rescale by 1e6. */
+const MICROS_PER_UNIT = 1_000_000;
+
+/** downside and delay are multipliers, not money, so their floor is 1. */
+const DIMENSIONLESS_FLOOR = 1;
 
 /** Stored score precision: four decimals keeps seeded rows exactly equal to
  * the pinned examples (0.9208) and re-seeding byte-stable. */
@@ -58,8 +69,8 @@ export function validateOpportunity(input) {
   }
   // Ranges: probabilities/fit/reversibility are [0,1]; information value is a
   // multiplier and may exceed 1 (information can be worth more than immediate
-  // profit). Money-style components are positive finite numbers (raw, in
-  // currency units: the divisor floors land in scoreOpportunity, not here).
+  // profit). The two money components are integer micros (the divisor floors
+  // land in scoreOpportunity, not here).
   for (const key of RATIO_COMPONENTS.filter((key) => key !== 'infoValue')) {
     if (input[key] < 0 || input[key] > 1) {
       return rejected('OPP_BAD_COMPONENT', key, 'must be between 0 and 1');
@@ -68,9 +79,12 @@ export function validateOpportunity(input) {
   if (input.infoValue < 0) {
     return rejected('OPP_BAD_COMPONENT', 'infoValue', 'must be non-negative');
   }
-  for (const key of ['value', 'cost']) {
-    if (input[key] < 0) {
-      return rejected('OPP_BAD_MONEY', key, 'must be non-negative');
+  // Money is integer micros: a fractional rupee, a negative amount and a value
+  // above MAX_SAFE_INTEGER are all rejected, so every stored amount is exact.
+  for (const key of MONEY_COMPONENTS) {
+    const micros = input[key];
+    if (!Number.isSafeInteger(micros) || micros < 0) {
+      return rejected('OPP_BAD_MONEY', key, `must be a non-negative integer number of micros, got ${JSON.stringify(micros)}`);
     }
   }
   for (const key of ['downside', 'delay']) {
@@ -79,22 +93,23 @@ export function validateOpportunity(input) {
     }
   }
   // The score is the product of the five numerator components, so the product
-  // is bounded too: individually in-range components (value 1e308 times
-  // infoValue 1e308) overflow to an infinite score, which would rank above
-  // every real opportunity and store as null in the score column.
+  // is bounded too: individually in-range components (a safe-integer
+  // value_micros times infoValue 1e308) overflow to an infinite score, which
+  // would rank above every real opportunity and store as null in the score
+  // column.
   if (!Number.isFinite(numeratorProduct(input))) {
-    return rejected('OPP_BAD_COMPONENT', 'components', 'the product of value, pSuccess, fit, infoValue and reversibility must be a finite number');
+    return rejected('OPP_BAD_COMPONENT', 'components', 'the product of value_micros, pSuccess, fit, infoValue and reversibility must be a finite number');
   }
   const opportunity = {
     opportunity_id: input.opportunity_id,
     tenant_id: input.tenant_id,
     name: typeof input.name === 'string' && input.name.length > 0 ? input.name : input.opportunity_id,
-    value: input.value,
+    value_micros: input.value_micros,
     pSuccess: input.pSuccess,
     fit: input.fit,
     infoValue: input.infoValue,
     reversibility: input.reversibility,
-    cost: input.cost,
+    cost_micros: input.cost_micros,
     downside: input.downside,
     delay: input.delay,
   };
@@ -107,14 +122,18 @@ function rejected(code, field, message) {
 
 /** The score's numerator: the five multiplied components (spec section 26). */
 function numeratorProduct(opportunity) {
-  return opportunity.value * opportunity.pSuccess * opportunity.fit * opportunity.infoValue * opportunity.reversibility;
+  return opportunity.value_micros * opportunity.pSuccess * opportunity.fit * opportunity.infoValue * opportunity.reversibility;
 }
 
 /** Score one validated opportunity from its stored components, divisors
- * floored so a zero cost/downside/delay scores high, not infinite. */
+ * floored so a zero cost/downside/delay scores high, not infinite. The money
+ * floor is one currency unit in micros; the ratio is scale-free, so the floor
+ * moves with the unit and the score does not. */
 export function scoreOpportunity(opportunity) {
-  const [cost, downside, delay] = DIVISORS.map((key) => Math.max(opportunity[key], DIVISOR_FLOOR));
-  const score = Math.round((numeratorProduct(opportunity) / cost / downside / delay) * SCORE_PRECISION) / SCORE_PRECISION;
+  const costMicros = Math.max(opportunity.cost_micros, MICROS_PER_UNIT);
+  const downside = Math.max(opportunity.downside, DIMENSIONLESS_FLOOR);
+  const delay = Math.max(opportunity.delay, DIMENSIONLESS_FLOOR);
+  const score = Math.round((numeratorProduct(opportunity) / costMicros / downside / delay) * SCORE_PRECISION) / SCORE_PRECISION;
   // validateOpportunity already rejects a non-finite numerator; this guards
   // direct callers, so an unscorable record ranks last (0), never first.
   return Number.isFinite(score) ? score : 0;
@@ -122,13 +141,16 @@ export function scoreOpportunity(opportunity) {
 
 /**
  * Derived display field only (integer micros), never a sort key:
- * truncated(value in micros x pSuccess) - truncated cost in micros. `value`
- * and `cost` are recorded in currency units, so micros are x 1e6.
+ * truncated(value_micros x pSuccess) - cost_micros. Both amounts are already
+ * micros, so there is no unit conversion here and none to get wrong.
  */
 export function expectedContribution(opportunity) {
-  const valueMicros = Math.trunc(opportunity.value * 1_000_000);
-  const costMicros = Math.trunc(opportunity.cost * 1_000_000);
-  return Math.trunc(valueMicros * opportunity.pSuccess) - costMicros;
+  const contribution = Math.trunc(opportunity.value_micros * opportunity.pSuccess) - opportunity.cost_micros;
+  // A validated value_micros is a safe integer and pSuccess <= 1, so this
+  // cannot overflow; the guard is for direct callers that bypass validation,
+  // where an unrepresentable result is shown as 0 rather than serialised as
+  // null on the wire (the same unscorable-record-returns-0 convention as above).
+  return Number.isSafeInteger(contribution) ? contribution : 0;
 }
 
 /**
