@@ -432,5 +432,26 @@
       "run": "36122142187"
     }
   ],
-  "implemented_version": 1
+  "implemented_version": 1,
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 1,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5"
+    ],
+    "sha": "a4f9f876f9a8269ae8a3b712b0203427f093598f",
+    "run_id": "36135159450",
+    "work_order_version": 1,
+    "at": "2026-09-25T12:38:28.860Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-1",
+      "title": "Journal detail drawer renders unsanitized decision fields via innerHTML — stored XSS via POST /v1/decisions"
+    }
+  ]
 }
