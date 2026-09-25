@@ -248,5 +248,21 @@
   "work_order_posted_at": "2026-09-25T16:13:59.423Z",
   "work_order_from": "plan",
   "work_order_comment": "5835618420",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "qa": {
+    "verdict": "pass",
+    "introduced_bugs": 0,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5"
+    ],
+    "sha": "101d8754aa12aaabdefafdb69c4d093ef91b50f6",
+    "run_id": "36160028439",
+    "work_order_version": 1,
+    "at": "2026-09-25T16:27:08.229Z"
+  },
+  "qa_open_bugs": []
 }
