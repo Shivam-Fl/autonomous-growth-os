@@ -910,5 +910,44 @@
       }
     ],
     "pr": "53"
-  }
+  },
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 5,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7"
+    ],
+    "sha": "38982a85f26a687d024315b3c32fb7e538e09e7b",
+    "run_id": "36178352636",
+    "work_order_version": 2,
+    "at": "2026-09-25T19:23:25.891Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-3",
+      "title": "A kill switch raised at the global, tenant or campaign scope never blocks a write, while the product tells the operator automation is frozen"
+    },
+    {
+      "id": "BUG-5",
+      "title": "A capability signed with the public dev secret executes without ever consulting the autonomy gate, so new-geography and campaign-launch are not gated at all"
+    },
+    {
+      "id": "BUG-2",
+      "title": "POST /v1/guardian/re-enable answers re_enabled:true for a scope that matched no active row"
+    },
+    {
+      "id": "BUG-4",
+      "title": "The approval success toast is destroyed by the reload in the same task and is never painted"
+    },
+    {
+      "id": "BUG-1",
+      "title": "POST /v1/capabilities answers 500 INTERNAL when action_class is absent or not a bindable scalar"
+    }
+  ]
 }
