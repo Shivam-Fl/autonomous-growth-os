@@ -89,6 +89,133 @@
   "stopped_at": null,
   "dispatched_stage": "plan",
   "validated_from": "plan",
-  "validated_at": "2026-09-25T06:45:59.901Z",
-  "validated_ac_changes": []
+  "validated_at": "2026-09-25T06:56:19.965Z",
+  "validated_ac_changes": [],
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Dashboard ideal state lists Meta campaigns, ad sets, ads and insights tables from the fake provider, each with a row count and rows sorted deterministically by id",
+        "how_to_verify": "Boot with seed data, open /, confirm four tables with counts and id-sorted rows",
+        "id": "AC-1",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "Adapter contract suite runs the identical read sequence (campaigns, ad sets, ads, insights) against the fake provider and the live provider with stubbed transport, with zero business-logic changes between runs and zero network",
+        "how_to_verify": "CI runs test/integrations/meta_ads.test.js contract cases where the live leg injects a stub fetchImpl serving canned Graph-shaped JSON",
+        "id": "AC-2",
+        "source": "IAC-1",
+        "verify": "test"
+      },
+      {
+        "check": "With the fake provider set to quota-exhausted or permission-revoked, the dashboard error panel names the failing check (provider-sync/quota or provider-sync/permission), shows the last-good sync timestamp, offers Retry, and keeps the prior campaign rows visible",
+        "how_to_verify": "Open /?meta_error=quota and /?meta_error=revoked, confirm named error, timestamp, retry button and preserved rows",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "browser"
+      },
+      {
+        "check": "The pinned Graph API version is defined in exactly one exported constant and the fake provider implements every method of the typed read interface",
+        "how_to_verify": "CI runs the version-pin and full-interface cases in test/integrations/meta_ads.test.js",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "A versioned Meta read adapter behind a typed interface ships campaigns, ad sets, ads and insights reads first with a fake provider for tests and simulation",
+        "how_to_verify": "CI runs the adapter contract suite; dashboard renders its data in a browser",
+        "id": "AC-5",
+        "source": "TR-13",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Expose GET /v1/meta/* HTTP endpoints for the reads",
+        "rejected_because": "The dashboard is server-rendered and can call the in-process adapter directly; new HTTP surface adds versioning and error-envelope work with no operator value in a read-first slice, and the issue names the contract as the JS interface behind src/integrations/meta_ads"
+      },
+      {
+        "approach": "Persist synced Meta rows into SQLite derived_metrics",
+        "rejected_because": "Meta reads are raw source payloads owned by the provider, not derived metrics; persisting them now would mix raw and derived storage and break the TR-20 separation the foundation slice just established"
+      }
+    ],
+    "approach": "Add a versioned Meta adapter behind a typed read interface in src/integrations/meta_ads with the Graph version pinned in exactly one exported constant: index.js holds the contract (GRAPH_API_VERSION constant, typed shapes, error envelope, deterministic by-id sort, credential gating), fake.js implements the full interface with deterministic fixture data plus quota/revoked failure injection, and live.js implements the same interface over an injectable transport (constructor takes { token, fetchImpl } where fetchImpl defaults to globalThis.fetch; every request URL interpolates the pinned version; 429/403 map to typed quota/permission errors; provider JSON is boundary-validated by parsing, never casting; secrets are never logged) and is only constructible for reads when META_ADS_ACCESS_TOKEN is present (otherwise it returns META_NOT_CONFIGURED without touching the network). The contract suite's live leg runs the live provider class with an injected test token and a stub fetchImpl serving canned Graph-version-shaped JSON, so the identical shape/row-count/sort assertions run over both providers with zero business-logic changes and zero network (no real host is ever contacted). Extend the dashboard in src/web/pages.js with campaign regions (campaigns, ad sets, ads, insights tables with row counts and id sort) covering ideal, empty (existing no-connected-account checklist), loading (skeletons), partial (stale banner) and error (named failing check plus last-good timestamp plus Retry, prior rows preserved via a last-good snapshot passed in at render) states, and wire src/api/routes.js to construct the per-request fake provider and pass ?meta_error=quota|revoked through to renderPage. Cover with the adapter contract suite run identically against fake and stubbed-transport live plus dashboard region tests. Owner decision from plan/brief.md is followed: Meta end to end first; spec section 37 (Google-first wedge) is stale and overridden by that decision.",
+    "assumptions": [
+      "Graph API pinned version v24.0 is current enough; currency is not asserted, only single-definition pinning",
+      "No real Meta credentials exist in CI or QA, so the live path never touches the real network: CI exercises live reads against the stubbed transport (injected fetchImpl serving canned Graph-shaped JSON) and exercises the credential gate as refusal"
+    ],
+    "confidence": 84,
+    "confidence_rationale": "Adapter pattern, dashboard states, and test layout all already exist in the repo (fake-provider convention, five-state pages, node:test mirroring src/); the only new surface is the Meta read interface, which is read-only and credential-gated, and the rejection's stubbed-transport mechanism maps directly onto the existing globalThis.fetch default plus injected fetchImpl.",
+    "files": [
+      {
+        "action": "create",
+        "change": "Export GRAPH_API_VERSION single constant, typed read interface (listCampaigns, listAdSets, listAds, getInsights), typed error envelope {code,message,details,retryable} with codes META_QUOTA_EXHAUSTED, META_PERMISSION_REVOKED, META_NOT_CONFIGURED, META_NETWORK, credential-gating helper, and deterministic by-id sort helper",
+        "path": "src/integrations/meta_ads/index.js"
+      },
+      {
+        "action": "create",
+        "change": "FakeMetaAdsProvider implementing the full typed interface with deterministic fixture data (3 campaigns, ad sets, ads, insights with integer spend_micros), id-sorted output, and injectable failure modes ok|quota|revoked for tests and simulation",
+        "path": "src/integrations/meta_ads/fake.js"
+      },
+      {
+        "action": "create",
+        "change": "LiveMetaAdsProvider implementing the same interface over an injectable fetchImpl defaulting to globalThis.fetch, with the pinned version interpolated into every request URL, env-credential gating (META_ADS_ACCESS_TOKEN), 429/403 mapped to typed quota/permission errors, boundary validation of provider JSON (parse, never cast), secrets never logged",
+        "path": "src/integrations/meta_ads/live.js"
+      },
+      {
+        "action": "edit",
+        "change": "Dashboard gains Meta campaign regions: campaigns, ad sets, ads and insights tables each with row counts and deterministic id sort; renderPage accepts { metaProvider, metaError } so ideal shows fake data with last-good sync timestamp, empty keeps the existing connect-Meta checklist, loading shows skeleton KPI/campaign cards without layout shift, partial shows stale-provider banner with age, error names the failing check (provider-sync/quota or provider-sync/permission), shows last-good timestamp, offers Retry button (focus moves to it), and preserves prior rows from the passed-in last-good snapshot; tables expose headers and row counts, single column under 900px",
+        "path": "src/web/pages.js"
+      },
+      {
+        "action": "edit",
+        "change": "Page routes construct a per-request FakeMetaAdsProvider and pass request.query.state plus request.query.meta_error through to renderPage as { override, metaProvider, metaError }, so /?meta_error=quota|revoked drives the dashboard error panel with preserved rows",
+        "path": "src/api/routes.js"
+      }
+    ],
+    "issue": 18,
+    "kind": "feature",
+    "out_of_scope": [
+      "IAC-none deferred: all four IACs are covered in this slice",
+      "Meta writes, drafts and budgets (later slice of the same adapter)",
+      "First-party funnel truth (separate measurement ticket)",
+      "Policy kernel and executor (separate safety ticket)",
+      "Google Ads integration (later epic reusing this slice, per owner decision in plan/brief.md)"
+    ],
+    "qa_script": [
+      "npm run sdlc:serve, open http://localhost:3000/ and confirm campaign, ad-set, ad and insights tables with row counts and id-sorted rows plus a last-good sync timestamp",
+      "Open /?state=empty (connect-Meta checklist), /?state=loading (skeletons), /?state=partial (stale banner), /?state=error (retry panel naming what failed and what is still true)",
+      "Open /?meta_error=quota and /?meta_error=revoked and confirm the named check, last-good timestamp, Retry button, and preserved prior rows",
+      "npm run sdlc:verify for the adapter contract and dashboard region suites"
+    ],
+    "risks": [
+      "Live provider targets graph.facebook.com, which is not in env.api_allowlist; it is credential-gated and CI only ever runs it against the injected stub fetchImpl (zero network), so QA stays local-only, but a person must allowlist the host before any live-read ticket",
+      "Dashboard error copy names graph.facebook.com in text only (no request is sent); no data leaves the runner"
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "contract reads run identically against the fake provider and the live provider with stubbed transport (injected test token plus stub fetchImpl serving canned Graph-version-shaped JSON): campaigns, ad sets, ads, insights shapes, row counts and deterministic id sort with zero business-logic changes between runs",
+          "live leg asserts zero network: every request went through the injected stub fetchImpl, the real global fetch was never called, and no request left the process",
+          "every live request URL seen by the stub fetchImpl contains the pinned GRAPH_API_VERSION path segment",
+          "quota exhaustion and revoked permission surface as named typed errors with retryable flags on both providers (live leg via stubbed 429/403 JSON)",
+          "live provider without META_ADS_ACCESS_TOKEN returns META_NOT_CONFIGURED and never calls the injected fetch (stub asserts zero calls)",
+          "GRAPH_API_VERSION is defined in exactly one exported constant and the fake provider implements every method of the typed read interface"
+        ],
+        "path": "test/integrations/meta_ads.test.js"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "dashboard ideal renders the four Meta tables with row counts and id-sorted rows from the fake provider",
+          "dashboard error with meta_error=quota/revoked names the failing check, shows last-good timestamp, offers Retry, and preserves prior rows",
+          "dashboard loading/partial/error preview shells keep skeletons, stale banner and retry without touching storage"
+        ],
+        "path": "test/web/pages.test.js"
+      }
+    ],
+    "understanding": "Issue #18 is the first Meta Ads slice of epic #14: a read-only Meta adapter (campaigns, ad sets, ads, insights) behind src/integrations/meta_ads with a fake provider for tests/simulation and a credential-gated live path, plus dashboard campaign regions with ideal/empty/loading/error states. Binding owner decision (plan/brief.md): Meta end to end first, Google Ads later, which overrides the Google-first argument in spec section 37. Depends on #16 (done): boot, SQLite repositories, five-state pages, and sdlc verbs all exist to build on.",
+    "version": 2
+  }
 }
