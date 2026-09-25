@@ -172,7 +172,19 @@
     "understanding": "Issue #19 is the shadow-mode slice of epic #14: before any spend moves, the system records what it would do with predicted impact in a decision journal, evaluates predictions at maturity, and reports calibration (precision, false-intervention rate). The contract face is the decision record (immutable StateSnapshot reference, do-nothing alternative, expected distributions, downside, evidence/memory refs, critic result, policy id, evaluation scheduled at maturity); the UI face is the /journal page (filterable table, detail drawer, live calibration summary, all five states). Dependencies #17 (measurement) and #18 (Meta read) are done, so maturity math and provider patterns exist to reuse; the binding epic #14 answer fixes Meta-first ordering. v2 was rejected because the live panel (computed from the decisions repository, which held 3 seed rows with no evaluation-outcome field) and the QA script (precision 0.70 over 10 matured from the frozen replay) named two different data sources as one; v3 takes rejection option (a) live-truth: the record gains an evaluation outcome, the seed writes evaluated outcomes producing 1.00/0.00 live rates, the frozen 0.70 aggregate stays CI-only under test/ and never reaches the page, and every live sentence names the repository.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/domain/decisions.js",
+    "src/data/db.js",
+    "src/data/repositories.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "src/web/client.js",
+    "scripts/seed.js",
+    "test/fixtures/replay-scenarios.json",
+    "test/domain/decisions.test.js",
+    "test/api/decisions.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
