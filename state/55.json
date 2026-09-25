@@ -181,7 +181,16 @@
   ],
   "on_complete": "merge",
   "artifacts": {},
-  "failure_history": [],
+  "failure_history": [
+    {
+      "stage": "plan",
+      "error_signature": "cf147870ae4ffcc2",
+      "error_type": "unknown",
+      "attempt": 3,
+      "at": "2026-09-25T22:02:31.721Z",
+      "digest": "The plan stage failed and no known error pattern matched. The raw output is below."
+    }
+  ],
   "review_history": [
     {
       "criteria": [
