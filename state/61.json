@@ -310,7 +310,60 @@
         "detail": "The same rationale is written twice in one file, near-verbatim and 235 lines apart: lines 24-29 above the mainOf definition and lines 264-268 above its pin test both say the id is load-bearing, both say #61 restores it and pins both acceptances and rejections, and both say a second relaxation would let the 25 shells pass. The file's own precedent does not do this.\n\n`test/web/pages.test.js:264`\n\nEvidence: Lines 24-29: 'the id is load-bearing, because the assertion below is only about the landmark the skip link points at... Issue #61 restores it and pins both the acceptances and the rejections, so a second relaxation cannot pass the 25 shells for the wrong reason again.' Lines 264-268: 'so its id requirement is load-bearing: relaxed, the assertion would be satisfied by some other <main> and the 25 shells would still pass. Issue #61 restores it and pins both the acceptances and the rejections, so a second relaxation cannot go unnoticed again.' The precedent is the H1_HOOK pair: the constant's comment (18-21) says what the hook is and why the class is not it, and the pin test's comment (279-282) says something different and specific to the test — 'relaxed on purpose, so it is pinned here against both what it must accept and what it must still reject: a relaxation that quietly stopped matching anything would pass the 25 shells for the wrong reason, and one that stopped rejecting would protect nothing.' The .page-title rule test (1231-1233) follows the same shape. This diff is the first place the second comment restates the first.\n\nFix: Cut the restatement: reduce lines 264-268 to the pin test's own job, in the H1_HOOK wording — that mainOf's id requirement is what a second relaxation would drop, and the test pins both directions so neither a silent non-match nor a silent accept can pass. Leave the id-is-load-bearing rationale where it belongs, at the definition. Note this compounds rather than conflicts with correctness finding index 2: that finding's fix says to edit both comments, and only one of them contains the misattribution it is correcting."
       }
     ],
-    "pr": "62"
+    "pr": "62",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "major",
+        "title": "On every error shell the first Tab does not reach the skip link, because the Retry button autofocuses on load",
+        "expected": "On a fresh load with no prior interaction, the first element to receive focus is the skip link, on every route and in every state — including ?state=error, which AC-1's how_to_verify names explicitly.",
+        "actual": "Before any key is pressed, document.activeElement is already BUTTON[data-action=\"retry\"] on all five error shells. The first Tab moves past the skip link: on /journal?state=error it lands on the first journal 'Open' button, and on /, /opportunities and /approvals it lands on <body> after focus has cycled out of the document. A keyboard or screen-reader user who lands on a failed page therefore never gets the skip link as their first stop, which is the exact moment they most need it. ?state=ideal/empty/loading/partial are unaffected.",
+        "repro": [
+          "Serve the app: PORT=3000 npm run sdlc:serve",
+          "Open http://localhost:3000/journal?state=error in a fresh browser window",
+          "Press no key; in the console run document.activeElement — it is the Retry BUTTON, not <body>",
+          "Press Tab once; document.activeElement is BUTTON.button.journal-open, not the skip link",
+          "Control: open http://localhost:3000/journal (no ?state=) and repeat — the first Tab does land on A.skip-link",
+          "Reproduces identically on all five routes with ?state=error, and identically on origin/main (served on a second port) — it is pre-existing, not caused by PR #62"
+        ],
+        "suspected_cause": "src/web/client.js:36-40 runs `var failedRetry = document.querySelector('.panel-error [data-action=\"retry\"]'); if (failedRetry) { failedRetry.focus(); }` unconditionally on load, before the user has pressed anything. It sets the focus entry point deep in the document. The new ordering lock in test/web/pages.test.js:153-171 compares document *offsets* (skip.index < main.index) and cannot see a programmatic focus pre-emption, so no test in the suite covers the focus *order* the skip link exists to guarantee. The fix is a maintainer call: either drop the autofocus on load, or scope it so it does not pre-empt the first Tab, or amend AC-1 to exclude the error state — I am not proposing which, because the autofocus is a deliberate, documented decision (see .sdlc/memory/qa/selectors.md, 'focused automatically on error pages, so keyboard assertions start there') and the two behaviours genuinely conflict.",
+        "area": "skip-link / focus order",
+        "evidence": [
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-4-journal-error-first-tab-not-skip-link.png",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-4-approvals-error-first-tab-not-skip-link.png",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-4-control-ideal-first-tab-is-skip-link.png",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-4-base-journal-error-same-on-base.png",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-9-ac1-error-state.json",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-9-error-tab-order.json"
+        ],
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      },
+      {
+        "id": "BUG-2",
+        "severity": "minor",
+        "title": "\\bid=\"main\" matches data-id=\"main\", so both guards accept a main landmark that has lost its id",
+        "expected": "The heading-hierarchy matcher and the skip-link guard require the landmark to carry the real id=\"main\" — the skip link's target. A <main data-id=\"main\"> with no id is not that target and should be rejected by both.",
+        "actual": "Both guards use \\b, and '-' is a non-word character, so \\bid=\"main\" matches the tail of data-id=\"main\". With <main id=\"main\" tabindex=\"-1\"> changed to <main data-id=\"main\" tabindex=\"-1\"> in src/web/pages.js, test/web/pages.test.js on HEAD is 53 pass / 0 fail, and the page in a real browser serves a skip link whose href=\"#main\" resolves to nothing: activating it leaves focus on the <a> rather than moving it into the landmark.",
+        "repro": [
+          "Copy the repo to a scratch directory (do not edit the repo under test)",
+          "In src/web/pages.js, change the layout's '<main id=\"main\" tabindex=\"-1\">' to '<main data-id=\"main\" tabindex=\"-1\">'",
+          "Run node --test test/web/pages.test.js — 53 pass / 0 fail",
+          "Serve the scratch tree and open /: document.getElementById('main') is null",
+          "Press Tab then Enter — document.activeElement is the <a class=\"skip-link\"> itself, not MAIN#main",
+          "The same mutation against an origin/main checkout is also green (51 pass / 0 fail), so the blind spot predates this PR"
+        ],
+        "suspected_cause": "\\b asserts a word boundary, not whitespace, so any hyphenated attribute ending in id satisfies it. A one-line change — require whitespace before the attribute, e.g. /\\sid=\"main\"/ — closes it in both places: mainOf at test/web/pages.test.js:28 (new in this diff) and the mainAttrs clause at :161 (unchanged context from origin/main). The new pin at :268 rejects <main> and <main id=\"other\"> but not the data-id shape, which is the one hole left in the family it is meant to close.",
+        "area": "test/web/pages.test.js matchers",
+        "evidence": [
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-9-mutant-data-id-skip-link-lands-on-the-link.png",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-9-unmutated-focus-lands-in-main.png",
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-7-mutation-blindspot.json"
+        ],
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      }
+    ]
   },
   "qa": {
     "verdict": "fail",
