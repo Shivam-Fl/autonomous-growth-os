@@ -300,7 +300,32 @@
         "detail": "The new test re-creates two fixture blocks that already exist verbatim in this file, in a file that already solves this with helpers. Lines 907-917 are a byte-for-byte copy of lines 860-870 (the tenant_usd create plus the opp_usd_expensive opportunity create, including the long inline record), and lines 931-937 are the third copy of the seven-line `envelope` closure already at 225-231 and 269-275, differing from the first only in the tenant_id literal. The file defines `freshRepos()` and `seededRepos()` at the top for exactly this reason, so the idiom for sharing a fixture here is established and this diff walks past it twice.\n\n`test/web/pages.test.js:907`\n\nEvidence: `sed -n '907,917p' test/web/pages.test.js | diff - <(sed -n '860,870p' test/web/pages.test.js)` is empty — the two blocks are identical, all ten lines. `sed -n '931,937p' | diff - <(sed -n '225,231p')` reports exactly one changed line, `tenant_id: 'tenant_usd'` against `tenant_id: 'tenant_demo'`. The work order did instruct that the two existing USD tests not be touched, so this is the implementer following a constraint rather than an unforced choice; the constraint is what deserves a second look, not the result. The live cost is bounded — the fixtures are frozen literals, so drift between the copies is not a correctness risk today — but the next USD fixture added to this file has three prior examples to copy from, and each copy is a chance to take one of them wrongly.\n\nFix: Lift the two blocks into a file-level helper next to `freshRepos()` — e.g. `function usdRepos() { const repos = freshRepos(); repos.tenants.create({...}); repos.opportunities.create({...}); return repos; }` plus a shared `appendEvents(repos, tenant_id, events)` — and have all three tests call it. That touches the two existing USD tests the work order fenced off, so it belongs to whoever owns the order rather than inside this diff without that agreement."
       }
     ],
-    "pr": "57"
+    "pr": "57",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "minor",
+        "title": "A tenant stored with a lowercase or whitespace-padded currency code reads every amount in rupees",
+        "area": "money() / ISO_CURRENCIES lookup, src/web/pages.js:218",
+        "expected": "A tenant whose stored currency is 'usd' or ' USD ' renders its amounts in its own currency — Intl.NumberFormat formats 'usd' as $1.00, so this build can render the code — or the write path rejects a non-canonical code instead of accepting it silently.",
+        "actual": "ISO_CURRENCIES.includes(currency) is an exact, case-sensitive, untrimmed comparison, so every code outside ISO_CURRENCIES falls into the documented INR fallback. A tenant stored as 'usd' sees 'value ₹6,000.00' for an opportunity the same tenant sees as '$6,000.00' the moment the code is upper-cased. No warning, no error, HTTP 200 throughout.",
+        "repro": [
+          "Boot the app (npm run sdlc:seed, then PORT=3000 npm run sdlc:serve).",
+          "Set the tenant currency to a non-canonical spelling of a supported code: UPDATE tenants SET currency = 'usd' WHERE id = 'tenant_demo';",
+          "Open /opportunities and read [data-testid=opportunity-row] [data-component=value_micros] for data-opportunity-id='opp_seed_expensive'.",
+          "It reads 'value ₹6,000.00'. Repeat with 'Usd' and with ' USD ' — identical.",
+          "Control: set the currency to 'USD' and reload — the same row reads 'value $6,000.00'."
+        ],
+        "evidence": [
+          "qa-evidence/T-11-opportunities-lowercase-usd.png",
+          "qa-evidence/T-11-rerun.json",
+          "qa-evidence/T-13-opportunities-padded-currency.png"
+        ],
+        "suspected_cause": "src/web/pages.js:216 — formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR')). The membership test is exact and untrimmed, so canonicalisation never happens; tenants.create (src/data/repositories.js:31) accepts any string and stores it verbatim. Reproduced unchanged on origin/main by rendering pages.js from that ref with a 'usd' tenant, so it is not this PR's.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      }
+    ]
   },
   "qa": {
     "verdict": "pass",
