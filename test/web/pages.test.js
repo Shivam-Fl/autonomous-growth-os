@@ -880,6 +880,111 @@ test('a non-INR tenant sees its own currency on opportunity value, cost and the 
   assert.doesNotMatch(dashboard, /₹500\.00|₹4,000\.00/);
 });
 
+// The USD-tenant fixture above has no experiment and no events, so it reaches
+// the ideal branch of every page and no partial branch at all. These five sites
+// have that shape: dropping the tenant currency at any one of them leaves the
+// whole suite green, because nothing renders them under a currency of their
+// own. This fixture has an experiment and a qualified lead, and renders every
+// page twice — ideal and override:'partial' — so either branch of a shared
+// call site is caught. Each assertion is scoped to the site it guards:
+//
+//   - experimentCard's two money() calls, on the caps line;
+//   - both cards.map(experimentCard) sites in experiments(), which the two
+//     renders take in turn;
+//   - the partial branch of opportunities(), whose rankedList call the
+//     existing fixture never reaches;
+//   - the partial branch of dashboard(), whose metaRegions call likewise;
+//   - the Qualified CPL tile in kpiStrip, the em-dash for a tenant with no
+//     events — the spend and the qualified lead below are what make it a
+//     number, and the assertion on the resolved volume is what keeps a broken
+//     fixture from reading as a currency bug.
+//
+// No line numbers here on purpose: a coverage claim pinned to line numbers is
+// what went stale in the #43 work order. A function or branch name moves with
+// the code, and the mutation is what keeps the claim honest.
+test('a non-INR tenant sees its own currency on every branch that draws money', async () => {
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: 'USD' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_usd',
+    opportunity_id: 'opp_usd_expensive',
+    score: 0.9208,
+    record: {
+      opportunity_id: 'opp_usd_expensive', tenant_id: 'tenant_usd', name: 'US bet',
+      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+  repos.experiments.create({
+    tenant_id: 'tenant_usd',
+    experiment_id: 'exp_usd_running',
+    state: 'running',
+    record: {
+      experiment_id: 'exp_usd_running', tenant_id: 'tenant_usd', name: 'US bet',
+      arms: [{ id: 'arm_control', name: 'Control' }, { id: 'arm_exact', name: 'Exact-intent' }],
+      caps: { max_spend_micros: 500_000_000, max_downside_micros: 200_000_000 },
+      stopRules: { min_runtime_hours: 48, min_sample: 100, success_threshold: 0.1, harm_threshold: 0.2 },
+    },
+  });
+
+  const occurredAt = '2026-09-25T08:00:00.000Z';
+  const envelope = (event_id, event_type, payload) => {
+    const validated = validateEvent({
+      event_id, event_type, tenant_id: 'tenant_usd', schema_version: '1', occurred_at: occurredAt, payload,
+    });
+    assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
+    return validated.event;
+  };
+  for (const event of [
+    envelope('evt_usd_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'USD' }),
+    envelope('evt_usd_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_us', session_id: 'sess_us' }),
+  ]) {
+    repos.rawEvents.append(event);
+  }
+  // Before any money assertion: the qualified lead is what stops the CPL tile
+  // reading the em-dash. If that has gone, the '$3,000.00' assertion below is
+  // measuring the fixture, not the renderer.
+  const seeded = repos.rawEvents.listByTypes('tenant_usd', ['spend.observed', 'lead_qualified']);
+  assert.equal(
+    seeded.filter((event) => event.event_type === 'lead_qualified').length, 1,
+    'the CPL tile has a qualified volume to divide by, so it is not the em-dash',
+  );
+
+  // Every page is rendered twice: the ideal branch and the partial one, because
+  // a mutation at either branch of a shared call site has to be caught and only
+  // the pair catches both.
+  for (const override of [undefined, 'partial']) {
+    const where = override === undefined ? 'the ideal branch' : "the partial branch (override:'partial')";
+    const opts = override === undefined ? {} : { override };
+
+    const row = (await renderPage('/opportunities', { repositories: repos, ...opts }))
+      .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+    assert.match(row, /value \$6,000\.00/, `opportunity value in dollars on ${where}`);
+    assert.match(row, /cost \$1,900\.00/, `opportunity cost in dollars on ${where}`);
+    assert.doesNotMatch(row, /₹/, `no rupee sign on the opportunity row on ${where}`);
+
+    const card = (await renderPage('/experiments', { repositories: repos, ...opts }))
+      .match(/data-experiment-id="exp_usd_running"[\s\S]*?<\/li>/)[0];
+    assert.match(
+      card, /data-testid="caps">Max spend \$500\.00 · max downside \$200\.00/,
+      `both caps in dollars on ${where}`,
+    );
+    assert.doesNotMatch(card, /₹/, `no rupee sign in the experiment card on ${where}`);
+
+    const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider(), ...opts });
+    const cplTile = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
+    const cplText = cplTile.match(/kpi-value">([^<]+)</)[1];
+    assert.equal(cplText, '$3,000.00', `Qualified CPL in dollars on ${where}, got ${cplText}`);
+    // Scoped to their own sections: the CPL value and the insight spend are
+    // both dollar strings, so an unscoped assertion lets one site's regression
+    // hide behind another's correct amount.
+    const adSets = html.match(/data-testid="meta-adSets"[\s\S]*?<\/section>/)[0];
+    const insights = html.match(/data-testid="meta-insights"[\s\S]*?<\/section>/)[0];
+    assert.match(adSets, /\$500\.00/, `the ad-set budget in dollars on ${where}`);
+    assert.match(insights, /\$4,000\.00/, `the insight spend in dollars on ${where}`);
+    assert.doesNotMatch(adSets + insights, /₹/, `no rupee sign in the Meta sections on ${where}`);
+  }
+});
+
 test('the Meta error shell renders the last-good money cells in the tenant currency too', async () => {
   // The last-good path is the one the ideal page never exercises, so a
   // wrong-currency symbol would hide there: on ?meta_error=quota the tables

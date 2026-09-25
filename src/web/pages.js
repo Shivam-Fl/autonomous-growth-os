@@ -201,7 +201,13 @@ const META_CELLS = {
  * degrades to the em-dash (today's ₹NaN), and a currency outside
  * ISO_CURRENCIES falls back to INR rather than throwing — tenants.create
  * accepts any string, so an unknown code is bad data, and a page render must
- * not 500 on it.
+ * not 500 on it. That fallback is a relabelling, not a pass-through: a currency
+ * this build cannot render is drawn as INR, so a tenant whose stored currency
+ * is bad data reads its amounts in rupees rather than in its own code. That is
+ * a deliberate choice — the alternative, printing the bare code ('ZZZ 1,000.00'),
+ * puts a mislabelled-but-honest amount in front of a reader; this puts a
+ * correctly-formatted amount whose unit is the repo default. The trade is
+ * knowingly wrong-unit over knowingly unformatted.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
