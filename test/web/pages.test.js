@@ -21,6 +21,14 @@ const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals']
 // plain text.
 const H1_HOOK = /<h1[^>]*\bdata-testid="page-title"[^>]*>[^<]*<\/h1>/;
 
+// The skip link's target, as a heading-hierarchy matcher. Hoisted beside
+// H1_HOOK for the same reason and with the same rule: the id is load-bearing,
+// because the assertion below is only about the landmark the skip link points
+// at, and issue #46 relaxed it past the requirement #52 relied on. Issue #61
+// restores it and pins both the acceptances and the rejections, so a second
+// relaxation cannot pass the 25 shells for the wrong reason again.
+const mainOf = (html) => /<main\b[^>]*\bid="main"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
+
 function freshRepos() {
   const dir = mkdtempSync(join(tmpdir(), 'pages-'));
   const db = openDatabase(join(dir, 'app.db'));
@@ -113,7 +121,6 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
   };
   // Headings in document order, as levels: h1 .. h6.
   const levelsOf = (html) => [...html.matchAll(/<h([1-6])\b[^>]*>/g)].map(([, level]) => Number(level));
-  const mainOf = (html) => /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
   const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
 
   for (const route of ROUTES) {
@@ -144,17 +151,22 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
 // sequence — or activating the skip link scrolls to #main and leaves focus on
 // <body>, putting the keyboard user back in the header it promises to skip.
 const skipLinkFocusesMain = (html) => {
-  const mainAttrs = /<main\b([^>]*)>/.exec(html)?.[1] ?? '';
+  const main = /<main\b([^>]*)>/.exec(html);
+  const mainAttrs = main?.[1] ?? '';
   // Find the link by its target rather than by position, so the brand and the
   // nav are not depended on to sort before it.
-  const skipAttrs = [...html.matchAll(/<a\b([^>]*)>/g)]
-    .map(([, attrs]) => attrs)
-    .find((attrs) => /\bhref="#main"/.test(attrs));
+  const skip = [...html.matchAll(/<a\b([^>]*)>/g)]
+    .find(([, attrs]) => /\bhref="#main"/.test(attrs));
   return Boolean(
     /\bid="main"/.test(mainAttrs) &&
     /\btabindex="-1"/.test(mainAttrs) &&
-    skipAttrs !== undefined &&
-    /\bclass="[^"]*\bskip-link\b[^"]*"/.test(skipAttrs)
+    skip !== undefined &&
+    /\bclass="[^"]*\bskip-link\b[^"]*"/.test(skip[1]) &&
+    // Every clause above is asked of a tag in isolation, so a link sitting
+    // BELOW </main> satisfies all of them and the bypass is destroyed. The
+    // bypass is document order, so compare the two offsets. Last in the chain,
+    // so main.index is never read on a null match.
+    skip.index < main.index
   );
 };
 
@@ -181,6 +193,13 @@ test('the skip link targets a focusable main landmark on every route and state',
     skipLinkFocusesMain('<a class="skip-link" href="#main" lang="en">Skip to content</a><main id="main" lang="en" tabindex="-1"></main>'),
     'a third attribute on either tag is tolerated'
   );
+  // The order pin below is deliberately on the link-before-main relation and
+  // not on the link being the document's first element, so the brand and the
+  // nav may still sort ahead of it.
+  assert.ok(
+    skipLinkFocusesMain('<header>brand nav</header><a class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'brand and nav may sort before the skip link'
+  );
 
   // What the lock protects, one failure mode at a time.
   assert.ok(
@@ -195,6 +214,23 @@ test('the skip link targets a focusable main landmark on every route and state',
     !skipLinkFocusesMain('<a href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
     'a link to #main that is not the skip link is not the bypass'
   );
+  // The defect issue #61 exists for: every clause above holds for a link that
+  // sits BELOW </main>, because each one is asked of the tag in isolation. The
+  // bypass is the document order, and nothing above compares the two offsets.
+  assert.ok(
+    !skipLinkFocusesMain('<main id="main" tabindex="-1"></main><a class="skip-link" href="#main">Skip to content</a>'),
+    'a skip link after </main> is not a bypass, however well-formed it is'
+  );
+
+  // The order clause reads main.index, so a document with no <main> or no <a>
+  // has to answer false rather than throw.
+  assert.equal(
+    skipLinkFocusesMain('<a class="skip-link" href="#main">S</a>'), false, 'no main landmark is not a bypass'
+  );
+  assert.equal(
+    skipLinkFocusesMain('<main id="main" tabindex="-1"></main>'), false, 'no link at all is not a bypass'
+  );
+  assert.equal(skipLinkFocusesMain(''), false, 'an empty document is not a bypass');
 });
 
 // The other end of the same link: the one line that stops the skip link's focus
@@ -206,6 +242,38 @@ test('the #main focus suppression still carries the declaration the skip target 
   const rule = /#main:focus\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule, 'src/web/styles.css defines a #main:focus rule');
   assert.match(rule[1], /outline:\s*none\s*;/, 'the focused landmark paints no ring');
+});
+
+// The other end of that same rule, in the mode that strips author colours:
+// Chromium honours `outline: none` under forced-colors and substitutes no
+// system colour of its own, while every other focusable element keeps its
+// ring. Without the carve-out, <main> would be the one focusable thing on the
+// page with no indicator, at the exact moment a forced-colors user needs to
+// know the bypass ran. The default-mode suppression above is not the thing
+// under test; this asserts only that the mode gets one back.
+test('the #main focus suppression is restored inside forced-colors so the landmark is not the one focusable thing with no indicator', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const carveOut = /@media\s*\(forced-colors:\s*active\)\s*\{[^@]*?#main:focus\s*\{([^}]*)\}/.exec(css);
+  assert.ok(carveOut, 'src/web/styles.css restores the focus ring inside @media (forced-colors: active)');
+  assert.match(
+    carveOut[1], /outline:\s*2px\s+solid\s+CanvasText\s*;/,
+    'the carve-out paints a system colour, so it survives the mode'
+  );
+});
+
+// mainOf decides which landmark the heading-hierarchy assertion above reads,
+// so its id requirement is load-bearing: relaxed, the assertion would be
+// satisfied by some other <main> and the 25 shells would still pass. Issue
+// #61 restores it and pins both the acceptances and the rejections, so a
+// second relaxation cannot go unnoticed again.
+test('the main matcher still requires id="main" on the landmark it captures', () => {
+  assert.equal(mainOf('<main id="main"><h1>Command dashboard</h1></main>'), '<h1>Command dashboard</h1>', 'the shipped markup matches');
+  assert.equal(mainOf('<main id="main" tabindex="-1"><h1>X</h1></main>'), '<h1>X</h1>', 'the tabindex #52 added still matches');
+  assert.equal(mainOf('<main tabindex="-1" id="main"><h1>X</h1></main>'), '<h1>X</h1>', 'attribute order is not pinned');
+  assert.equal(mainOf('<main tabindex="-1" id="main" lang="en"><h1>X</h1></main>'), '<h1>X</h1>', 'a fourth attribute is tolerated');
+
+  assert.equal(mainOf('<main><h1>X</h1></main>'), '', 'a main with no id is not the skip link target');
+  assert.equal(mainOf('<main id="other"><h1>X</h1></main>'), '', 'another id is not the skip link target');
 });
 
 // The matcher above was relaxed on purpose (issue #46), so it is pinned here

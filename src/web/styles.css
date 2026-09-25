@@ -112,9 +112,25 @@ a {
    This suppression works by ID specificity: #main:focus is 1,1,0 against the
    bare :focus-visible above at 0,1,0, so lowering the selector to main:focus
    loses it silently. outline is not inherited, so nothing inside main is
-   affected. */
+   affected.
+
+   That reasoning is about the authored ring alone. Forced-colors is the mode
+   that strips author colours, and there Chromium honours `outline: none` and
+   substitutes no system colour of its own, while every other focusable element
+   keeps its ring because the UA maps the accent to one. So the carve-out below
+   restores an indicator, painted in a system colour, exactly in that mode: the
+   landmark is the one element a forced-colors user cannot afford to lose, and
+   the moment the skip link moves focus there is the moment they need to see it
+   land. It comes after the rule above because both selectors are 1,1,0 and the
+   later one wins on source order. */
 #main:focus {
   outline: none;
+}
+
+@media (forced-colors: active) {
+  #main:focus {
+    outline: 2px solid CanvasText;
+  }
 }
 
 #main {
