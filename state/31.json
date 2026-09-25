@@ -105,7 +105,12 @@
     "understanding": "Issue #31 carries three non-blocking review findings from #29, each explicitly requiring re-verification before planning since that PR kept moving. I verified all three against current main and all three still reproduce: (1) the dashboard KPI strip (src/web/pages.js:341) calls computeFunnel(rows) without the tenant currency while GET /v1/metrics (src/api/routes.js:142) passes it, so pre-fix mixed-currency legacy rows corrupt dashboard CPL while the API excludes them; (2) latestTimestamp in src/data/repositories.js:101 has zero callers anywhere in the repo (staleness goes through dataThrough); (3) journeyRows in test/domain/measurement.test.js:21 accepts tenantId but never stamps tenant_id on rows, and the cross-tenant test additionally gives the second tenant different event_ids (suffix _x), so its volume-6 assertion passes with or without tenant-keyed dedup. No human decisions are recorded in plan/brief.md and no prior plan was rejected.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/web/pages.js",
+    "src/data/repositories.js",
+    "test/domain/measurement.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
