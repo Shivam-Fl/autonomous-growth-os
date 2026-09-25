@@ -684,6 +684,30 @@
         "detail": "The view layer keeps its own copy of which opportunity keys are money, outside the domain module that this PR makes the owner of exactly that classification. The AC-12/AC-17 review grep cannot see it, because it looks for Number.isSafeInteger and this is a hand-rolled key set.\n\n`src/web/pages.js:685`\n\nEvidence: src/web/pages.js:685 declares `const MONEY_COMPONENTS = new Set(['value_micros', 'cost_micros'])` and :694 uses it to decide which components go through money() at all; the other six render as String(raw). That is the same classification the new COMPONENT_RULES table holds (isReadableMoney on value_micros and cost_micros), restated in a second module. The line is unchanged context in this diff — it pre-dates the PR — so this is a note rather than a defect, but the PR is the change that created the thing being duplicated, and a ninth money key would silently skip the money renderer on the page while the domain projected it as money."
       }
     ],
-    "pr": "43"
+    "pr": "43",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "major",
+        "title": "One stored opportunity whose record column is not a JSON object returns 500 on GET /v1/opportunities and on /opportunities",
+        "expected": "A stored record this build cannot read degrades the way every other unreadable record in this PR degrades: that row's components read null, expected_contribution_micros reads null, and the other thirteen rows still render. At minimum the two endpoints must not 500.",
+        "actual": "Both GET /v1/opportunities and GET /opportunities return HTTP 500 {\"code\":\"INTERNAL\",\"message\":\"internal error\"}, with the server log reading 'unhandled request error: TypeError: Cannot read properties of null (reading 'name')' at the shape() function in src/data/repositories.js, on the line name: record.name ?? row.opportunity_id. parseJson(row.record, {}) only falls back to {} for a null/undefined TEXT column; a column holding the four characters n-u-l-l parses to JSON null, so record is null and record.name throws. A row whose record is an array or a bare string parses to a non-object and does not throw on the name read, but a client reading the body still gets the raw stored value in the record field, unprojected.",
+        "repro": [
+          "Start the app: npm ci --no-audit --no-fund && npm run sdlc:seed && npm run sdlc:serve",
+          "Write one row directly into the SQLite database: INSERT OR REPLACE INTO opportunities (tenant_id, opportunity_id, record, score, created_at) VALUES ('tenant_demo','opp_repro_1','null',0.5,'2026-09-25T20:00:00.000Z');",
+          "curl -i http://localhost:3000/v1/opportunities  ->  HTTP/1.1 500 Internal Server Error",
+          "curl -i -o /dev/null -w '%{http_code}' http://localhost:3000/opportunities  ->  500",
+          "Read the server log: 'unhandled request error: TypeError: Cannot read properties of null (reading 'name')'",
+          "Cleanup: DELETE FROM opportunities WHERE opportunity_id='opp_repro_1';"
+        ],
+        "evidence": [
+          "qa-evidence/T-record-garbage-response.txt",
+          "qa-evidence/T-record-garbage-page-status.txt"
+        ],
+        "suspected_cause": "shape() in src/data/repositories.js reads record.name before any readability check, and parseJson only substitutes its {} fallback for a null/undefined column rather than for a column that parses to null. Note the seed guard added by this PR is a partial mitigation by accident: isReadableOpportunityRecord(null) is false because all eight keys read undefined, so a corrupt row at a seed id throws a clean OPP_STALE_RECORD — but a corrupt row at any other id still 500s the endpoints. This is a recurrence of the shape the work order's root_cause names — the read path and the guard disagree about what 'a record this build cannot read' means — at the one place in the read path that does not consult the shared rule.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      }
+    ]
   }
 }
