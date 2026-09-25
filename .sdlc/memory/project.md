@@ -84,18 +84,14 @@ what deliberately is not, in `docs/prd.md`; how every screen looks and behaves, 
 - **TR-26** Tenant isolation holds on every query path; cross-account learning flows only as de-identified aggregates with minimum cohort sizes, and customer evidence always overrides weaker priors.
 
 ## Commands
-Nothing here runs yet: the repository has no code, so every verb is a stub in `package.json`, and the command beside it is its TARGET. The first ticket whose code a verb runs makes it real (the reserved-path guard allows exactly that once), and ci-verify fails any branch that has code while `sdlc:verify` is still a stub.
+Real since #27 (foundation) landed; the verbs below are what CI and QA run.
 
-- `sdlc:verify` — stub now; target `npm ci --no-audit --no-fund && node --test test/`
-- `sdlc:serve` — stub now; target `node src/index.js`
-- `sdlc:seed` — stub now; target `node scripts/seed.js`
-- `sdlc:ready` — stub now; target `curl -fsS http://localhost:3000/health`
+- `sdlc:verify` — `npm ci --no-audit --no-fund && node --test`
+- `sdlc:serve` — `node src/index.js`
+- `sdlc:seed` — `node scripts/seed.js` (idempotent: fixed ids deduplicated on `(tenant_id, event_id)`; writes through the repository layer, never direct SQL)
+- `sdlc:ready` — `curl -fsS http://localhost:${PORT:-3000}/health`
 
-Stubbed for now:
-- verify is a stub until src/ and test/ exist; the first code ticket makes it real by adding node:test suites.
-- serve is a stub until src/index.js listens on $PORT (default 3000) with GET /health; the foundation ticket makes it real.
-- seed is a stub until scripts/seed.js writes a demo tenant, fake ad data and sample learnings through the app; the measurement ticket makes it real.
-- ready is a stub until /health exists; it becomes real with the same ticket as serve.
+Config comes from the environment: `PORT` (default 3000), `DB_PATH` (default `./data/app.db`). `sdlc:ready` honors `PORT`; probing a non-default port needs `PORT` set in the probing shell too.
 
 ## Deploy
 Nowhere yet. v1 boots locally via compose (npm run sdlc:serve on $PORT, default 3000) and QA drives that local instance; there is no staging or production environment and no per-PR cloud preview. The first deployment issue, filed after this brief lands, creates the Cloud Run plus Cloud SQL path with per-PR previews; until then any ticket assuming hosted infrastructure is out of scope.
