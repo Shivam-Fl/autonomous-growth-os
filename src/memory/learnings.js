@@ -13,7 +13,19 @@ export const EVIDENCE_TYPES = Object.freeze([
   'system_eval',
 ]);
 
-const SCOPE_FIELDS = Object.freeze(['tenant', 'product', 'platform', 'campaignType', 'persona', 'geography', 'season']);
+/** Evidence type → research-mesh tier (A strongest … E weakest), so a
+ * learning's displayed grade follows its evidence class, never its wording. */
+export const EVIDENCE_TYPE_TIERS = Object.freeze({
+  randomized_experiment: 'A',
+  quasi_experiment: 'B',
+  system_eval: 'B',
+  observational: 'C',
+  external_research: 'C',
+});
+
+/** The scope vocabulary. Repositories may use it to build a SQL-level
+ * prefilter; scopeMatch is the authority that decides admission. */
+export const SCOPE_FIELDS = Object.freeze(['tenant', 'product', 'platform', 'campaignType', 'persona', 'geography', 'season']);
 
 const LEARNING_STATUSES = Object.freeze(['candidate', 'accepted', 'contradicted', 'stale', 'rejected']);
 

@@ -4,7 +4,9 @@
 // update or delete surface (append-only, TR-20), and replayRawToDerived()
 // rebuilds derived_metrics from raw_events alone.
 
+import { randomUUID } from 'node:crypto';
 import { utcNow } from './db.js';
+import { SCOPE_FIELDS } from '../memory/learnings.js';
 
 function parseJson(text, fallback) {
   if (text === null || text === undefined) {
@@ -268,15 +270,39 @@ function createLearningRepository(db) {
        confidence, applicability, status, created_at, valid_from, stale_after, updated_at
      FROM learnings WHERE tenant_id = ? ORDER BY updated_at, id LIMIT ? OFFSET ?`,
   );
-  // Scope prefilter: scope text equality is only a coarse SQL-level hint —
-  // it narrows rows whose stored scope mentions the context value verbatim.
-  // The structured scopeMatch gate in src/memory/learnings.js always runs
-  // after so a learning whose scope does not actually match is never served.
-  const selectForContext = db.prepare(
+  // Scope prefilter: a coarse SQL-level narrowing only. For every scope field
+  // the context actually supplies, keep rows that match it or express no
+  // opinion (OR IS NULL) — a row that names a field the context never supplies
+  // survives this query and is cut by the structured scopeMatch gate in
+  // src/memory/learnings.js, which always runs after. Keys come from the
+  // fixed SCOPE_FIELDS whitelist; values are bound parameters.
+  const selectForContextBase =
     `SELECT tenant_id, id, claim, scope, evidence_refs, evidence_type, effect_metric, effect_estimate, effect_low, effect_high,
        confidence, applicability, status, created_at, valid_from, stale_after, updated_at
-     FROM learnings WHERE tenant_id = ? AND status = 'accepted' ORDER BY updated_at, id`,
-  );
+     FROM learnings WHERE tenant_id = ? AND status = 'accepted'`;
+  const selectForContextNoContext = db.prepare(`${selectForContextBase} ORDER BY updated_at, id`);
+  const selectForContextPrefiltered = new Map();
+
+  function scopePrefilterFields(context) {
+    return Object.keys(context ?? {})
+      .filter((key) => SCOPE_FIELDS.includes(key))
+      .filter((key) => typeof context[key] === 'string' && context[key].length > 0);
+  }
+
+  function selectForContext(context) {
+    const fields = scopePrefilterFields(context);
+    if (fields.length === 0) {
+      return selectForContextNoContext;
+    }
+    const cacheKey = fields.join('|');
+    let statement = selectForContextPrefiltered.get(cacheKey);
+    if (!statement) {
+      const clauses = fields.map((key) => ` (json_extract(scope, '$.${key}') = ? OR json_extract(scope, '$.${key}') IS NULL)`);
+      statement = db.prepare(`${selectForContextBase} AND${clauses.join(' AND ')} ORDER BY updated_at, id`);
+      selectForContextPrefiltered.set(cacheKey, statement);
+    }
+    return statement;
+  }
   const insertCall = db.prepare(
     `INSERT OR IGNORE INTO model_calls
       (tenant_id, id, provider, model, prompt_version, tool_catalog_version, task_type,
@@ -351,14 +377,34 @@ function createLearningRepository(db) {
       return selectAll.all(tenantId, limit, offset).map(shape);
     },
 
-    /** Accepted rows only; the caller runs the full retrieval gate over them. */
-    listAccepted(tenantId) {
-      return selectForContext.all(tenantId).map(shape);
+    /** Accepted rows for the tenant, narrowed by the SQL scope prefilter;
+     * the caller runs the full retrieval gate over them. */
+    listForContext(tenantId, context = {}) {
+      const fields = scopePrefilterFields(context);
+      return selectForContext(context).all(tenantId, ...fields.map((key) => context[key])).map(shape);
     },
+  };
+}
 
+function createCallLogRepository(db) {
+  const insertCall = db.prepare(
+    `INSERT OR IGNORE INTO model_calls
+      (tenant_id, id, provider, model, prompt_version, tool_catalog_version, task_type,
+       tokens_in, tokens_out, latency_ms, cost_micros, usefulness, occurred_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectCalls = db.prepare(
+    `SELECT tenant_id, id, provider, model, prompt_version, tool_catalog_version, task_type,
+       tokens_in, tokens_out, latency_ms, cost_micros, usefulness, occurred_at
+     FROM model_calls WHERE tenant_id = ? ORDER BY occurred_at, id LIMIT ?`,
+  );
+
+  return {
     /** Append the model-router call record for the tenant. Immutable once
-     * written; usefulness is stubbed null until an evaluator fills it. */
-    recordCall(tenantId, call, { id = `mcall_${call.provider}_${Date.parse(call.occurredAt)}` } = {}) {
+     * written; usefulness is stubbed null until an evaluator fills it.
+     * Nothing in this slice writes call records — the router wires this
+     * repository when quorum/critic flows land (out of scope here). */
+    recordCall(tenantId, call, { id = `mcall_${randomUUID()}` } = {}) {
       insertCall.run(
         tenantId,
         id,
@@ -392,6 +438,7 @@ export function createRepositories(db) {
     derived: createDerivedRepository(db),
     sagas: createSagaRepository(db),
     learnings: createLearningRepository(db),
+    callLogs: createCallLogRepository(db),
   };
 }
 

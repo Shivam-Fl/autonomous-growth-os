@@ -10,7 +10,7 @@ import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
 import { formatMoney, fromMicros } from '../domain/money.js';
-import { gateForRetrieval } from '../memory/learnings.js';
+import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
 const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals'];
@@ -458,25 +458,28 @@ ${decisions.map((event) => `<tr>
 
 /** The research-observations panel (TR-10): the tenant's accepted learnings,
  * run through the retrieval gate — only rows that survive scoping, freshness
- * and confidence reach the page. Rendered above the opportunity queue or its
- * empty copy whenever at least one learning is serviceable. */
+ * and confidence reach the page, SQL-prefiltered by scope and capped at the
+ * latest 5 with their evidence tier. Rendered above the opportunity queue or
+ * its empty copy whenever at least one learning is serviceable. */
 function researchObservations(repositories, tenant) {
   if (!tenant) {
     return '';
   }
-  const served = gateForRetrieval(repositories.learnings.listAccepted(tenant.id), {
+  const served = gateForRetrieval(repositories.learnings.listForContext(tenant.id, { tenant: tenant.id }), {
     context: { tenant: tenant.id },
     nowIso: new Date().toISOString(),
   });
   if (served.length === 0) {
     return '';
   }
-  const items = served.map((learning) => `<li class="learning-card">
+  const shown = served.slice(-5);
+  const items = shown.map((learning) => `<li class="learning-card">
 <strong>${escapeHtml(learning.claim)}</strong>
-<span>confidence ${escapeHtml(learning.confidence.toFixed(2))} · evidence: ${escapeHtml(learning.evidenceRefs.join(', '))}</span>
+<span>tier ${escapeHtml(EVIDENCE_TYPE_TIERS[learning.evidenceType] ?? 'E')} · confidence ${escapeHtml(learning.confidence.toFixed(2))} · evidence: ${escapeHtml(String(learning.evidenceRefs.length))} · ${escapeHtml(learning.id)}</span>
 </li>`).join('');
+  const count = shown.length === served.length ? `${served.length}` : `${shown.length} of ${served.length}`;
   return panel({
-    title: `Research observations · ${served.length}`,
+    title: `Research observations · ${count}`,
     body: `<ul class="learning-list">${items}</ul>`,
     testid: 'research-observations',
   });

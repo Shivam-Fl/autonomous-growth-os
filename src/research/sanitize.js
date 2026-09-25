@@ -84,11 +84,26 @@ export function classifyContent(wrapped) {
 }
 
 /**
- * The pipeline gate: malicious content is dropped with no replacement text,
- * so nothing downstream — no browser leg, no model call, no tool
- * invocation — ever receives it.
+ * The pipeline gate: takes the raw fetch result ({url, text, retrievedAt}),
+ * wraps it as untrusted external content, and classifies the wrapped
+ * envelope. Malicious content is dropped with no replacement text, and so is
+ * a page with no text at all — it cannot be wrapped, carries no claim, and
+ * failing closed keeps its reason visible in the audit note the mesh
+ * records. Benign content returns as the wrapped envelope: content_origin
+ * and allowed_effect ride on everything the pipeline keeps. A result without
+ * a usable url or retrieved_at is a vendor contract violation, not page
+ * content, so it still throws its stable code.
  */
-export function sanitizeForPipeline(wrapped) {
+export function sanitizeForPipeline({ url, text, retrievedAt }) {
+  let wrapped;
+  try {
+    wrapped = wrapExternal({ url, text, retrievedAt });
+  } catch (error) {
+    if (error.code === 'BAD_TEXT') {
+      return { dropped: true, reason: 'empty external document' };
+    }
+    throw error;
+  }
   const classification = classifyContent(wrapped);
   if (classification.verdict === 'malicious') {
     return { dropped: true, reason: classification.reason };

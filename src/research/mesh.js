@@ -118,8 +118,9 @@ export function stateFor(independence) {
 
 /**
  * Score one claim: tier from its strongest source, independence from the
- * count of distinct domains corroborating it; corroboration lifts the
- * score above that tier seen alone, never past the tier's ceiling.
+ * count of distinct domains corroborating it. Corroboration lifts the score
+ * above that tier seen alone, capped at 1.0 — tier A corroborated stays at
+ * the ceiling instead of exceeding it.
  */
 export function scoreEvidence(sources) {
   let tier = 'E';
@@ -130,7 +131,7 @@ export function scoreEvidence(sources) {
   }
   const domains = [...new Set(sources.map((source) => source.domain).filter(Boolean))];
   const independence = domains.length;
-  const score = TIER_SCORES[tier] * (1 + Math.min(Math.max(independence - 1, 0), 2) * 0.1);
+  const score = Math.min(TIER_SCORES[tier] * (1 + Math.min(Math.max(independence - 1, 0), 2) * 0.1), 1);
   return { tier, score: Math.round(score * 1000) / 1000, independence };
 }
 
@@ -151,7 +152,7 @@ export function detectContradictions(claims) {
         continue;
       }
       const sameTopic = claims[i].topic !== '' && claims[i].topic === claims[j].topic;
-      const opposite = claims[i].polarity !== 0 && claims[i].polarity !== claims[j].polarity;
+      const opposite = claims[i].polarity !== 0 && claims[i].polarity === -claims[j].polarity;
       if (sameTopic && opposite) {
         merged.push({
           claim: claims[i].claim,
@@ -318,12 +319,26 @@ export async function runResearch({
     searchResults = searched.results;
     toolCalls.push({ tool: 'research_search', provider: searchProvider.providerId, count: searched.results.length });
   }
-  // Layer 3 — fetch/extract through the sanitize gate. A dropped page
-  // exists only as an audit note naming the reason (TR-11).
+  // Layer 3 — fetch/extract through the sanitize gate. Every external page
+  // is wrapped at the gate and only the wrapped envelope moves on; a dropped
+  // page exists only as an audit note naming the reason (TR-11).
   let dropped = 0;
   for (const result of searchResults) {
     if (!fetcher) {
-      documents.push({ ...normalizedRow(result, null), layer: 2 });
+      // Vendor snippets are external web content too: the same gate wraps
+      // them before the pipeline keeps anything.
+      const gate = sanitizeForPipeline({ url: result.url, text: result.snippet ?? '', retrievedAt: occurredAt });
+      if (gate.dropped) {
+        dropped += 1;
+        auditNotes.push({ layer: 3, code: 'CONTENT_DROPPED', reason: gate.reason, url: result.url });
+        continue;
+      }
+      documents.push({
+        ...normalizedRow(result, null),
+        layer: 2,
+        contentOrigin: gate.content.content_origin,
+        allowedEffect: gate.content.allowed_effect,
+      });
       continue;
     }
     const fetched = await fetcher({ url: result.url, title: result.title });
@@ -334,7 +349,13 @@ export async function runResearch({
       auditNotes.push({ layer: 3, code: 'CONTENT_DROPPED', reason: gate.reason, url: result.url });
       continue;
     }
-    documents.push({ ...normalizedRow(fetched, null), url: result.url, layer: 3 });
+    documents.push({
+      ...normalizedRow({ ...fetched, contentMarkdown: gate.content.text }, null),
+      url: result.url,
+      layer: 3,
+      contentOrigin: gate.content.content_origin,
+      allowedEffect: gate.content.allowed_effect,
+    });
   }
 
   // Layer 4 — browser last, and only when the gate dropped nothing: a
