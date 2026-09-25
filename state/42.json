@@ -405,5 +405,23 @@
       "note": "The approved plan edits .sdlc/memory/qa/selectors.md, which no ticket branch may change — the Librarian records selector changes from what merges. Plan the heading fix without touching .sdlc/memory/**."
     }
   ],
-  "implemented_version": 2
+  "implemented_version": 2,
+  "qa": {
+    "verdict": "pass",
+    "introduced_bugs": 0,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7"
+    ],
+    "sha": "5875405acebc46fa019a11b9e0024838ce364a53",
+    "run_id": "36166062122",
+    "work_order_version": 2,
+    "at": "2026-09-25T17:34:11.288Z"
+  },
+  "qa_open_bugs": []
 }
