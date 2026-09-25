@@ -442,5 +442,24 @@
   "work_order_posted_at": "2026-09-25T09:28:54.534Z",
   "work_order_from": "plan",
   "work_order_comment": "5830098034",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "qa": {
+    "verdict": "pass",
+    "introduced_bugs": 0,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7",
+      "AC-8"
+    ],
+    "sha": "10f62e54e28169e4d1f06560b20fafd091ad5ee7",
+    "run_id": "36129840921",
+    "work_order_version": 1,
+    "at": "2026-09-25T11:46:12.119Z"
+  },
+  "qa_open_bugs": []
 }
