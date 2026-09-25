@@ -63,3 +63,9 @@ runs again — check the list yourself, whatever the proposal and the critique d
 Confidence below `gates.min_confidence` routes to a human regardless of the approval gate.
 Do not inflate it to get the plan through — a 60 that says why is far more useful than a
 90 that is wrong, and the whole point of the score is that it is load-bearing.
+
+**Paths no ticket may change**, whatever `forbidden_paths` says — the guard refuses the whole
+plan for one of them: `.sdlc/memory/**` (the Librarian's; it records what merged, selectors and
+QA notes included), the approved docs (`docs/spec/**`, `docs/prd.md`, `docs/trd.md`,
+`docs/ui.md`), and the framework (`.github/**`, `.sdlc/**`). If the change would need one, leave
+it out and say so in `risks`.

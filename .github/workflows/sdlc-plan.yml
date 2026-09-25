@@ -602,6 +602,13 @@ jobs:
         if: steps.stop.outputs.stopped != 'true'
         run: node .sdlc/bin/check-split-criteria.mjs
 
+      # And no reserved path, refused at the plan with the reason kept for the next planner. It
+      # was checked only at the implementer's prepare job, one stage and a plan review later, where
+      # it could only stop for a person (growth-os #42).
+      - name: The plan touches no reserved path
+        if: steps.stop.outputs.stopped != 'true'
+        run: node .sdlc/bin/check-forbidden.mjs --file work-order.json --reject
+
       # Kept the moment it validates. The plan lived only on the runner until the reviewer
       # approved it, so a reviewer step that failed discarded a three-agent council and the
       # rerun planned again from nothing; now the rerun reviews this (plan-strategy's `review`).
