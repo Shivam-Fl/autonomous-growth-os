@@ -640,8 +640,11 @@ async function liveProbe(cfg) {
     // The configured OpenAI-only models are probed through the translator, since that is how
     // their stages call them — one run per OpenAI API, because one translator takes one route.
     const { openaiApis } = await import('../.sdlc/bin/model-bridge.mjs');
+    // Only the ones a role runs: a model left in openai_models after its roles moved elsewhere is
+    // a request against the quota that tells nothing about any stage.
+    const used = new Set(ROLES.map((r) => modelFor(cfg ?? {}, r)));
     const groups = { chat: [], responses: [] };
-    if (!models) for (const [m, api] of openaiApis(cfg ?? {})) groups[api].push(m);
+    if (!models) for (const [m, api] of openaiApis(cfg ?? {})) if (used.has(m)) groups[api].push(m);
     runs.push({ models, bridge: groups.chat.join(','), api: '' });
     if (groups.responses.length) runs.push({ direct: 'false', bridge: groups.responses.join(','), api: 'responses' });
   }
