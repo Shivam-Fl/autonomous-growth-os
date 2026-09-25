@@ -4,6 +4,8 @@
 // can touch them even from raw SQL. Postgres replaces this module later
 // behind the same repository interfaces.
 
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export const DEFAULT_DB_PATH = './data/app.db';
@@ -107,6 +109,9 @@ END;`,
 
 /** Open the database at dbPath, applying any migrations not yet recorded. */
 export function openDatabase(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
+  // DatabaseSync cannot create the parent directory itself, and the default
+  // ./data/ is gitignored, so a clean checkout has to have it made on boot.
+  mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec('CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
   const applied = new Set(
