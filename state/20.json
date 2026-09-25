@@ -750,9 +750,61 @@
   },
   "stopped_at": null,
   "dispatched_stage": "root-cause",
-  "validated_from": "plan",
-  "validated_at": "2026-09-25T18:18:35.867Z",
-  "validated_ac_changes": [],
+  "validated_from": "root-cause",
+  "validated_at": "2026-09-25T20:27:22.394Z",
+  "validated_ac_changes": [
+    {
+      "id": "AC-2",
+      "was": {
+        "id": "AC-2",
+        "check": "Delivering the same capability nonce twice performs the provider mutation exactly once; the second delivery answers 200 with executed:false, duplicate:true and the SAME receipt_id, and the receipt carries the reconciliation ('agreed' on a matched re-read) and the drift",
+        "how_to_verify": "Live per qa_script step 9, which mints one capability, executes it, and executes the same envelope again. The unit-level half is test/executor/executor.test.js's duplicate and interleaving cases, which use one injected provider instance and are the only place a single provider write can be counted.",
+        "source": "IAC-2",
+        "verify": "api"
+      },
+      "now": {
+        "id": "AC-2",
+        "check": "Delivering the same capability nonce twice performs the provider mutation exactly once; the second delivery answers 200 with executed:false, duplicate:true and the SAME receipt_id, and the receipt carries the reconciliation ('agreed' on a matched re-read) and the drift",
+        "how_to_verify": "Live per qa_script step 9, which mints one capability, executes it, and executes the same envelope again. The unit-level half is test/executor/executor.test.js's duplicate and interleaving cases, which use one injected provider instance and are the only place a single provider write can be counted. UNCHANGED by this revision and explicitly not rewritten: the criterion is about the same envelope delivered twice, and the fix below widens nothing in it.",
+        "source": "IAC-2",
+        "verify": "api"
+      }
+    },
+    {
+      "id": "AC-8",
+      "was": {
+        "id": "AC-8",
+        "check": "A freeze raised at the global, tenant or campaign scope blocks writes at that scope, not only at the provider scope: a capability minted after the freeze is refused 409 KILL_SWITCH_ACTIVE, the guardian banner names that scope, and a write on a scope the freeze does not cover still succeeds",
+        "how_to_verify": "POST /v1/guardian/trigger with {\"scope\":\"global\"}; open /approvals and read [data-testid=guardian-banner] - it must name the global scope, not the provider. Mint a fresh campaign-status capability (a fresh one, because a spent nonce answers duplicate) and POST it to /v1/actions/execute: 409 KILL_SWITCH_ACTIVE. Repeat for {\"scope\":\"tenant\"} and for {\"scope\":\"campaign\",\"scope_id\":\"campaign_007\"} - under the campaign freeze, campaign_007 is refused and campaign_001 is still 200 executed:true. POST the trigger with a scope and a scope_id that contradict each other ({\"scope\":\"global\",\"scope_id\":\"meta_ads\"}): 400, and no row raised. See qa_script steps 6 and 7.",
+        "source": "TR-4",
+        "verify": "api"
+      },
+      "now": {
+        "id": "AC-8",
+        "check": "A freeze raised at the global, tenant or campaign scope blocks writes at that scope, not only at the provider scope: a capability minted after the freeze is refused 409 KILL_SWITCH_ACTIVE, the guardian banner names that scope, and a write on a scope the freeze does not cover still succeeds",
+        "how_to_verify": "POST /v1/guardian/trigger with {\"scope\":\"global\"}; open /approvals and read [data-testid=guardian-banner] - it must name the global scope, not the provider. Mint a fresh campaign-status capability (a fresh one, because a spent nonce on an altered body answers a refusal, not a receipt) and POST it to /v1/actions/execute: 409 KILL_SWITCH_ACTIVE. Repeat for {\"scope\":\"tenant\"} and for {\"scope\":\"campaign\",\"scope_id\":\"campaign_007\"} - under the campaign freeze, campaign_007 is refused and campaign_001 is still 200 executed:true. POST the trigger with a scope and a scope_id that contradict each other ({\"scope\":\"global\",\"scope_id\":\"meta_ads\"}): 400, and no row raised. See qa_script steps 6 and 7.",
+        "source": "TR-4",
+        "verify": "api"
+      }
+    },
+    {
+      "id": "AC-9",
+      "was": {
+        "id": "AC-9",
+        "check": "POST /v1/actions/execute refuses every capability the server did not issue, whatever its signature: an envelope assembled by hand and signed with the policy kernel's published dev secret is refused 403 with a stable code and writes nothing, including one for new-geography and one carrying a spend move eighteen times the class micro-limit - while a capability minted through /v1/capabilities still executes",
+        "how_to_verify": "Build the envelope by hand for action_class new-geography / create_campaign and sign it with the literal DEFAULT_SIGNING_SECRET exported from src/policy/kernel.js, then POST it to /v1/actions/execute: 403, no receipt, and GET /v1/approvals shows the pending card untouched. Repeat with a budget-change carrying delta_micros 900000000. The control in both directions: a capability minted through /v1/capabilities for campaign-status still executes 200 executed:true, and a tampered genuine envelope still answers 403 BAD_SIGNATURE. See qa_script step 8.",
+        "source": "TR-3",
+        "verify": "api"
+      },
+      "now": {
+        "id": "AC-9",
+        "check": "POST /v1/actions/execute refuses every capability the server did not issue, whatever its signature: an envelope assembled by hand and signed with the policy kernel's published dev secret is refused 403 with a stable code and writes nothing, including one for new-geography and one carrying a spend move eighteen times the class micro-limit - while a capability minted through /v1/capabilities still executes",
+        "how_to_verify": "Build the envelope by hand for action_class new-geography / create_campaign and sign it with the literal DEFAULT_SIGNING_SECRET exported from src/policy/kernel.js, then POST it to /v1/actions/execute: 403, no receipt, and GET /v1/approvals shows the pending card untouched. Repeat with a budget-change carrying delta_micros 900000000. The control in both directions: a capability minted through /v1/capabilities for campaign-status still executes 200 executed:true, and a tampered genuine envelope still answers 403 BAD_SIGNATURE. See qa_script step 8. The nonce this envelope is delivered with does not change the verdict: qa_script step 14 drives the same forgery against a SPENT nonce, which is where version 3 answered 200.",
+        "source": "TR-3",
+        "verify": "api"
+      }
+    }
+  ],
   "approved_too_high": false,
   "work_order_version": 3,
   "work_order_posted_at": "2026-09-25T19:30:38.518Z",
@@ -874,5 +926,253 @@
       "id": "BUG-6",
       "title": "A delivery carrying an already-spent nonce is answered 200 duplicate:true with a receipt for a different mutation, because the nonce dedupe runs before the signature and provenance checks"
     }
-  ]
+  ],
+  "validated_work_order": {
+    "issue": 20,
+    "kind": "feature",
+    "mode": "committed",
+    "root_cause": "validateCapability answers TWO questions with one function, and only one of them is needed to be told the truth about a receipt. Its first three checks (MALFORMED_CAPABILITY shape, then BAD_SIGNATURE) answer IDENTITY: is this the envelope this server issued, unmoved? Its last three (EXPIRED_CAPABILITY, REPLAYED_NONCE, KILL_SWITCH_ACTIVE) answer ADMISSION: may this envelope write NOW. A duplicate delivery arrives UNDER precisely the two conditions admission refuses - a spent nonce and often an active freeze - so identity could not simply be hoisted above the dedupe without breaking AC-2, and the ordering was resolved by leaving the dedupe where it was. src/executor/executor.js:199 reads repositories.actionRecords.getByNonce(capability.tenant, nonce) and returns {executed:false, duplicate:true, receipt_id, reconciliation, drift} before kernel.validateCapability runs at :231 and before the capabilities-table provenance lookup at :244. That lookup's answer describes the STORED envelope's mutation; the body that received it is described by the caller and was never authenticated. Because the lookup is keyed on `nonce` - a value the delivery itself carries - any body at all bearing a spent nonce is answered from the receipt table, and the receipt it is handed is the record of a different mutation. The two gates that would have caught it (the signature, and the comparison against the server's own stored envelope) both live strictly below the branch that returns.",
+    "understanding": "ATTEMPT 2's DIAGNOSIS WAS RIGHT AND ITS COVERAGE WAS NOT. Its root_cause is correct: a signed capability is not authority, the provenance lookup and the re-gate belong on the write path, and all five of QA's previous bugs are genuinely fixed - QA's own retest says so, one for one, and I did not find a sixth. What is wrong is that version 3 did not apply its own rule everywhere it applies. The rule was 'if a value decides whether money moves, exactly one function derives it, and every writer and reader calls that function.' It moved the receipt WRITER behind the gate. It left the receipt READER - the durable dedupe at executor.js:199 - above it, and that reader answers a question ('that mutation is already done, here is its receipt') from a value the caller supplied, having established nothing about the body it is talking to. One reader was audited; the other was not.\n\nIT SAW THIS AND WROTE IT DOWN AS ACCEPTED. residual_risks(3) of version 3 says, in its own words: 'The duplicate short-circuit still runs before every check, so an unsigned POST naming a guessed nonce still learns a receipt id. That was the previous attempt's residual risk and it is deliberately unchanged, because AC-2 requires a duplicate made under a freeze to answer with its receipt.' The exposure is named accurately. The justification is a misreading of AC-2, and that misreading is the whole of BUG-6. AC-2 says: 'Delivering the same capability nonce twice performs the provider mutation exactly once; the second delivery answers 200 with executed:false, duplicate:true and the SAME receipt_id.' The subject is THE SAME ENVELOPE, delivered twice - a second tab, a retried POST. The plan widened it to 'any body carrying that nonce', then used the widened reading to justify leaving the gate below the branch. QA has now falsified exactly that widening, and it falsified it in both directions: the untampered re-delivery still answers 200 duplicate:true (AC-2 holds), and every other body bearing that nonce is now refused (the widening was never in the criterion). The kernel.js comment at :19-20 repeats the same slip in the same shape the plan diagnosed everywhere else - it asserts 'the write path proves provenance against the server's own capabilities table (executor.provenance)', naming a function that does not exist and stating a property that was true on one of the two paths through the write. A claim written in a comment is the artefact this repository keeps producing, and this time it was produced by the plan that named the artefact.\n\nNO TEST COULD HAVE CAUGHT IT, AND THAT IS THE PATTERN TO RECORD. test/executor/executor.test.js:233 and :248 - the two cases that pin duplicate behaviour - build the duplicate by re-delivering the same object the test already spent, so the body under test is the server's own envelope by construction and the defect is unreachable from the suite. That is version 2's residual_risks(4) stated as a fact: 'checks whose fixtures are constructed by the same reasoning as the code they are meant to pin.' The Librarian entry is the one already written, with this as its second instance.\n\nNOTHING HERE IS A CRITERION DEFECT, AND I CHECKED BEFORE SAYING SO. The code is wrong and the criteria are right, so AC-1 through AC-12 are carried forward word for word, unrenumbered and undropped, and AC-13 is added for the defect this PR's fix would otherwise leave open. The tempting move - rewriting AC-2 to say 'any body bearing a spent nonce is answered with that nonce's receipt' - is the worst artefact this pipeline can produce, because every future QA run would then certify the defect. I am not doing it. There is no internal contradiction in AC-2 to point at: 'the same capability nonce' is the same envelope, twice.\n\nI REPRODUCED IT MYSELF against the branch build at df490b0, and the control that pins the cause is the same control QA found: the identical tamper on an UNSPENT nonce is already refused 403 BAD_SIGNATURE, so the mechanism works and is simply below the wrong branch. My outputs, not QA's, are in evidence[].",
+    "approach": "Do not add a check. SPLIT THE ONE CHECK INTO ITS TWO ANSWERS, and let the ordering fall out of the split rather than being argued about again. Every version of this plan so far has tried to fix a gap by adding a statement, and every gap has been a statement that was stated in the wrong place.\n\n1. THE KERNEL OWNS TWO NAMED ANSWERS (src/policy/kernel.js). Extract verifyCapabilityIdentity(capability, { secret }) as its own exported pure function holding exactly the MALFORMED_CAPABILITY shape checks and the BAD_SIGNATURE comparison, and have validateCapability call it as its first step before it goes on to expiry, over-scope, replay and the kill switches. One implementation, two call sites - the same shape as version 3's revalidate port, and the same reason: a caller that assembles the check for itself is a caller that can stop calling it. createKernel binds it exactly as it binds validateCapability, so no caller in the repository ever hands a secret to a signing function by hand. The function's own comment states the boundary in one line: identity decides whether the server may TELL you something, admission decides whether you may WRITE, and the two conditions a duplicate arrives under - a spent nonce, a live freeze - belong to admission only.\n\n2. THE EXECUTOR'S ORDER FOLLOWS (src/executor/executor.js). (0) tenant, unchanged. (1) IDENTITY: kernel.verifyCapabilityIdentity on the delivered body. (2) PROVENANCE: the existing capabilities-table lookup and stored-envelope comparison, moved up verbatim, with the STORED envelope acting as it already does from here on. (3) DURABLE DEDUPE: getByNonce, then the atomic claim, both where they are now but three checks lower. (4) ADMISSION: kernel.validateCapability - expiry, replay, kill switches - plus the existing re-gate, both below the dedupe and both before the provider is reached. Two consequences the implementer should not have to rediscover: the release() calls in the identity and provenance branches go away, because no claim is held yet (an unauthenticated body no longer takes the claim, which was a second, quieter exposure on the same branch), and the duplicate branch is now reachable only by a body the server has just proved is its own, so the receipt it returns describes that body by construction rather than by argument.\n\n3. THE DEDUPE ANSWER IS PROVEN BY EQUALITY, NOT BY THE SIGNATURE ALONE. Widen ENVELOPE_FIELDS from ['authority','capability_id','signature'] to every field in kernel.SIGNED_FIELDS, so step (2) requires the delivered envelope to equal the stored one across everything issuance signed. The signature covers those fields today, so this changes no verdict; what it removes is the argument. With only three fields compared, correctness of the duplicate answer rested on the reader of the code knowing which fields the HMAC covers - and the same reader is what put the branch in the wrong place twice. One comparison, whole envelope, no reasoning left to do.\n\n4. NOTHING AFTER THE DEDUPE MOVES. The re-gate and the kill-switch admission stay below it deliberately, and this is the line worth stating once: a delivery that will not write is answered from storage, and a delivery that will write passes every check. That is why a duplicate of a genuine envelope is still answered 200 under a freeze - the operator must not be told their action failed when it succeeded - while any other body is refused before the freeze is even consulted. I applied exactly this shape to the branch and measured it: 425/425 tests pass including the two duplicate cases, and the six repro bodies go 403 while the untampered one stays 200 both with and without a freeze.\n\n5. TWO COMMENTS THAT ARE NOW LOAD-BEARING. The executor's module header already carries an ordered list of the checks and states that the order IS the safety property; renumber it so it describes the path in the file, and fix the kernel.js comment at :19-20 that names a non-existent executor.provenance and claims a property the file did not have. A comment that asserts a safety property is a test nobody runs, and this repository has now been bitten by one twice.",
+    "files": [
+      {
+        "path": "src/policy/kernel.js",
+        "action": "edit",
+        "change": "Split validateCapability into its two answers. Export verifyCapabilityIdentity(capability, { secret }) as a pure function holding exactly the current MALFORMED_CAPABILITY checks (not an object, a missing or null signed field or capability_id or signature, an unparseable expiry) and the current BAD_SIGNATURE comparison, with a comment naming the boundary - identity decides whether the server may ANSWER about a delivery, admission decides whether it may WRITE, and a spent nonce and a live freeze are admission conditions that a duplicate arrives under by definition. validateCapability calls it as its first step and is otherwise untouched, so its verdict for every input is byte-identical to today: expiry, over-scope, REPLAYED_NONCE and the kill-switch checks stay in it, in that order. createKernel binds verifyCapabilityIdentity alongside validateCapability the same way it binds the other ports, so no caller assembles a signing call by hand. Replace the DEFAULT_SIGNING_SECRET comment's claim that 'the write path proves provenance against the server's own capabilities table (executor.provenance)': there is no such function, and the property it describes is now true on every path rather than one - say what is actually true (a delivered envelope is proved against the capabilities table before the server answers anything about it, including a duplicate).",
+        "why": "The kernel is the only module with no IO, and this is the only place in the repository that can answer 'is this envelope yours' without also answering 'may it write now'. Merging the two answers is what made the ordering unfixable in place, so separating them is the fix."
+      },
+      {
+        "path": "src/executor/executor.js",
+        "action": "edit",
+        "change": "Reorder execute() to (0) tenant, (1) kernel.verifyCapabilityIdentity, (2) the capabilities-table provenance lookup, (3) the durable dedupe - getByNonce then the atomic claim, (4) kernel.validateCapability then the injected re-gate, (5) the write, re-read and receipt. Steps (1), (2) and (4) are the existing code moved, not rewritten: the identity check is new, the provenance block and the re-gate are lifted verbatim, and every refusal keeps its existing stable code and details payload. Two edits the move forces: the release() calls in the identity and provenance branches are deleted, because no claim is held at that point in the function and an unauthenticated body must not take one; and ENVELOPE_FIELDS is widened from ['authority','capability_id','signature'] to every field of kernel.SIGNED_FIELDS, so the provenance comparison requires the delivered envelope to equal the stored one across everything issuance signed. Update the module header's ordered list of checks so the file's own description of the write path is the path - including the line that says the order is the safety property - and keep the comment inside the duplicate branch, adding the one line that makes it true: a duplicate mutates nothing, so it is answered from storage without consulting the kill switches, and it can only be reached by a body the two checks above already proved this server issued.",
+        "why": "This is the only module that calls a provider write, and the branch that returns before the gate is the branch that returns. Every other edit in this work order is a consequence of the ordering set here."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "No change is required and none should be made. Listed only so the implementer does not go looking for a surface: POST /v1/actions/execute maps a returned error to a status through the same branch as before, and the two codes this reordering can newly produce on a spent nonce - BAD_SIGNATURE and CAPABILITY_NOT_ISSUED - are both already mapped to 403 by the change version 3 made to this route.",
+        "why": "The refusal is already an HTTP shape the product knows how to render. A change here would be motion."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/executor/executor.test.js",
+        "action": "edit",
+        "cases": [
+          "REPRODUCES BUG-6: a capability is spent, and a body reusing that spent nonce with a different `resource` is then delivered to the executor - it is refused with a stable code, the answer carries no receipt_id, and the injected provider's write count and the action_records count are both unchanged. The nonce is the ONLY field the delivery keeps.",
+          "the same for a delivery reusing the spent nonce with a different `action_class`, and for one whose `signature` has been replaced with a literal string - each refused, each with the provider write count unchanged",
+          "the strongest case, because it is the one that used to pass every check it could reach: a body built by hand, re-signed over its own altered bytes with the published DEFAULT_SIGNING_SECRET, carrying a real spent nonce and a real capability_id, and asking for new-geography / create_campaign on campaign_009 - refused CAPABILITY_NOT_ISSUED with details.reason altered-envelope, no receipt, no provider write. This is the case a test that only tampers fields cannot see, and it is the one that proves the provenance comparison and not only the HMAC is doing the work.",
+          "the control in the other direction, so the fix cannot be passed by refusing everything: the UNALTERED re-delivery of the same envelope still answers duplicate:true with the SAME receipt_id, reconciliation and drift, and writes nothing - AC-2 unchanged",
+          "and the same untampered re-delivery with an active kill switch still answers duplicate:true with no error, which is the case a too-broad fix breaks: it asserts the identity/admission split is real and not a wholesale move of validateCapability above the dedupe",
+          "a refused delivery takes NO idempotency claim: after a spent-nonce delivery is refused, repositories.idempotency.claim for that nonce still succeeds, asserted through the real repository rather than a stub",
+          "the two existing duplicate tests are kept and are not weakened - the one at the old line 233 and the one at the old line 248 both still pass unchanged, which is the regression net for the reorder"
+        ]
+      },
+      {
+        "path": "test/policy/kernel.test.js",
+        "action": "edit",
+        "cases": [
+          "the split itself is asserted, not assumed: for a malformed body and for a bad-signature body, verifyCapabilityIdentity returns exactly the verdict validateCapability returns; and for a body whose nonce is already spent and for a body under an active freeze, verifyCapabilityIdentity returns ok while validateCapability refuses with REPLAYED_NONCE and KILL_SWITCH_ACTIVE respectively. Pair it with the executor case above, or the half that returns ok looks like a hole rather than a decision.",
+          "validateCapability's verdict is unchanged for every input it already had - expired, over-scope, replayed, frozen, malformed, bad signature - so the extraction is pinned as a refactor and not as a behaviour change",
+          "createKernel exposes verifyCapabilityIdentity, and the bound function takes no secret from its caller, asserted by calling it and getting the same verdict the module-level function returns"
+        ]
+      },
+      {
+        "path": "test/api/actions.test.js",
+        "action": "edit",
+        "cases": [
+          "REPRODUCES BUG-6 over HTTP, the three-step curl QA ran: POST /v1/capabilities, POST the returned envelope to /v1/actions/execute (200 executed:true with a receipt id), then POST it again with `resource` changed to campaign_009 and the nonce untouched - the third response is 403 with a stable code, carries no receipt_id, and the receipt count is unchanged",
+          "the same over HTTP with the signature replaced by the literal 'not-even-a-signature', and with action_class changed to campaign-launch - each 403, no receipt",
+          "the same over HTTP with a body re-signed offline against DEFAULT_SIGNING_SECRET and carrying the spent nonce - 403 CAPABILITY_NOT_ISSUED, no receipt, and no campaign created; this is the request that must not be answered 200 even though its signature verifies",
+          "the kill-switch case: with a freeze active, the altered delivery reusing a spent nonce is refused rather than answered duplicate:true, and the untampered re-delivery of the same envelope is STILL answered 200 duplicate:true with the same receipt id while the freeze is up",
+          "the positive control, so none of the above can be made to pass by breaking the endpoint: a capability minted through /v1/capabilities for campaign-status still executes 200 executed:true, and its second delivery still answers duplicate:true with the SAME receipt id (AC-2 is not weakened to make a refusal pass)"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "The policy regression suite refuses expired, replayed, over-scope, kill-switched (at all four scopes), action-mismatched and maturity-unknown capabilities with stable codes, and no rejected capability reaches the provider",
+        "how_to_verify": "Run `node --test test/policy/kernel.test.js` for the refusal codes: it is a pure module with no provider in it, so the six codes are asserted there and nowhere else. The zero-write half belongs to test/executor/executor.test.js, which is the suite that has an injected provider - its 'every rejection BEFORE the provider is reached' case asserts a zero write count for kill switch, expired, bad signature, over-scope and tenant mismatch. Run both suites; neither substitutes for the other.",
+        "source": "IAC-1",
+        "verify": "test"
+      },
+      {
+        "id": "AC-2",
+        "check": "Delivering the same capability nonce twice performs the provider mutation exactly once; the second delivery answers 200 with executed:false, duplicate:true and the SAME receipt_id, and the receipt carries the reconciliation ('agreed' on a matched re-read) and the drift",
+        "how_to_verify": "Live per qa_script step 9, which mints one capability, executes it, and executes the same envelope again. The unit-level half is test/executor/executor.test.js's duplicate and interleaving cases, which use one injected provider instance and are the only place a single provider write can be counted. UNCHANGED by this revision and explicitly not rewritten: the criterion is about the same envelope delivered twice, and the fix below widens nothing in it.",
+        "source": "IAC-2",
+        "verify": "api"
+      },
+      {
+        "id": "AC-3",
+        "check": "A spend-spike or tracking-loss condition triggered through the route freezes automation, every page shows the guardian banner, writes refuse with KILL_SWITCH_ACTIVE, and only an explicit human re-enable clears it - and the trigger re-arms with no database reset",
+        "how_to_verify": "curl -X POST 'http://localhost:3000/v1/guardian/trigger?kind=spend-spike'; load /, /journal and /approvals and confirm [data-testid=guardian-banner] on each; POST a valid capability to /v1/actions/execute and confirm 409 KILL_SWITCH_ACTIVE; POST /v1/guardian/re-enable with {\"actor\":\"owner\"} and confirm the banner is gone; POST the trigger again and confirm the banner returns. The banner clauses are qa_script steps 8 and 11; test/api/guardian.test.js asserts the same freeze over HTTP, including that the provider-scoped row the trigger writes is the one activeFor returns.",
+        "source": "IAC-3",
+        "verify": "api"
+      },
+      {
+        "id": "AC-4",
+        "check": "A calibrated low-risk action class executes autonomously under micro-limits with no approval at all, while new-geography never can: it is refused AUTONOMY_NOT_EARNED on the no-approval issuance route and is admitted only by an explicit human approval",
+        "how_to_verify": "Live per qa_script step 9 (campaign-status: 201 capability, then executed) and step 10 (new-geography: 403 AUTONOMY_NOT_EARNED, no capability in the body). The posture table this verdict comes from is AC-6's subject.",
+        "source": "IAC-4",
+        "verify": "api"
+      },
+      {
+        "id": "AC-5",
+        "check": "Approving on /approvals?meta_error=quota leaves the item in the pending queue, shows no receipt toast, and surfaces the failed-reconciliation panel reading reconciliation 'unknown'; a successful approve toasts the receipt id with reconciliation 'agreed'; and re-deciding an already-executed receipt shows an 'Already decided. Receipt …' panel naming that receipt, with no failure copy and no toast",
+        "how_to_verify": "Live per qa_script steps 5 and 6: load /approvals?meta_error=quota, approve with a reason, confirm [data-testid=approval-failed] naming reconciliation 'unknown' and no [data-testid=approval-toast], and confirm the card is still pending; then load /approvals clean, click the [data-action=\"re-decide\"] control on the executed receipt created in step 3, and confirm [data-testid=approval-already-decided] naming the SAME receipt id with no failure copy and no toast. The server half of the failure clause is test/api/approvals.test.js's ?meta_error=quota case, which is what fails if the approve route builds its provider without the shared failure-injection helper.",
+        "source": "IAC-5",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-6",
+        "check": "The approvals page shows autonomy posture per action class, in the pinned order campaign-status, budget-change, creative-refresh, new-geography, campaign-launch, with campaign-status autonomous under micro-limits, creative-refresh and new-geography in shadow, and budget-change and campaign-launch approval required - the last of them the no-evidence fail-closed rung",
+        "how_to_verify": "Load /approvals on seed data and read [data-testid=posture-table] row by row against the labels above; the same labels are asserted cell by cell in test/web/approvals.test.js and are the labels kernel.validateIntent reads from the same trust rows.",
+        "source": "TR-19",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-7",
+        "check": "The approvals queue partitions its own rows: three pending cards and one lapsed row on seed data, an executed-receipts section - driven by the receipts, not the approval rows - beside the empty state once the queue drains, a re-decide control on every executed receipt, and no approve, reject or re-decide control on a lapsed row",
+        "how_to_verify": "Live per qa_script steps 2, 3, 7 and 12; the row-level control assertions, the receipt-driven panel and the card attribute contract are test/web/approvals.test.js.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-8",
+        "check": "A freeze raised at the global, tenant or campaign scope blocks writes at that scope, not only at the provider scope: a capability minted after the freeze is refused 409 KILL_SWITCH_ACTIVE, the guardian banner names that scope, and a write on a scope the freeze does not cover still succeeds",
+        "how_to_verify": "POST /v1/guardian/trigger with {\"scope\":\"global\"}; open /approvals and read [data-testid=guardian-banner] - it must name the global scope, not the provider. Mint a fresh campaign-status capability (a fresh one, because a spent nonce on an altered body answers a refusal, not a receipt) and POST it to /v1/actions/execute: 409 KILL_SWITCH_ACTIVE. Repeat for {\"scope\":\"tenant\"} and for {\"scope\":\"campaign\",\"scope_id\":\"campaign_007\"} - under the campaign freeze, campaign_007 is refused and campaign_001 is still 200 executed:true. POST the trigger with a scope and a scope_id that contradict each other ({\"scope\":\"global\",\"scope_id\":\"meta_ads\"}): 400, and no row raised. See qa_script steps 6 and 7.",
+        "source": "TR-4",
+        "verify": "api"
+      },
+      {
+        "id": "AC-9",
+        "check": "POST /v1/actions/execute refuses every capability the server did not issue, whatever its signature: an envelope assembled by hand and signed with the policy kernel's published dev secret is refused 403 with a stable code and writes nothing, including one for new-geography and one carrying a spend move eighteen times the class micro-limit - while a capability minted through /v1/capabilities still executes",
+        "how_to_verify": "Build the envelope by hand for action_class new-geography / create_campaign and sign it with the literal DEFAULT_SIGNING_SECRET exported from src/policy/kernel.js, then POST it to /v1/actions/execute: 403, no receipt, and GET /v1/approvals shows the pending card untouched. Repeat with a budget-change carrying delta_micros 900000000. The control in both directions: a capability minted through /v1/capabilities for campaign-status still executes 200 executed:true, and a tampered genuine envelope still answers 403 BAD_SIGNATURE. See qa_script step 8. The nonce this envelope is delivered with does not change the verdict: qa_script step 14 drives the same forgery against a SPENT nonce, which is where version 3 answered 200.",
+        "source": "TR-3",
+        "verify": "api"
+      },
+      {
+        "id": "AC-10",
+        "check": "A re-enable that matches no active freeze reports that it cleared nothing: POST /v1/guardian/re-enable answers 409, never 200 with re_enabled true, and the freeze the operator was trying to lift is still active with the banner still showing",
+        "how_to_verify": "POST /v1/guardian/trigger?kind=spend-spike, then POST /v1/guardian/re-enable with {\"actor\":\"owner\",\"scope\":\"global\"} while the provider scope is the one frozen: 409, not 200. GET /v1/guardian still lists the active row and the banner is still on /. Then POST /v1/guardian/re-enable with {\"actor\":\"owner\"}: 200 re_enabled true, the banner gone. See qa_script step 10.",
+        "source": "TR-4",
+        "verify": "api"
+      },
+      {
+        "id": "AC-11",
+        "check": "A successful approve shows a receipt toast naming the receipt id and reconciliation 'agreed' that the operator can still read after the page has reloaded, and the same sentence is announced in the live region",
+        "how_to_verify": "Load /approvals, type a reason, click Approve, and leave the page alone: [data-testid=approval-toast] is present reading 'Executed. Receipt <id>. Reconciliation: agreed.', the same receipt id is in the executed-receipts panel below it, and #live-region carries the same sentence. The toast must be readable without racing anything - it is still there a second later, and a browser refresh of the same URL no longer shows it. The failure path is unchanged: on ?meta_error=quota the card stays pending with the typed reason, there is no toast, and [data-testid=approval-failed] names reconciliation 'unknown'. See qa_script steps 3 and 5.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-12",
+        "check": "POST /v1/capabilities answers a stable refusal for a malformed action_class: an absent one and a non-scalar one are refused 403 AUTONOMY_NOT_EARNED reason unknown-class, the same answer null, a number and an unknown string already give, and never 500",
+        "how_to_verify": "curl -i -X POST http://localhost:3000/v1/capabilities -H 'content-type: application/json' -d '{\"tenant_id\":\"tenant_demo\",\"action\":\"set_campaign_status\",\"resource\":\"campaign_001\"}' and again with '\"action_class\":{\"x\":1}': both 403 with code AUTONOMY_NOT_EARNED. The server log for the run contains no 'Provided value cannot be bound to SQLite parameter'. See qa_script step 11.",
+        "source": "TR-24",
+        "verify": "api"
+      },
+      {
+        "id": "AC-13",
+        "check": "POST /v1/actions/execute answers 403 and no receipt to any delivery that reuses an already-spent capability nonce but is not the envelope that nonce was spent on - a different resource, a different action class, a replaced signature, or a body re-signed against the published dev secret - and the same altered delivery is refused while a kill switch is active, because no body is told a mutation is done until the server has established that the body describes that mutation",
+        "how_to_verify": "Also asserted in test/executor/executor.test.js against one injected provider (so the write count is countable) and in test/api/actions.test.js over HTTP, including the re-signed forgery, which a test that only tampers a field cannot reach.",
+        "source": "TR-3",
+        "verify": "api"
+      }
+    ],
+    "qa_script": [
+      "0. Start from a database the reset can restore: `npm run sdlc:seed -- --reset-approvals` (or `node scripts/seed.js --reset-approvals`). The printed summary must name its counts SEPARATELY: three approvals pending, one lapsed, receipts cleared, kill switches cleared. A 'database is locked' line means the step did not happen; do not continue.",
+      "1. `curl -fsS http://localhost:3000/health` returns 200. Open /approvals and confirm: [data-testid=posture-table] lists the five pinned rows in the pinned order; EXACTLY THREE [data-testid=approval-card] rows are pending, each with an approve and a reject control; ONE lapsed row with no decision control; no executed section yet.",
+      "2. Mint and save one campaign-status envelope: `curl -sS -X POST http://localhost:3000/v1/capabilities -H 'Content-Type: application/json' -d '{\"tenant_id\":\"tenant_demo\",\"action_class\":\"campaign-status\",\"action\":\"set_campaign_status\",\"resource\":\"campaign_001\",\"constraints\":{\"status\":\"PAUSED\"}}'`. POST it to /v1/actions/execute: 200 executed:true with a receipt id. POST the SAME envelope again: 200 executed:false duplicate:true with THE SAME receipt id (AC-2).",
+      "3. BUG-4 / AC-11. Approve the budget card with a reason and then STOP and look at the page. [data-testid=approval-toast] must be present, reading 'Executed. Receipt <id>. Reconciliation: agreed.', the same id is in the executed-receipts panel, and #live-region carries the same sentence. Wait five seconds and look again: the toast is still there. Refresh once: the toast is gone and the queue is intact. If the toast is missing, or present only for a frame, the reload is still destroying it.",
+      "4. Approve the campaign-status card with a reason. Expect the same toast, TWO executed receipts and exactly ONE pending card left.",
+      "5. Open /approvals?meta_error=quota and approve the remaining card with a reason. Expect [data-testid=approval-failed] reading 'Approval action failed. Reconciliation: unknown. The item stays pending and nothing was executed.', NO [data-testid=approval-toast], the card still rendered with the typed reason still in its input, and the URL still on ?meta_error=quota. Leave the page there; do not navigate.",
+      "6. BUG-3 / AC-8, global scope. POST 'http://localhost:3000/v1/guardian/trigger?kind=spend-spike' with body {\"scope\":\"global\"}. It must answer scope_id tenant_demo (the tenant), NOT meta_ads. Open /approvals: the banner is present and reads the global scope. Mint a FRESH campaign-status capability (a spent nonce on an altered body now answers a refusal - see step 14) and POST it: 409 KILL_SWITCH_ACTIVE. If it returns 200, the freeze is still writing a key no reader asks for.",
+      "7. BUG-3 continued. Re-enable with {\"actor\":\"owner\",\"scope\":\"global\"} - under this fix that is 200 and it clears the row it names. Then trigger {\"scope\":\"campaign\",\"scope_id\":\"campaign_007\"}: a fresh capability on campaign_007 is 409 and one on campaign_001 is 200 executed:true. Then trigger {\"scope\":\"global\",\"scope_id\":\"meta_ads\"}: 400, and GET /v1/guardian shows no new row.",
+      "8. BUG-5 / AC-9. Assemble an envelope by hand for action_class new-geography / action create_campaign and sign it with the literal DEFAULT_SIGNING_SECRET from src/policy/kernel.js (the field order is tenant, action_class, action, resource, constraints, maturity, band, expiry, nonce, policy_version, authority; the signed bytes are JSON.stringify of the values in that order). POST it to /v1/actions/execute: 403, no receipt, and no campaign created. Repeat for a budget-change carrying delta_micros 900000000: 403. Then the control in the other direction: a genuine capability minted at step 2's route still executes, and a genuine envelope with one field changed answers 403 BAD_SIGNATURE.",
+      "9. BUG-2 / AC-10. With any freeze active, POST /v1/guardian/re-enable with {\"actor\":\"owner\",\"scope\":\"global\"} when the active row is not the global one: 409, NOT 200 with re_enabled true. GET /v1/guardian still lists the row and the banner is still up. Then POST {\"actor\":\"owner\"}: 200, banner gone. A re-enable with no actor at all is still 400 RE_ENABLE_ACTOR_REQUIRED.",
+      "10. BUG-1 / AC-12. `curl -i -X POST http://localhost:3000/v1/capabilities -H 'content-type: application/json' -d '{\"tenant_id\":\"tenant_demo\",\"action\":\"set_campaign_status\",\"resource\":\"campaign_001\"}'`: 403 AUTONOMY_NOT_EARNED, not 500. Repeat with '\"action_class\":{\"x\":1}': the same 403. Check the server log for 'cannot be bound to SQLite parameter' - it must not appear.",
+      "11. Re-decide (AC-5, unchanged). Click the [data-action=\"re-decide\"] control on an executed receipt: [data-testid=approval-already-decided] naming the SAME receipt id, no failure copy, no toast, and the receipt count unchanged.",
+      "12. Reject the last pending card with a reason on the clean page: it leaves the queue, a rejection notice is shown, the posture table is unchanged, and there are zero pending cards, two executed receipts and one lapsed row.",
+      "13. Re-arm and reset. POST the trigger again with no body and confirm the banner returns with no reseed; re-enable with {\"actor\":\"owner\"}. Then re-run step 0 and confirm /approvals shows THREE pending cards, ZERO executed receipts and ONE lapsed row again. Zero receipts holds because the reset purges the approval-backed receipts by their decision nonce.",
+      "14. BUG-6 / AC-13. The three-step curl, on a clean database. (a) POST /v1/capabilities for campaign-status / set_campaign_status on campaign_001 and keep the `envelope` object. (b) POST that envelope to /v1/actions/execute: 200 executed:true with receipt R. (c) POST it again, UNALTERED: 200 executed:false duplicate:true with receipt R - this is AC-2 and it must still hold. (d) Now POST it again with ONE field changed and the nonce untouched, in four shapes: `resource` set to campaign_009; `action_class` set to campaign-launch; `signature` set to the literal 'not-even-a-signature'; and the whole body re-signed against DEFAULT_SIGNING_SECRET after changing resource, action and constraints. Every one of the four must be refused with a 4xx, and the response body must carry NO receipt_id. (e) POST 'http://localhost:3000/v1/guardian/trigger?kind=spend-spike', then repeat (d): still refused, NOT 200 duplicate:true. (f) With the freeze STILL up, repeat (c) - the unaltered envelope must STILL be 200 duplicate:true with receipt R. (g) Re-enable with {\"actor\":\"owner\"}. If any delivery in (d) or (e) answers 200 with a receipt_id, the dedupe is still answering before the envelope is authenticated. If (c) or (f) answers anything but 200 duplicate:true, the fix went too far and AC-2 is broken - that is a failure of this step, not a pass of it."
+    ],
+    "risks": [
+      "The change makes a previously-answerable request unanswerable, which is the point, and it is the first change in this ticket to make a live endpoint refuse something it used to accept. Any caller that re-delivered a spent nonce with a mutated body was getting a receipt for someone else's mutation; there is no correct behaviour to preserve for it. The two routes the product itself uses are unaffected, and step 14's control clauses exist so QA can tell the two apart.",
+      "Extracting verifyCapabilityIdentity is a refactor of a function on the write path, and its whole safety value is that validateCapability's verdict is unchanged for every input it already had. test/policy/kernel.test.js is asked to pin exactly that, input by input, rather than to pin the new function alone - a refactor whose only test is a test of the new name is not pinned.",
+      "Widening ENVELOPE_FIELDS from three fields to every signed field changes no verdict today, because the signature already covers them and the identity check runs first. It is included so the duplicate answer's correctness does not rest on a reader of the code knowing which fields the HMAC covers. If it turns out a genuine re-delivery is NOT byte-equal to the stored envelope for some issuance path, the failure will be a 403 on a legitimate redelivery - which is why the untampered duplicate is asserted in three separate suites.",
+      "The kernel's re-signing secret is still a published dev default. This change makes that fact harmless for the write path - a correctly signed forgery is now refused on the capabilities table, and step 14(d) drives exactly that request - but it does not make it good, and the boot contract is unchanged. See out_of_scope.",
+      "This is the third attempt on this ticket and the second consecutive one to find a defect in the same two files. The previous fix was correct about the design and incomplete about the coverage; the change here is small, but it lands in the same place, so the shape of the reorder is where the review effort belongs."
+    ],
+    "out_of_scope": [
+      "Automatic or deterministic-policy re-enable of a freeze, unchanged: guardian.recoveryHolds stays exported, named and tested, and nothing in this slice calls it.",
+      "Making POLICY_SIGNING_SECRET mandatory outside tests, unchanged. The provenance comparison now makes the dev default harmless for this surface, which removes the previous attempt's strongest argument FOR changing the boot contract - but changing the QA boot recipe is a person's decision and this ticket does not get to make it.",
+      "Any live write against the Meta Graph API, any second provider, and any change to the reconciliation or drift vocabulary. The re-read, the four reconciliation values and the receipt shape are untouched by this change.",
+      "Caching, expiry of the stored envelope comparison, or a rate limit on the execute route. The two reads this adds per request are primary-key reads on a single-tenant local database, exactly as version 3 recorded.",
+      "Auditing the refused delivery. A body refused at the identity check writes no audit event, as no other refusal on this path does; recording refused attempts is a real question and it belongs to whoever owns the audit vocabulary, not to a bug fix.",
+      "The four coverage gaps QA recorded. Second-tenant session isolation, a real provider behind the adapter, the non-approval receipts left in the preview database, and the unreferenced guardian.recoveryHolds are all unchanged by this work order and none of them is what failed."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Hoist the whole of kernel.validateCapability above the dedupe, so every check runs before any answer about the nonce",
+        "rejected_because": "I applied it and measured it: it breaks AC-2, and not subtly. validateCapability refuses a spent nonce with REPLAYED_NONCE and an active freeze with KILL_SWITCH_ACTIVE, and a duplicate arrives under both by definition, so the honest second delivery would be answered 403 REPLAYED_NONCE. node --test went from 425 pass to 421, with 'a duplicate nonce returns the ORIGINAL receipt and writes nothing' and 'a duplicate is still answered while a kill switch is active' both failing on `false !== true` at the duplicate assertion. This is the approach the previous version's residual_risks argued against in prose; the split is what makes the desired ordering expressible at all."
+      },
+      {
+        "approach": "Leave the dedupe first and add a full envelope-equality comparison inside the `if (existing)` branch, refusing anything that is not the stored envelope",
+        "rejected_because": "It works, and it is the shape this repository has already produced twice: a second copy of the provenance comparison that must be kept in step with the first by hand. It is the 'claim stated twice' diagnosis applied to the fix for the defect that diagnosis produced, and it leaves the unauthenticated body still taking the idempotency claim at :213 before anything has looked at it."
+      },
+      {
+        "approach": "Rewrite AC-2 to say that ANY body carrying a spent nonce is answered with that nonce's receipt, making the code correct by definition",
+        "rejected_because": "This is the artefact the pipeline exists to avoid: a criterion rewritten to match a defect, after which every future QA run certifies it. There is no internal contradiction in AC-2 to point at - 'the same capability nonce' is the same envelope delivered twice, and QA's run confirms both halves of that reading independently (the untampered redelivery answers 200, everything else does not). Rewriting it would also delete the only thing that makes a confirmed bug impossible to regress silently."
+      },
+      {
+        "approach": "Move the kill-switch check and the re-gate above the dedupe as well, so every gate of every kind precedes every answer",
+        "rejected_because": "It makes AC-2 fail in the case an operator most needs it: a duplicate arriving after the operator has frozen automation would be answered 409, telling them their action failed when it succeeded. The executor's own comment gives the right rule and version 3 preserved it deliberately - a delivery that will not write is answered from storage, a delivery that will write passes every check. 'Every gate before every answer' is a slogan that costs a criterion; the identity/admission split is the property that does not."
+      },
+      {
+        "approach": "Make the receipt unguessable (a random receipt id, a per-tenant secret in the receipt) so a delivery that reuses a spent nonce learns nothing useful",
+        "rejected_because": "It treats the wrong exposure. The defect is not that a receipt id can be enumerated - it is that the write path tells a caller its mutation is done when the delivery describes a different one, and that a kill switch cannot refuse the delivery because the gate is never reached. Guessing a nonce was never the vector: holding a genuine spent envelope is, and a legitimate caller holding one is exactly who gets a wrong answer."
+      },
+      {
+        "approach": "Purge capabilities together with receipts in --reset-approvals, so no spent nonce can outlive a reset",
+        "rejected_because": "Carried forward from version 3's rejection and unchanged by this bug: it needs a DELETE on an append-only table to close a hazard nobody has hit, and it breaks the redelivery contract AC-2 is built on. A reset is a QA convenience; the write path must be correct on a database nobody has reset."
+      }
+    ],
+    "assumptions": [
+      "QA runs against the same seeded single-tenant database shape and the same boot recipe as the previous round. Nothing in this change touches seeding, the trust ledger or the capabilities table's contents, so the fixtures that produced AC-1 through AC-12 still produce them.",
+      "The capabilities table remains append-only and is never purged, so a receipt always implies the capability row that produced it still exists. This is what lets provenance run above the dedupe without turning a legitimate redelivery into a refusal; it is stated as an invariant in out_of_scope, and if it is ever relaxed the ordering must be revisited.",
+      "A duplicate is answered from the receipt table rather than from the provider, exactly as it is today. The re-read and the provider are still untouched by a duplicate, so nothing about the reconciliation vocabulary changes.",
+      "The QA harness still owns the server boot and still runs node scripts/seed.js --reset-approvals against the live database, as the previous attempt assumed and as its own report confirmed."
+    ],
+    "unknowns": [
+      "Whether any caller outside this repository re-delivers a capability with a mutated body. Nothing in src/, test/ or scripts/ does, and the route was new in the previous attempt, so this is bounded rather than open - but it is the one behaviour change here that is not merely a bug fix from the caller's point of view.",
+      "Whether the issued envelope and the stored envelope are byte-equal in JSON for every issuance path once ENVELOPE_FIELDS is widened. On the two paths in this repository they are - I measured an unaltered redelivery answering duplicate:true with the three-field comparison in place, and the widened comparison is the same code over more fields - but a future path that normalises key order on write would break redelivery rather than a write, which is the safer direction to fail in and the more annoying one to debug.",
+      "How a real provider would behave on the re-gate, unchanged from version 3: the only writable provider is the fake, so this defect is verified at the boundary this slice owns."
+    ],
+    "residual_risks": [
+      "A duplicate is still answered without consulting the kill switches, and that is deliberate and permanent: the receipt exists, no money moves, and a 409 would tell an operator their action failed when it succeeded. The line is now that this answer is reachable only by a body the server has proved is its own - which is the guarantee version 3 lacked, but the answer is still an answer given while automation is frozen. QA reads this first so that a 200 duplicate:true under a freeze is not filed as a second bug.",
+      "The identity check answers 'is this yours' and the provenance check answers 'is this the one you issued' - two mechanisms, and a body that passes both has still not been through validateCapability's expiry check. That is intended (an expired capability's duplicate is still answered, for the same reason a frozen one is) but it means EXPIRED_CAPABILITY is reachable on the write path only for an unspent nonce, which is a fact about the code and not currently written down anywhere.",
+      "The executor takes a delivered body and, from the identity check onward, acts on the STORED envelope. If the stored row were ever mutated in place - it is append-only today - the delivered body and the acted-on body would diverge silently. Nothing in this change makes that possible and nothing in it would catch it.",
+      "test/executor/executor.test.js's two existing duplicate cases still build their duplicate from the same object the test spent, so they still cannot reach this defect. The new cases build the delivery separately, which is the whole difference; the old ones are kept unchanged as the AC-2 regression net rather than as coverage for BUG-6.",
+      "The identity/admission split puts a function in the public surface of the kernel that returns ok for a body it would otherwise refuse. That is a decision, not an oversight, and the kernel test pair that pins both halves is what stops a later reader from 'tidying' it into a single function again."
+    ],
+    "confidence": 88,
+    "confidence_rationale": "I reproduced BUG-6 against the branch build at df490b0 in every shape QA reported, plus one QA did not reach - a body correctly re-signed against the published dev secret and carrying a spent nonce, which is the case a field-tampering test cannot construct - and the unpatched build answers it 200 duplicate:true with the receipt for a different mutation. I then applied the proposed shape to the same build and measured it: 425/425 tests pass, the two duplicate cases that a too-broad fix breaks both still pass, all six altered bodies are refused (BAD_SIGNATURE for the three tampered ones, CAPABILITY_NOT_ISSUED altered-envelope for the correctly-signed forgery), and the untampered redelivery is still 200 duplicate:true both with and without a freeze. The rejected alternatives are rejected on measurements rather than on argument - the naive reorder is 4 failing tests, and I have the output. Twelve points of doubt, and they are all in the same place: ENVELOPE_FIELDS widening and the kernel extraction are both small, both land on the write path, and the previous two attempts each found a defect in exactly this file after passing CI. The change is smaller than either of them.",
+    "reproduced": true,
+    "evidence": [
+      "Branch origin/sdlc/issue-20 at df490b0 (the commit QA tested) extracted to /tmp/i20, seeded to a fresh database, served on port 3111. Everything below is my own output, not QA's. I then applied the proposed fix to a second copy of the same build and re-ran every request against it.",
+      "UNPATCHED, the three-step repro. Mint: POST /v1/capabilities for campaign-status / set_campaign_status on campaign_001 -> 201 with envelope cap_e44cac4d065b4e0e8d81. Spend: 200 {\"executed\":true,\"receipt_id\":\"rcp_e44cac4d065b4e0e8d81\",\"requested\":{\"campaignId\":\"campaign_001\",\"status\":\"PAUSED\"},\"reconciliation\":\"agreed\",\"drift\":\"none\"}. Unaltered re-delivery (AC-2): 200 duplicate:true, same receipt. Re-delivery with resource changed to campaign_009, nonce untouched: 200 {\"executed\":false,\"duplicate\":true,\"receipt_id\":\"rcp_e44cac4d065b4e0e8d81\"} - a receipt for pausing campaign_001, handed to a request about campaign_009. Same for action_class changed to campaign-launch, and for signature replaced with the literal 'not-even-a-signature': both 200 duplicate:true with the same receipt.",
+      "UNPATCHED, the control that pins the cause to ordering rather than to a missing check: the IDENTICAL resource tamper against a FRESH, unspent nonce answers 403 {\"code\":\"BAD_SIGNATURE\"}. The mechanism exists and works; it is below the branch that returns.",
+      "UNPATCHED, under an active freeze (POST /v1/guardian/trigger?kind=spend-spike -> 201): the untampered re-delivery answers 200 duplicate:true (correct, and AC-2's contract), the altered re-delivery with the spent nonce also answers 200 duplicate:true (the defect), and a FRESH unspent capability answers 409 KILL_SWITCH_ACTIVE (the control). The kill switch is reachable only on the path that has already been refused.",
+      "UNPATCHED, the case QA's report does not reach because it requires re-signing rather than tampering: a body assembled by hand carrying the real capability_id and a real SPENT nonce, with resource, action and action_class altered and the signature recomputed over those altered bytes with the literal DEFAULT_SIGNING_SECRET, answers 200 {\"executed\":false,\"duplicate\":true,\"receipt_id\":\"rcp_c1a664d9d06a43018a2d\"} - the receipt for pausing campaign_001, in answer to a request to create a campaign named 'attacker-campaign' as a new-geography. Nothing is written, which is why QA graded this major and not critical.",
+      "PATCHED (the split applied to the same build), every one of the above: spend 200 executed:true rcp_a54c8eea9b984c7eb302; unaltered re-delivery 200 duplicate:true with that same receipt; resource changed 403 BAD_SIGNATURE; garbage signature 403 BAD_SIGNATURE; action_class changed 403 BAD_SIGNATURE; under an active freeze the unaltered re-delivery is STILL 200 duplicate:true and the altered one is 403; and the correctly re-signed forgery is 403 {\"code\":\"CAPABILITY_NOT_ISSUED\",\"message\":\"the delivered capability differs from the one this server issued\",\"details\":{\"reason\":\"altered-envelope\",\"capability_id\":\"cap_a54c8eea9b984c7eb302\"}}. GET / after it shows no campaign named attacker-campaign.",
+      "PATCHED, the suite: node --test reports 425 tests, 425 pass, 0 fail. That includes 'a duplicate nonce returns the ORIGINAL receipt and writes nothing' and 'a duplicate is still answered while a kill switch is active', both unchanged, which are the two cases a too-broad fix breaks.",
+      "REJECTED ALTERNATIVE, measured rather than argued. Hoisting the whole of validateCapability above the dedupe (kernel.js untouched, executor order changed only) gives 425 tests, 421 pass, 4 fail: the two duplicate cases above, plus the two API-level cases that assert a second delivery dedupes. Both failures are `false !== true` on the duplicate assertion, because validateCapability answers REPLAYED_NONCE for a spent nonce. This is the finding that forces the identity/admission split.",
+      "The two lines that say the previous plan saw this. src/executor/executor.js:199-212 is the dedupe returning before :231 and :244. The previous work order's residual_risks(3): 'The duplicate short-circuit still runs before every check ... because AC-2 requires a duplicate made under a freeze to answer with its receipt' - the exposure named correctly, the justification a widening of AC-2 that QA has now falsified. src/policy/kernel.js:19-20 comments that 'the write path proves provenance against the server's own capabilities table (executor.provenance)'; there is no such function and the property held on one path of two.",
+      "The test fixture that made it unreachable: test/executor/executor.test.js:233 and :248 each re-deliver the same `capability` object the test has already spent, so the body under test is the server's own envelope by construction."
+    ],
+    "version": 4
+  }
 }
