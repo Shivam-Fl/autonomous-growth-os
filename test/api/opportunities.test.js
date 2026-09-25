@@ -6,9 +6,10 @@
 import { test, after } from 'node:test';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openDatabase } from '../../src/data/db.js';
 import { createRepositories } from '../../src/data/repositories.js';
 import { buildApp } from '../../src/api/routes.js';
@@ -39,7 +40,7 @@ const LOW = {
 };
 
 // A fixed instant for the frozen-clock test below, as a number because
-// MockTimers.setTime takes milliseconds and not a Date: 2026-09-25T12:00:00Z.
+// MockTimers.setTime takes milliseconds and not a Date: 2026-09-10T12:00:00Z.
 const FROZEN_INSTANT_MS = 1_789_041_600_000;
 
 const EXPERIMENT = {
@@ -446,6 +447,36 @@ test('two evaluations in the same millisecond report the collision instead of a 
   // Reset before returning so every later test in this file keeps real
   // timestamps — the mock is per-test, but the shared database outlives it.
   t.mock.timers.reset();
+});
+
+// A reader debugging a clock collision trusts the gloss above the constant and
+// looks in the wrong window if it drifts from the number. The comment quoted
+// an instant fifteen days later than the one the constant holds, and every
+// test in this file stayed green, because nothing read the comment. Pin the
+// two to each other: the date a reader sees is the date the code freezes at.
+test('the FROZEN_INSTANT_MS comment names the instant the constant actually is', () => {
+  const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const lines = source.split('\n');
+  const constant = lines.findIndex((line) => line.includes('FROZEN_INSTANT_MS = 1_789_041_600_000'));
+  assert.notEqual(constant, -1, 'the FROZEN_INSTANT_MS constant is still in this file');
+
+  // Walk up over the contiguous comment block to the line that glosses the
+  // instant, and take the date off that one rather than off any comment above.
+  let gloss = null;
+  for (let index = constant - 1; index >= 0 && lines[index].startsWith('//'); index -= 1) {
+    if (lines[index].includes('MockTimers')) {
+      gloss = lines[index];
+      break;
+    }
+  }
+  assert.ok(gloss, 'the MockTimers gloss still sits directly above the constant');
+
+  const named = gloss.match(/(\d{4}-\d{2}-\d{2})T/)?.[1];
+  assert.ok(named, `the gloss names an instant as YYYY-MM-DDTHH:MM:SSZ, got: ${gloss}`);
+  assert.equal(
+    named, new Date(FROZEN_INSTANT_MS).toISOString().slice(0, 10),
+    'the instant the comment names is the instant the constant freezes at',
+  );
 });
 
 // BUG-4 (issue #40, second round). The read rule and the write rule were two
