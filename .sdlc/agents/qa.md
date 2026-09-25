@@ -73,8 +73,13 @@ Set `priority`: `p0` = data loss, auth bypass, or the feature is simply broken. 
 Before you log in or click anything, load the app and look at where it sends data:
 
 ```bash
-npx playwright open --save-har=/tmp/probe.har $PREVIEW_URL
+npx playwright screenshot --save-har="$QA_EVIDENCE_DIR/probe.har" --wait-for-timeout=5000 \
+  "$PREVIEW_URL" "$QA_EVIDENCE_DIR/probe.png"
 ```
+
+Headless, and into the evidence directory: `playwright open` needs a display this runner does
+not have, and anything under `/tmp` is thrown away with the runner. This HAR is also the one a
+pass is checked for (step 7b).
 
 Every host the page sends data to must appear in `env.api_allowlist`: any request that is not
 a GET, HEAD or OPTIONS, and any request the page's own code makes (fetch, XHR, WebSocket,
@@ -165,6 +170,14 @@ paths. Only that directory is uploaded. The runner is destroyed when the job end
 in `/tmp` is a trace nobody will ever open — and a bug report whose evidence cannot be opened
 is a claim, which is exactly what driving a real browser was supposed to replace. The run fails
 if the report cites a path that is not there.
+
+A **pass** is checked file by file, because a pass is what merges:
+
+- **Every test a passing criterion cites lists at least one file under `$QA_EVIDENCE_DIR` in its
+  `evidence`** — a screenshot of the state it asserted is enough. A test with an empty
+  `evidence` proves nothing to anyone who was not there, and the whole report is rejected.
+- **At least one HAR under `$QA_EVIDENCE_DIR`** — the probe from step 3 counts. It is read by a
+  script, not by you: every 5xx in it must appear in `network_failures`.
 
 ### 8. Report
 
