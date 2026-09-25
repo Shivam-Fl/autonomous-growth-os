@@ -2,9 +2,9 @@
   "issue": 16,
   "pr": 27,
   "state": "needs-human",
-  "owner": "root-cause",
-  "lock_expires": "2026-09-25T07:22:43.299Z",
-  "lock_run": "36085991617",
+  "owner": null,
+  "lock_expires": null,
+  "lock_run": null,
   "attempts": {
     "plan": 1,
     "ci": 6,
@@ -286,7 +286,7 @@
   ],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:29.465Z",
-  "updated_at": "2026-09-25T02:27:05.795Z",
+  "updated_at": "2026-09-25T02:27:22.505Z",
   "history": [
     {
       "at": "2026-09-24T18:57:38.071Z",
@@ -607,6 +607,11 @@
       "at": "2026-09-25T02:27:05.795Z",
       "agent": "planner",
       "action": "-> needs-human"
+    },
+    {
+      "at": "2026-09-25T02:27:22.505Z",
+      "agent": "root-cause",
+      "action": "lock released"
     }
   ],
   "epic": 14,
