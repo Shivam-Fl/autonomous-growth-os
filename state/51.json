@@ -206,5 +206,137 @@
   },
   "validated_from": "plan",
   "validated_at": "2026-09-25T18:59:16.646Z",
-  "validated_ac_changes": []
+  "validated_ac_changes": [],
+  "approved_work_order": {
+    "issue": 51,
+    "version": 1,
+    "kind": "feature",
+    "mode": "committed",
+    "reproduced": true,
+    "understanding": "Issue #51 carries four non-blocking findings from the review of #50 (which fixed #46). I reproduced three of them on the current main (602444f) and one is real but not implementable here.\n\nFinding 1 (REPRODUCED) — the pinning test at test/web/pages.test.js:144-152 exercises the H1_HOOK constant only. The production call site at line 134 is what actually protects the 25 shells, and nothing asserts that it uses the constant. Reverting line 134 to the pre-#46 inline class-coupled regex and running `node --test test/web/pages.test.js` gives 36 pass / 0 fail. The relaxation is one careless edit from silently returning, with the pinning test supplying false confidence that it is guarded.\n\nFinding 2 (REPRODUCED) — deleting class=\"page-title\" from the h1 emitted at src/web/pages.js:56 leaves the whole suite green: `node --test` gives 227 pass / 0 fail. The heading then silently loses margin: 0, font-size: 1.4rem, line-height: 1.25 (src/web/styles.css:137-141) and falls back to the UA default h1 on all five screens.\n\nFinding 4 (REPRODUCED, and the same hole as finding 2 from the other end) — `grep -rn \"styles.css\" test/` returns 0 hits, so the .page-title rule is asserted by nothing. The class attribute that reaches it is the only emitter and no test constrains it in either direction. Findings 2 and 4 propose two halves of one fix; I do both, as finding 4 itself asks (\"covered from both ends\").\n\nFinding 3 (REAL, NOT FIXABLE IN THIS TICKET) — docs/ui.md:23 still says \"one display size for KPI values, one body size, one caption size\" although .page-title is 1.4rem, the same value as .kpi-value (styles.css:139 and :194), and none of the four **Regions** lines (docs/ui.md:59, 73, 87, 101) mentions the page title layout() emits as the first region inside main on all 25 shells. I verified both by reading the file. This is not implementable: docs/ui.md is one of the approved documents no ticket may change (.sdlc/agents/planner.md:170-175), so no stage on any route can edit it. The router's reasoning assumed this ticket would include \"a docs/ui.md typography/Regions correction\" — that premise is wrong. #46 is already closed by #50, so the drift now has no owner and no tracking issue; it needs a human. The exact edit is written out in out_of_scope so it can be applied verbatim.\n\nThe code half of this ticket is test-only. Nothing a user sees changes; the deliverable is three tests that make each of the three reproduced regressions fail.",
+    "root_cause": "The #46 change relaxed a behavioural assertion by introducing a named constant, and pinned the constant in a test. The pin covers the constant but not its use: nothing constrains the production call site, and nothing connects the class attribute in the markup to the stylesheet rule that consumes it. The class-to-rule link is the product of two files (src/web/pages.js:56, src/web/styles.css:137) and no test read either one.",
+    "approach": "Add three tests to test/web/pages.test.js and change no source file.\n\n1. Pin the call site to the constant. Read this test file as text, find the line carrying the message 'the h1 carries the page-title hook', and require it to be `assert.match(html, H1_HOOK,` and to contain no `class=\"page-title\"`. The message string is the anchor: it is what makes the assertion about the h1 identifiable, and it is the string a revert would leave in place.\n\n2. Pin the markup end of the link. Render '/' on a fresh repo, take the h1 open tag, and require its class attribute to be exactly `page-title`. Attribute order is deliberately not pinned, so a reorder does not fail; only a drop does. This is the ONE test in the file that asserts on the class name, and that is the point — .sdlc/memory/qa/selectors.md forbids class names as behavioural assertions, which is a narrower rule than never checking the class exists at all. This test does not make a behavioural assertion depend on a styling name; it declares the coupling.\n\n3. Pin the stylesheet end of the link. Read src/web/styles.css as text, extract the `.page-title { ... }` rule body, and require `margin: 0`, `font-size: 1.4rem`, `line-height: 1.25`. This asserts the stylesheet's own contents, so a coordinated rename of the class is allowed as long as both sides move together; what it forbids is a rule that quietly stops existing or stops carrying the values the heading depends on.\n\nTests 2 and 3 together are the link from both ends: dropping the class fails test 2, renaming or weakening the rule fails test 3, and the behavioural 25-shell test at lines 104-138 stays exactly as #46 left it — class-free, coupled to the testid only.\n\nI wrote all three, ran them against the clean tree (39 pass / 0 fail for this file, 230 pass / 0 fail for the suite) and against each regression, and confirmed each fails exactly one test and no other. The code below is that verified version: the implementer pastes it rather than reinventing it.\n\nFinding 3 is not in this change. docs/ui.md is reserved; the edit is specified in out_of_scope for a human.",
+    "files": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "Add the imports `readFileSync` to the existing `import { mkdtempSync } from 'node:fs';` line (line 3) and a new `import { fileURLToPath } from 'node:url';` after line 6. Then append these three tests at the end of the file, verbatim — they are the version I ran and probed:\n\n```js\n\n// Issue #51 finding 1: the pinning test at the top of this file exercises\n// H1_HOOK itself, so reverting the production call site to the pre-#46\n// class-coupled regex leaves the file green. Pin the call site itself.\ntest('the production h1 assertion goes through H1_HOOK, not an inline regex', () => {\n  const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');\n  const callSite = source.split('\\n').find((line) => line.includes('the h1 carries the page-title hook'));\n  assert.ok(callSite, 'the 25-shell h1 assertion is still in this file');\n  assert.match(callSite, /assert\\.match\\(html, H1_HOOK,/, 'the call site uses the pinned constant');\n  assert.doesNotMatch(callSite, /class=\"page-title\"/, 'the call site inlines no class-coupled regex');\n});\n\n// Issue #51 finding 2: this is the one place in the suite that asserts on a\n// class name, and deliberately so. The class is a styling hook, not a hook a\n// behavioural test may depend on, but it is the only thing that reaches the\n// .page-title rule — so the coupling is declared here instead of accidental.\ntest('the shipped page h1 carries the styling class the stylesheet rules on', async () => {\n  const html = await renderPage('/', { repositories: freshRepos() });\n  const h1 = /<h1[^>]*>/.exec(html)?.[0] ?? '';\n  assert.match(h1, /data-testid=\"page-title\"/, 'the page h1 is the hook under test');\n  assert.equal(/\\bclass=\"([^\"]*)\"/.exec(h1)?.[1], 'page-title', 'the emitted h1 still carries the styling class');\n});\n\n// Issue #51 finding 4: the other end of the same link. Asserting the\n// stylesheet's own contents is convention-clean under\n// .sdlc/memory/qa/selectors.md and makes AC-2's claim machine-checkable.\ntest('the .page-title rule still carries the declarations the page title depends on', () => {\n  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');\n  const rule = /\\.page-title\\s*\\{([^}]*)\\}/.exec(css);\n  assert.ok(rule, 'src/web/styles.css defines a .page-title rule');\n  assert.match(rule[1], /margin:\\s*0\\s*;/, 'the browser default h1 margin is cancelled');\n  assert.match(rule[1], /font-size:\\s*1\\.4rem\\s*;/, 'the page title keeps the display size');\n  assert.match(rule[1], /line-height:\\s*1\\.25\\s*;/, 'the page title keeps its line height');\n});\n```\n\nDo not change the existing test at lines 104-138 or the pinning test at lines 144-152; #46's relaxation of the 25-shell assertion is correct and this ticket does not reverse it. Do not edit src/web/pages.js or src/web/styles.css — the tests pass against them as they stand.\n",
+        "why": "The only file with any coverage of the page title. Keeping all three additions here means one reader sees the whole class-to-rule link, and it is the file the issue names."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "the production h1 assertion goes through H1_HOOK, not an inline regex — reads this file as text, finds the line carrying 'the h1 carries the page-title hook', and requires `assert.match(html, H1_HOOK,` with no `class=\"page-title\"` on it. Fails if the call site is reverted to an inline class-coupled regex (verified: 1 fail, 38 pass), and fails if the 25-shell h1 assertion is deleted outright.",
+          "the shipped page h1 carries the styling class the stylesheet rules on — renders '/' on a fresh repo, takes the h1 open tag, requires data-testid=\"page-title\" and class exactly `page-title`. Fails when the class is dropped from src/web/pages.js:56 (verified: 1 fail, 38 pass) and passes when the two attributes are merely reordered (verified: 39 pass).",
+          "the .page-title rule still carries the declarations the page title depends on — reads src/web/styles.css as text, extracts the `.page-title` rule body, requires margin: 0, font-size: 1.4rem, line-height: 1.25. Fails when the rule is renamed (verified: 1 fail, 38 pass) and when font-size is changed to 1.6rem (verified: 1 fail, 38 pass).",
+          "the 25 existing cases in this file and the 227-case suite stay green unchanged: 39 pass / 0 fail for this file, 230 pass / 0 fail for `node --test`."
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "All five screens still render exactly one h1 as the first heading inside main, carrying data-testid=\"page-title\" and naming its own screen, in all five preview states — 25 shells, unchanged by this ticket.",
+        "how_to_verify": "Open http://localhost:3000/ , /journal, /opportunities, /experiments, /approvals, each with ?state=ideal, then ?state=empty, ?state=loading, ?state=partial, ?state=error. Confirm body[data-page] and body[data-state] are set, that the first heading inside main#main is an h1, and that its text is Command dashboard / Decision journal / Opportunities / Experiments / Approvals respectively.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "The page title is still styled by the .page-title rule rather than the UA default h1: computed font-size 22.4px (1.4rem), margin-top 0, line-height 1.25, on every screen.",
+        "how_to_verify": "In the browser, select h1[data-testid=\"page-title\"] on each of the five routes and read the computed style. font-size computes to 22.4px and margin-top to 0px; a dropped .page-title rule shows 32px and a non-zero margin instead.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-3",
+        "check": "Reverting the production h1 assertion to the pre-#46 inline class-coupled regex fails the suite, which it does not today.",
+        "how_to_verify": "The case 'the production h1 assertion goes through H1_HOOK, not an inline regex' in test/web/pages.test.js. Reproduce by replacing the line carrying 'the h1 carries the page-title hook' with `assert.match(html, /<h1 class=\"page-title\" data-testid=\"page-title\">[^<]*<\\/h1>/, `${where}: the h1 carries the page-title hook`);` and running `node --test test/web/pages.test.js` — it must report 1 fail. Revert the edit; on today's main the same edit reports 0 fail.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-4",
+        "check": "Dropping class=\"page-title\" from the h1 emitted by src/web/pages.js fails the suite, which it does not today.",
+        "how_to_verify": "The case 'the shipped page h1 carries the styling class the stylesheet rules on' in test/web/pages.test.js. Reproduce with `sed -i 's|<h1 class=\"page-title\" data-testid=\"page-title\">|<h1 data-testid=\"page-title\">|' src/web/pages.js` then `node --test` — it must report 1 fail. Revert the edit; on today's main the same edit reports 227 pass / 0 fail.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-5",
+        "check": "Renaming the .page-title rule, or changing any of margin: 0, font-size: 1.4rem, line-height: 1.25 in src/web/styles.css, fails the suite, which it does not today.",
+        "how_to_verify": "The case 'the .page-title rule still carries the declarations the page title depends on' in test/web/pages.test.js. Reproduce with `sed -i 's|^\\.page-title {|.pageHeading {|' src/web/styles.css` then `node --test test/web/pages.test.js` — it must report 1 fail; likewise for `sed -i '139s/1.4rem/1.6rem/' src/web/styles.css`.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-6",
+        "check": "npm run sdlc:verify is green with the three new cases, taking the suite from 227 to 230 passing and 0 failing.",
+        "how_to_verify": "`npm run sdlc:verify` (npm ci --no-audit --no-fund && node --test). The # pass line reads 230 and # fail reads 0.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "Boot with `npm run sdlc:serve` and confirm http://localhost:3000/health responds, then walk all five routes across all five ?state= overrides. This ticket changes no source, so the point of the pass is to prove nothing moved: each document still has exactly one h1, as the first heading inside main#main, carrying data-testid=\"page-title\" and naming its own screen.",
+      "On each of the five routes, read the computed style of h1[data-testid=\"page-title\"] in devtools: font-size 22.4px, margin-top 0, line-height 1.25. Anything else means the .page-title rule stopped applying and AC-2 has failed even though every test passed.",
+      "Confirm the tests are tripwires and not decoration. Run AC-3's, AC-4's and AC-5's sed reproductions in a scratch checkout — each must report exactly 1 fail and each must fail the intended case — then restore. A new test that passes with the regression it exists to catch is the exact defect #50 shipped, reintroduced.",
+      "Check the new tests against .sdlc/memory/qa/selectors.md: the only class-name assertion permitted anywhere in the suite is the deliberate one in 'the shipped page h1 carries the styling class the stylesheet rules on'. If any behavioural assertion in the 25-shell test at lines 104-138 has been changed to depend on the class, that is a revert of #46 and QA should fail the run.",
+      "Read the work order's out_of_scope and confirm the docs/ui.md drift it names was not touched by the diff, and that the PR does not claim to close it."
+    ],
+    "risks": [
+      "The three new tests are tripwires anchored on literal strings, and I want that visible rather than implied. Test 1 anchors on the message text 'the h1 carries the page-title hook'; test 2 on the literal class name 'page-title'; test 3 on the literal selector '.page-title'. Each catches the single-sided edit it was written for — reverting the call site, dropping the class, renaming or weakening the rule. None of them forbids a coordinated rename in which someone edits the source AND the anchor string, and a determined revert could rewrite the anchors. That is the intended limit: make a careless edit fail, do not make renaming impossible.",
+      "This ticket re-introduces a class-name assertion on purpose, in one place. .sdlc/memory/qa/selectors.md says class names are styling hooks and not assertions; the finding's own argument, which I agree with, is that the rule forbids using a class as a *behavioural* assertion, which is narrower than never checking that the class exists. The review stage should check exactly one thing here: that the class assertion is confined to the new dedicated test and that the 25-shell behavioural test is untouched. If a reviewer disagrees, that is the one judgement call in this work order and the review stage is on the route for it.",
+      "The third finding is real, is not fixed by this ticket, and now has no owner. docs/ui.md:23 contradicts styles.css:139, and docs/ui.md:59/73/87/101 omit the page title that layout() emits into every shell. docs/ui.md is an approved document no ticket may change (.sdlc/agents/planner.md:170-175), so no stage on any route can edit it, and #46 was closed by #50 with this drift knowingly open. The router assumed this ticket would carry the docs correction; it cannot. A human has to apply the edit written out in out_of_scope, or file a ticket for it — the guard will refuse the work order otherwise.",
+      ".sdlc/memory/qa/selectors.md would be the right place to record that the class-to-rule link is now pinned from both ends, so the next agent does not rediscover the hole or undo the pin as redundant. That path is reserved for the Librarian, so this ticket cannot record it and the convention survives only in this work order."
+    ],
+    "out_of_scope": [
+      "The docs/ui.md drift from finding 3 — not in this change because docs/ui.md is one of the approved documents no ticket may change (.sdlc/agents/planner.md:170-175); the guard refuses the whole work order for it. The edit, for a human to apply: (a) docs/ui.md:23 reads 'System stack with tabular numerals for every metric; one display size for KPI values, one body size, one caption size.' — it is stale, because .page-title is 1.4rem (src/web/styles.css:139), the same value as .kpi-value (src/web/styles.css:194), so the scale is now one display size used twice plus a body size and a caption size; (b) each of the four **Regions** lines — docs/ui.md:59 (Command dashboard), :73 (Decision journal), :87 (Opportunities), :101 (Approvals) — describes main's regions but omits the page title, which layout() emits as the first region inside main on all 25 shells. This is one edit to a file the pipeline cannot touch, not a code ticket; it should not be split into further engineering work.",
+      "The narrower defect the issue mentions inside finding 1 — that on base 1fa7d9a renaming .page-title to .pageTitle in src/web/styles.css:137 left all 35 tests passing, so the old assertion never protected the class from a CSS-only rename either. I did not re-run that base-commit probe; it is a historical observation about a state we have moved past, and the tests added here cover the case going forward.",
+      "Renaming .page-title to anything else, on either side. A coordinated rename of the markup and the stylesheet passes these tests on purpose — the class name is a styling decision, and only its presence and the values behind it are load-bearing.",
+      "The other findings raised in #50's review that were not filed as this issue, and any cleanup of test/web/pages.test.js beyond the three additions.",
+      "Hardening H1_HOOK against a markup that carries the testid on something other than the h1 it names. The existing pinning test at lines 149-151 already rejects the h2 case, and that was #46's scope, not this one."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Close finding 2 from the markup side only: assert the h1 carries class=\"page-title\", and leave the stylesheet alone (finding 2's first option).",
+        "rejected_because": "It leaves finding 4 open — grep -rn \"styles.css\" test/ still returns 0 hits, so the .page-title rule could be renamed or emptied with the suite green, which is the half the heading's rendering actually depends on. Findings 2 and 4 describe one link from two ends, and finding 4 explicitly asks for the class-to-rule link to be 'covered from both ends'."
+      },
+      {
+        "approach": "Close finding 1 by re-tightening the 25-shell assertion back to a class-coupled regex, so the call site is correct by construction rather than pinned by a test.",
+        "rejected_because": "That reverses #46. It re-couples 25 behavioural assertions to a CSS class name, so a stylesheet rename fails tests that are asserting heading hierarchy, and #46 existed to remove exactly that coupling. #50 shipped because the relaxation was right and the pinning was missing; the missing piece is the pin, not the relaxation."
+      },
+      {
+        "approach": "Make the behavioural test at lines 104-138 assert the class again, alongside the hook.",
+        "rejected_because": "Same defect as above, in the file #46 deliberately left class-free, and it would fail on a CSS rename for 25 shells at once instead of in one place. The coupling belongs in one dedicated, labelled test where a reader sees it and a reviewer can judge it."
+      },
+      {
+        "approach": "Read the class off the rendered h1 and look it up dynamically in the stylesheet, so any class name is accepted and only drift fails.",
+        "rejected_because": "It permits a coordinated rename but pins no values — someone could change font-size: 1.4rem to 1.6rem in the rule and both ends would still agree, so AC-2's claim would stay unprovable. The issue asks for the three declarations to be machine-checkable, and a literal selector plus literal declarations is what makes that checkable."
+      },
+      {
+        "approach": "Add a test/web/styles.test.js that parses every rule in src/web/styles.css rather than one test in pages.test.js.",
+        "rejected_because": "It generalises past the ticket. One rule is load-bearing for the page title; the other rules in the file are covered by the screens' own behavioural tests, and a general stylesheet test is decoration riding on this change rather than part of it."
+      }
+    ],
+    "assumptions": [
+      "Test names and assertion messages in test/web/pages.test.js are stable enough to anchor a source-text test on. If a future cleanup renames the message 'the h1 carries the page-title hook', the new test fails and points at the line — which is the intended behaviour, not a fragility to work around.",
+      "src/web/styles.css is read as plain text and its .page-title rule stays a single flat block; a nested or media-query-wrapped rule would need the extraction regex adjusted, and the test would fail loudly rather than silently pass.",
+      "main is the branch under test and src/web/pages.js:56 and src/web/styles.css:137-141 are where the class and the rule live, as the issue states. Both were confirmed on 602444f."
+    ],
+    "unknowns": [
+      "Whether a reviewer accepts a deliberate class-name assertion as convention-clean under .sdlc/memory/qa/selectors.md. I read the rule as forbidding classes as behavioural assertions rather than forbidding the check entirely, which is the issue's own argument, and the review stage is on the route for exactly this."
+    ],
+    "evidence": [
+      "Finding 1 reproduced: replacing the line at test/web/pages.test.js:134 with `assert.match(html, /<h1 class=\"page-title\" data-testid=\"page-title\">[^<]*<\\/h1>/, ...)` and running `node --test test/web/pages.test.js` gives 36 pass / 0 fail on current main. With the new test in place the same edit gives 38 pass / 1 fail — 'the production h1 assertion goes through H1_HOOK, not an inline regex'.",
+      "Finding 2 reproduced: `sed -i 's|<h1 class=\"page-title\" data-testid=\"page-title\">|<h1 data-testid=\"page-title\">|' src/web/pages.js` then `node --test` gives 227 pass / 0 fail. With the new tests the same edit gives 1 fail — 'the shipped page h1 carries the styling class the stylesheet rules on'.",
+      "Finding 4 reproduced: `grep -rn \"styles.css\" test/` returns 0 hits on current main, and `sed -i 's|^\\.page-title {|.pageHeading {|' src/web/styles.css` then `node --test` gives 227 pass / 0 fail. With the new tests: 1 fail — 'the .page-title rule still carries the declarations the page title depends on'. Same for `sed -i '139s/1.4rem/1.6rem/'`.",
+      "Clean baseline on current main (602444f) after `npm ci --no-audit --no-fund`: `node --test` gives 227 pass / 0 fail; test/web/pages.test.js alone gives 36 pass / 0 fail. With the three new tests: 230 pass / 0 fail for the suite, 39 pass / 0 fail for the file.",
+      "Tolerances checked as well as failures: reordering the h1's attributes to `<h1 data-testid=\"page-title\" class=\"page-title\">` keeps the new tests green (39 pass), so a reorder does not fail and only a drop does.",
+      "Finding 3 confirmed by reading, not by probe: `sed -n '23p' docs/ui.md` still returns the unmodified 'one display size for KPI values, one body size, one caption size' sentence, `grep -n font-size src/web/styles.css` shows 1.4rem at :139 (.page-title) and 1.4rem at :194 (.kpi-value), and the four **Regions** lines at docs/ui.md:59, :73, :87, :101 mention no page title. `git diff main...HEAD --stat -- docs/` is empty — no doc has been touched.",
+      "All probes were run in the working tree and every edit was restored; `git status --porcelain` is clean apart from the untracked plan/ directory. Nothing in the tree was committed."
+    ],
+    "confidence": 92,
+    "confidence_rationale": "The change is three tests in one file, and I wrote and probed all three before planning: each passes on the clean tree, each fails on the exact regression it exists to catch, and none fails on a benign variation such as attribute order. The finding-by-finding reproduction is confirmed against the actual commits, not taken from the issue. The 8 points of doubt are all about finding 3 — whether a human will accept that a reserved document is not this ticket's to fix, and whether the review stage will approve a deliberate class-name assertion — and neither changes what the implementer writes."
+  },
+  "approved_too_high": false
 }
