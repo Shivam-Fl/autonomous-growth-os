@@ -577,6 +577,11 @@
       "at": "2026-09-25T14:53:45.451Z",
       "agent": "triage",
       "action": "-> needs-human"
+    },
+    {
+      "at": "2026-09-25T15:09:11.696Z",
+      "agent": "router",
+      "action": "route plan -> implement -> review -> qa (model, confidence 90)"
     }
   ],
   "epic": 14,
@@ -586,8 +591,10 @@
     "confidence": 90,
     "matched_rule": null,
     "gates": {},
-    "councils": {},
-    "decided_at": "2026-09-25T13:17:51.680Z"
+    "councils": {
+      "plan": "council"
+    },
+    "decided_at": "2026-09-25T15:09:11.695Z"
   },
   "stopped_at": null,
   "dispatched_stage": "implement",
