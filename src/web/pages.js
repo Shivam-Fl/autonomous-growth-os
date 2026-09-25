@@ -380,11 +380,17 @@ function decisionFeed(state, { repositories, tenant }) {
 }
 
 function experimentsPanel(state, { repositories, tenant }) {
-  const experiments = eventsOf(repositories, tenant, 'experiment.started');
-  const cards = experiments.map((event) => `<li class="experiment-card">
-<strong>${escapeHtml(event.payload.name ?? 'Experiment')}</strong>
-<span>State: ${escapeHtml(event.payload.state ?? 'running')} · arms: ${escapeHtml(String(event.payload.arms ?? 2))}</span>
-</li>`).join('');
+  // Same source the /experiments page reads (issue #22): the repository, not
+  // the dead experiment.started raw-event stream nothing ever wrote.
+  const experiments = tenant ? repositories.experiments.list(tenant.id) : [];
+  const cards = experiments.map((experiment) => {
+    const badge = STATE_BADGES[experiment.state] ?? experiment.state;
+    const arms = experiment.record?.arms?.length ?? 0;
+    return `<li class="experiment-card" data-experiment-id="${escapeHtml(experiment.experiment_id)}">
+<strong>${escapeHtml(experiment.name)}</strong>
+<span>State: ${escapeHtml(badge)} · arms: ${escapeHtml(String(arms))}</span>
+</li>`;
+  }).join('');
   return panel({
     title: `Open experiments · ${experiments.length}`,
     body: experiments.length === 0
@@ -628,6 +634,42 @@ function evidenceRefsCell(event) {
   return `<span class="maturity-label" data-testid="evidence-refs">${refs.length === 0 ? '—' : escapeHtml(refs.join(', '))}</span>`;
 }
 
+// The opportunity queue and experiment screens read the repositories, not
+// placeholder raw events (opportunity.scored / experiment.started were never
+// written by anything). Ranked rows render in repository order — stored score
+// desc, id asc — and are never re-sorted in the view.
+
+const COMPONENT_LABELS = [
+  ['value', 'value'],
+  ['pSuccess', 'success probability'],
+  ['fit', 'fit'],
+  ['infoValue', 'information value'],
+  ['reversibility', 'reversibility'],
+  ['cost', 'cost'],
+  ['downside', 'downside'],
+  ['delay', 'delay'],
+];
+
+function opportunityRow(row) {
+  const components = COMPONENT_LABELS
+    .map(([key, label]) => `<span class="score-component" data-component="${key}">${escapeHtml(label)} ${escapeHtml(String(row.components[key] ?? '—'))}</span>`)
+    .join('');
+  return `<li class="opportunity-row" data-testid="opportunity-row" data-opportunity-id="${escapeHtml(row.opportunity_id)}">
+<strong>${escapeHtml(row.name)}</strong>
+<span>score <span class="kpi-value" data-testid="opportunity-score">${escapeHtml(String(row.score))}</span></span>
+<div class="score-components" data-testid="score-components">${components}</div>
+</li>`;
+}
+
+function rankedList(rows, emptyCopy) {
+  return panel({
+    title: `Ranked opportunities · ${rows.length}`,
+    body: rows.length === 0
+      ? `<p class="empty-copy">${emptyCopy}</p>`
+      : `<ul class="opportunity-list">${rows.map(opportunityRow).join('')}</ul>`,
+  });
+}
+
 function opportunities(state, { repositories, tenant }) {
   if (state === 'loading') {
     return panel({ title: 'Loading opportunity queue', body: skeletonRows(3, 'skeleton-card') });
@@ -637,31 +679,24 @@ function opportunities(state, { repositories, tenant }) {
     return errorPanel({
       failed: {
         title: 'Failed to fetch experiments',
-        detail: 'The opportunity and experiment store did not respond (source: derived_metrics store). Drafts and scores are preserved.',
+        detail: 'The opportunity and experiment store did not respond (source: opportunity store). Drafts and scores are preserved.',
       },
       stillTrue: 'drafted hypotheses and their score components are preserved.',
       retryHref: '/opportunities',
     });
   }
 
+  // Rows always come from the repository in stored-score order, even under
+  // the partial shell: only the provisional-scores banner differs.
+  const ranked = tenant ? repositories.opportunities.list(tenant.id) : [];
+
   if (state === 'partial') {
-    const queue = eventsOf(repositories, tenant, 'opportunity.scored');
     return `<div class="banner banner-warn" role="status">Some experiment arms await maturity — scores shown are provisional until conversions mature.</div>
 ${researchObservations(repositories, tenant)}
-${panel({
-    title: 'Ranked opportunities',
-    body: queue.length === 0
-      ? `<p class="empty-copy">No opportunities scored yet; the research pass has not produced any provisional bets.</p>`
-      : `<ul>${queue.map((event) => `<li>
-<strong>${escapeHtml(event.payload.name ?? 'Opportunity')}</strong>
-— value ${escapeHtml(event.payload.value ?? '—')} · success probability ${escapeHtml(event.payload.probability ?? '—')}
-<span class="maturity-label">data through ${escapeHtml(event.payload.data_through ?? '—')}</span>
-</li>`).join('')}</ul>`,
-  })}`;
+${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.')}`;
   }
 
-  const queue = eventsOf(repositories, tenant, 'opportunity.scored');
-  if (state === 'empty' || queue.length === 0) {
+  if (state === 'empty' || ranked.length === 0) {
     return `${researchObservations(repositories, tenant)}
 ${emptyState({
       title: 'The opportunity queue is empty',
@@ -672,13 +707,51 @@ ${emptyState({
   }
 
   return `${researchObservations(repositories, tenant)}
-${panel({
-    title: `Ranked opportunities · ${queue.length}`,
-    body: `<ul>${queue.map((event) => `<li>
-<strong>${escapeHtml(event.payload.name ?? 'Opportunity')}</strong>
-— value ${escapeHtml(event.payload.value ?? '—')} · success probability ${escapeHtml(event.payload.probability ?? '—')}
-</li>`).join('')}</ul>`,
-  })}`;
+${rankedList(ranked, '')}`;
+}
+
+const STATE_BADGES = {
+  draft: 'Draft',
+  running: 'Running',
+  matured: 'Matured',
+  stopped: 'Stopped',
+  inconclusive: 'Inconclusive',
+};
+
+function experimentCard(experiment) {
+  const badge = STATE_BADGES[experiment.state] ?? experiment.state;
+  const inconclusive = experiment.state === 'inconclusive';
+  const stopRules = experiment.record?.stopRules ?? {};
+  const caps = experiment.record?.caps ?? {};
+  return `<li class="experiment-card" data-testid="experiment-card" data-experiment-id="${escapeHtml(experiment.experiment_id)}">
+<strong>${escapeHtml(experiment.name)}</strong>
+<span>Max spend ${escapeHtml(money(caps.max_spend_micros))} · max downside ${escapeHtml(money(caps.max_downside_micros))}</span>
+<div data-testid="caps">caps: max spend ${escapeHtml(money(caps.max_spend_micros))}, max downside ${escapeHtml(money(caps.max_downside_micros))}</div>
+<div data-testid="stop-rules">stop rules: minimum runtime ${escapeHtml(String(stopRules.min_runtime_hours ?? '—'))}h, minimum sample ${escapeHtml(String(stopRules.min_sample ?? '—'))}, success threshold ${escapeHtml(String(stopRules.success_threshold ?? '—'))}, harm threshold ${escapeHtml(String(stopRules.harm_threshold ?? '—'))}</div>
+<span class="maturity-label" data-testid="exp-state">${escapeHtml(badge)}${experiment.evaluation_reason && (inconclusive || experiment.state === 'stopped') ? ` (${escapeHtml(experiment.evaluation_reason)})` : ''}</span>
+<span class="maturity-label" data-testid="data-through">data through ${escapeHtml(experiment.data_through ?? '—')}</span>
+</li>`;
+}
+
+function hypothesisComposer() {
+  // The composer is kept mounted on the error shell too (below), so a failed
+  // fetch never loses a draft: client.js persists every field to localStorage
+  // on input and restores it on load under the opp_exp_draft_ namespace.
+  return `<form class="hypothesis-composer" data-testid="hypothesis-composer">
+<h3>New hypothesis</h3>
+<div class="journal-filter-control">
+<label for="composer-title">Title</label>
+<input id="composer-title" name="title" data-draft-key="opp_exp_draft_title" placeholder="e.g. Exact-intent search deserves more budget">
+</div>
+<div class="journal-filter-control">
+<label for="composer-thesis">Thesis</label>
+<textarea id="composer-thesis" name="thesis" rows="3" data-draft-key="opp_exp_draft_thesis" placeholder="What you expect to happen, and why, with the evidence you have."></textarea>
+</div>
+<div class="journal-filter-control">
+<label for="composer-cap">Suggested cap (micros)</label>
+<input id="composer-cap" name="cap" type="number" min="1" data-draft-key="opp_exp_draft_cap" placeholder="500000000">
+</div>
+</form>`;
 }
 
 function experiments(state, { repositories, tenant }) {
@@ -687,48 +760,45 @@ function experiments(state, { repositories, tenant }) {
   }
 
   if (state === 'error') {
-    return errorPanel({
+    // The composer stays mounted beside the error panel: client.js restores
+    // the typed draft from localStorage, so a failed fetch loses nothing.
+    return `${errorPanel({
       failed: {
         title: 'Experiment fetch failed',
         detail: 'The experiment store could not be read (source: experiment store). In-progress drafts are preserved.',
       },
       stillTrue: 'drafted hypotheses and score components are preserved.',
       retryHref: '/experiments',
-    });
+    })}
+${hypothesisComposer()}`;
   }
 
+  const cards = tenant ? repositories.experiments.list(tenant.id) : [];
+
   if (state === 'partial') {
-    const experimentsList = eventsOf(repositories, tenant, 'experiment.started');
     return `<div class="banner banner-warn" role="status">Some arms await maturity — data through the last conversion date is shown per experiment.</div>
 ${panel({
     title: 'Running experiments',
-    body: experimentsList.length === 0
+    body: cards.length === 0
       ? `<p class="empty-copy">No experiments running, so no arms await maturity.</p>`
-      : `<ul class="experiment-list">${experimentsList.map((event) => `<li class="experiment-card">
-<strong>${escapeHtml(event.payload.name ?? 'Experiment')}</strong>
-<span>State: ${escapeHtml(event.payload.state ?? 'running')} · arms: ${escapeHtml(String(event.payload.arms ?? 2))}</span>
-<span class="maturity-label">data through ${escapeHtml(event.payload.data_through ?? '—')}</span>
-</li>`).join('')}</ul>`,
-  })}`;
+      : `<ul class="experiment-list">${cards.map(experimentCard).join('')}</ul>`,
+  })}
+${hypothesisComposer()}`;
   }
 
-  const experimentsList = eventsOf(repositories, tenant, 'experiment.started');
-  if (state === 'empty' || experimentsList.length === 0) {
+  if (state === 'empty' || cards.length === 0) {
     return emptyState({
       title: 'No experiments yet',
       message: 'Experiments settle which bet wins. Each one carries spend caps, stop rules, and a first-class inconclusive state, so a result you cannot trust never masquerades as a winner. Compose the first hypothesis to begin.',
       action: `<a class="button" href="/experiments?state=loading">Compose the first hypothesis</a>`,
       testid: 'experiments-empty',
-    });
+    }) + hypothesisComposer();
   }
 
   return panel({
-    title: `Running experiments · ${experimentsList.length}`,
-    body: `<ul class="experiment-list">${experimentsList.map((event) => `<li class="experiment-card">
-<strong>${escapeHtml(event.payload.name ?? 'Experiment')}</strong>
-<span>State: ${escapeHtml(event.payload.state ?? 'running')} · arms: ${escapeHtml(String(event.payload.arms ?? 2))}</span>
-</li>`).join('')}</ul>`,
-  });
+    title: `Running experiments · ${cards.length}`,
+    body: `<ul class="experiment-list">${cards.map(experimentCard).join('')}</ul>`,
+  }) + hypothesisComposer();
 }
 
 const AUTONOMY_POSTURE = [

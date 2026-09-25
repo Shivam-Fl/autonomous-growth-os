@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { utcNow } from './db.js';
 import { SCOPE_FIELDS } from '../memory/learnings.js';
+import { rankOpportunities } from '../domain/opportunities.js';
 
 function parseJson(text, fallback) {
   if (text === null || text === undefined) {
@@ -555,6 +556,166 @@ function createCallLogRepository(db) {
   };
 }
 
+// Opportunity/experiment working state (issue #22): OPPORTUNITIES and
+// EXPERIMENTS carry no immutability trigger — scores, states and evaluation
+// columns are rewritten in place — so updateState below is a legal write.
+// EXPERIMENT_EVALUATIONS is append-only: only an insert and a tenant-bound
+// read exist here, and the storage triggers in db.js block raw SQL too.
+
+function createOpportunityRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO opportunities (tenant_id, opportunity_id, record, score, created_at) VALUES (?, ?, ?, ?, ?)',
+  );
+  const selectOne = db.prepare(
+    'SELECT tenant_id, opportunity_id, record, score, created_at FROM opportunities WHERE tenant_id = ? AND opportunity_id = ?',
+  );
+  // The single rank key everywhere: stored score DESC, opportunity_id ASC.
+  const selectRanked = db.prepare(
+    'SELECT tenant_id, opportunity_id, record, score, created_at FROM opportunities WHERE tenant_id = ? ORDER BY score DESC, opportunity_id ASC',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    const record = parseJson(row.record, {});
+    return {
+      tenant_id: row.tenant_id,
+      opportunity_id: row.opportunity_id,
+      name: record.name ?? row.opportunity_id,
+      record,
+      components: {
+        value: record.value,
+        pSuccess: record.pSuccess,
+        fit: record.fit,
+        infoValue: record.infoValue,
+        reversibility: record.reversibility,
+        cost: record.cost,
+        downside: record.downside,
+        delay: record.delay,
+      },
+      score: row.score,
+      created_at: row.created_at,
+    };
+  }
+
+  return {
+    /**
+     * Idempotent by fixed id: re-creating an existing opportunity_id is a
+     * no-op. Returns {created, ...the row} so callers can tell new from
+     * duplicate. The score stored is the one the caller computed and posts
+     * (spec section 26: components AND score are stored at write time).
+     */
+    create({ tenant_id: tenantId, opportunity_id: opportunityId, record, score }) {
+      const result = insert.run(tenantId, opportunityId, JSON.stringify(record), score, utcNow());
+      const created = result.changes > 0;
+      return { created, ...shape(selectOne.get(tenantId, opportunityId)) };
+    },
+
+    get(tenantId, opportunityId) {
+      return shape(selectOne.get(tenantId, opportunityId));
+    },
+
+    /** Ranked rows in stored-score order; the view never re-sorts. The order
+     * is decided by the domain's one rank function, so the shipped listing and
+     * the unit-tested rankOpportunities can never drift apart. */
+    list(tenantId) {
+      return rankOpportunities(selectRanked.all(tenantId).map(shape));
+    },
+  };
+}
+
+function createExperimentRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO experiments (tenant_id, experiment_id, record, state, data_through, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const updateState = db.prepare(
+    'UPDATE experiments SET state = ?, evaluation_result = ?, evaluation_reason = ?, evaluated_at = ?, data_through = ? WHERE tenant_id = ? AND experiment_id = ?',
+  );
+  const selectOne = db.prepare(
+    'SELECT tenant_id, experiment_id, record, state, evaluation_result, evaluation_reason, evaluated_at, data_through, created_at FROM experiments WHERE tenant_id = ? AND experiment_id = ?',
+  );
+  const selectAll = db.prepare(
+    'SELECT tenant_id, experiment_id, record, state, evaluation_result, evaluation_reason, evaluated_at, data_through, created_at FROM experiments WHERE tenant_id = ? ORDER BY created_at, experiment_id',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    const record = parseJson(row.record, {});
+    return {
+      tenant_id: row.tenant_id,
+      experiment_id: row.experiment_id,
+      name: record.name ?? row.experiment_id,
+      record,
+      state: row.state,
+      evaluation_result: row.evaluation_result,
+      evaluation_reason: row.evaluation_reason,
+      evaluated_at: row.evaluated_at,
+      data_through: row.data_through,
+      created_at: row.created_at,
+    };
+  }
+
+  return {
+    /** Idempotent by fixed id, like the opportunity repository. */
+    create({ tenant_id: tenantId, experiment_id: experimentId, record, state, data_through: dataThrough }) {
+      const result = insert.run(tenantId, experimentId, JSON.stringify(record), state ?? 'draft', dataThrough ?? null, utcNow());
+      return { created: result.changes > 0, ...this.get(tenantId, experimentId) };
+    },
+
+    get(tenantId, experimentId) {
+      return shape(selectOne.get(tenantId, experimentId));
+    },
+
+    list(tenantId) {
+      return selectAll.all(tenantId).map(shape);
+    },
+
+    /**
+     * Mutable working state by design: evaluating an experiment rewrites its
+     * state row in place (win/loss → matured, weak evidence → inconclusive).
+     * No trigger guards this table, so the UPDATE always succeeds; only
+     * experiment_evaluations is append-only.
+     */
+    updateState(tenantId, experimentId, { state, evaluation_result: evaluationResult = null, evaluation_reason: evaluationReason = null, evaluated_at: evaluatedAt = null, data_through: dataThrough = null }) {
+      updateState.run(state, evaluationResult, evaluationReason, evaluatedAt, dataThrough, tenantId, experimentId);
+      return this.get(tenantId, experimentId);
+    },
+  };
+}
+
+function createEvaluationRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO experiment_evaluations (tenant_id, experiment_id, evaluated_at, result, reason, counts) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const selectForExperiment = db.prepare(
+    'SELECT tenant_id, experiment_id, evaluated_at, result, reason, counts FROM experiment_evaluations WHERE tenant_id = ? AND experiment_id = ? ORDER BY evaluated_at',
+  );
+
+  function shape(row) {
+    return { ...row, counts: parseJson(row.counts, {}) };
+  }
+
+  return {
+    /**
+     * Append-only: this insert is the only write. experiment_evaluations is
+     * guarded by the storage triggers in db.js, so even raw SQL cannot
+     * UPDATE or DELETE an evaluation row. A duplicate (experiment,
+     * evaluated_at) is a no-op.
+     */
+    append({ tenant_id: tenantId, experiment_id: experimentId, evaluated_at: evaluatedAt, result, reason = null, counts }) {
+      const outcome = insert.run(tenantId, experimentId, evaluatedAt, result, reason, JSON.stringify(counts ?? {}));
+      return { appended: outcome.changes > 0 };
+    },
+
+    listForExperiment(tenantId, experimentId) {
+      return selectForExperiment.all(tenantId, experimentId).map(shape);
+    },
+  };
+}
+
 export function createRepositories(db) {
   return {
     tenants: createTenantRepository(db),
@@ -567,6 +728,9 @@ export function createRepositories(db) {
     decisions: createDecisionRepository(db),
     learnings: createLearningRepository(db),
     callLogs: createCallLogRepository(db),
+    opportunities: createOpportunityRepository(db),
+    experiments: createExperimentRepository(db),
+    evaluations: createEvaluationRepository(db),
   };
 }
 

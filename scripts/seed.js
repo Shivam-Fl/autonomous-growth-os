@@ -7,6 +7,8 @@ import { createRepositories, replayRawToDerived } from '../src/data/repositories
 import { validateEvent } from '../src/domain/events.js';
 import { validateDecisionRecord } from '../src/domain/decisions.js';
 import { validateLearning } from '../src/memory/learnings.js';
+import { validateOpportunity, scoreOpportunity } from '../src/domain/opportunities.js';
+import { validateExperiment } from '../src/domain/experiments.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
 
@@ -262,6 +264,117 @@ function hydrateSeedDecision(decision) {
   return hydrated;
 }
 
+// Opportunity-experiment fixtures (issue #22): three ranked opportunities with
+// fixed ids whose stored scores order deterministically (0.9208 > 0.40 >
+// 0.01), and two experiments — one running, one whose persisted state is the
+// first-class inconclusive (evaluation_result inconclusive, reason
+// underpowered). Scores and contributions are computed once here so the
+// seed's numbers are pinned: expensive 0.9208 / 1_700_000_000 micros, cheap
+// 0.40 / 300_000_000 micros (M = million). All writes go through the
+// repositories, so re-seeding is a no-op.
+const SEED_OPPORTUNITIES = [
+  {
+    opportunity_id: 'opp_seed_expensive',
+    name: 'Expensive high-quality campaign',
+    value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+  },
+  {
+    opportunity_id: 'opp_seed_cheap',
+    name: 'Cheap low-quality campaign',
+    value: 2000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost: 100, downside: 2, delay: 1,
+  },
+  {
+    opportunity_id: 'opp_seed_low',
+    name: 'Low-reach retargeting bet',
+    value: 1000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost: 500, downside: 2, delay: 2,
+  },
+];
+
+const dataThroughHoursAgo = (hours) => new Date(Date.now() - hours * 3_600_000).toISOString();
+
+const SEED_EXPERIMENTS = [
+  {
+    experiment_id: 'exp_seed_running',
+    name: 'Exact-intent search budget test',
+    arms: [{ id: 'arm_control', name: 'Control' }, { id: 'arm_exact', name: 'Exact-intent' }],
+    caps: { max_spend_micros: 500_000_000, max_downside_micros: 200_000_000 },
+    stopRules: { min_runtime_hours: 48, min_sample: 100, success_threshold: 0.1, harm_threshold: 0.2 },
+    state: 'running',
+  },
+  {
+    experiment_id: 'exp_seed_underpowered',
+    name: 'Retargeting creative swing',
+    arms: [{ id: 'arm_a', name: 'Creative A' }, { id: 'arm_b', name: 'Creative B' }],
+    caps: { max_spend_micros: 300_000_000, max_downside_micros: 100_000_000 },
+    stopRules: { min_runtime_hours: 24, min_sample: 100, success_threshold: 0.1, harm_threshold: 0.2 },
+    state: 'inconclusive',
+  },
+];
+
+function seedOpportunities(repositories) {
+  let written = 0;
+  for (const candidate of SEED_OPPORTUNITIES) {
+    const validated = validateOpportunity({ ...candidate, tenant_id: TENANT.id });
+    if (!validated.ok) {
+      throw validated.error;
+    }
+    const opportunity = validated.opportunity;
+    const previous = repositories.opportunities.get(TENANT.id, candidate.opportunity_id);
+    const result = repositories.opportunities.create({
+      tenant_id: TENANT.id,
+      opportunity_id: candidate.opportunity_id,
+      record: opportunity,
+      score: scoreOpportunity(opportunity),
+    });
+    if (result.created && !previous) {
+      written += 1;
+    }
+  }
+  return written;
+}
+
+function seedExperiments(repositories) {
+  let written = 0;
+  for (const candidate of SEED_EXPERIMENTS) {
+    const validated = validateExperiment({
+      ...candidate,
+      tenant_id: TENANT.id,
+      data_through: dataThroughHoursAgo(6),
+    });
+    if (!validated.ok) {
+      throw validated.error;
+    }
+    const experiment = validated.experiment;
+    const previous = repositories.experiments.get(TENANT.id, candidate.experiment_id);
+    const result = repositories.experiments.create({
+      tenant_id: TENANT.id,
+      experiment_id: candidate.experiment_id,
+      record: experiment,
+      state: experiment.state,
+      data_through: experiment.data_through,
+    });
+    // Only on first write: the result columns document the fixture's
+    // inconclusive outcome, and a re-seed must never revert them — they
+    // would clobber an experiment evaluated since the first run (a win
+    // back to inconclusive, evaluated_at/data_through re-dated).
+    if (result.created && experiment.state === 'inconclusive') {
+      // Persisted result columns make the badge read Inconclusive on the
+      // card; the evaluation row documents why it is not a win or a loss.
+      repositories.experiments.updateState(TENANT.id, candidate.experiment_id, {
+        state: 'inconclusive',
+        evaluation_result: 'inconclusive',
+        evaluation_reason: 'underpowered',
+        evaluated_at: experiment.data_through,
+        data_through: experiment.data_through,
+      });
+    }
+    if (result.created && !previous) {
+      written += 1;
+    }
+  }
+  return written;
+}
+
 const EVENTS = [
   ...JOURNEY.map((event) => ({
     ...event,
@@ -339,12 +452,18 @@ export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
 
   replayRawToDerived(db, TENANT.id);
 
+  const opportunitiesWritten = seedOpportunities(repositories);
+  const experimentsWritten = seedExperiments(repositories);
+
   return {
     tenant: repositories.tenants.get(TENANT.id),
     appended,
     decisions: decisionRows,
     learningsWritten,
-    alreadySeeded: appended === 0 && decisionRows === 0 && learningsWritten === 0,
+    opportunitiesWritten,
+    experimentsWritten,
+    alreadySeeded: appended === 0 && decisionRows === 0 && learningsWritten === 0
+      && opportunitiesWritten === 0 && experimentsWritten === 0,
   };
 }
 
@@ -354,6 +473,6 @@ if (isMain) {
   console.log(
     result.alreadySeeded
       ? `seed: tenant ${TENANT.id} already present, nothing new written`
-      : `seed: wrote ${result.appended} events, ${result.decisions} decisions and ${result.learningsWritten} learnings for tenant ${TENANT.id}`,
+      : `seed: wrote ${result.appended} events, ${result.decisions} decisions, ${result.learningsWritten} learnings, ${result.opportunitiesWritten} opportunities and ${result.experimentsWritten} experiments for tenant ${TENANT.id}`,
   );
 }

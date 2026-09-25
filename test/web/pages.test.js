@@ -396,3 +396,194 @@ test('a decision drawer carries the TR-6 fields the drawer renders', async () =>
   assert.ok(row.critic_result.length > 0);
   assert.ok(row.policy_decision_id.length > 0);
 });
+
+// Opportunity queue + experiments (issue #22): the pages read the new
+// repositories, never placeholder raw events, so the seeded fixtures decide
+// everything below.
+
+test('ranked rows render stored score plus all eight score components in repository order', async () => {
+  const repos = seededRepos('pages-opp-rank-');
+  const html = await renderPage('/opportunities', { repositories: repos });
+
+  const order = ['opp_seed_expensive', 'opp_seed_cheap', 'opp_seed_low'].map((id) => html.indexOf(id));
+  assert.ok(order.every((index) => index >= 0), 'all three seeded opportunities render');
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), '0.9208 expensive first, 0.40 cheap, 0.01 low');
+
+  const rowHtml = (id) => html.match(new RegExp(`<li class="opportunity-row"[\\s\\S]*?data-opportunity-id="${id}"[\\s\\S]*?</li>`))[0];
+  for (const id of ['opp_seed_expensive', 'opp_seed_cheap', 'opp_seed_low']) {
+    const row = rowHtml(id);
+    assert.match(row, /data-testid="opportunity-row"/);
+    assert.match(row, /data-testid="score-components"/);
+    for (const component of ['value', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost', 'downside', 'delay']) {
+      assert.match(row, new RegExp(`data-component="${component}"`), `${id} renders its ${component}`);
+    }
+  }
+  assert.match(rowHtml('opp_seed_expensive'), /0\.9208/, 'the stored score renders on the winning row');
+});
+
+test('the seeded underpowered experiment renders the Inconclusive badge, never Win or Loss', async () => {
+  const repos = seededRepos('pages-exp-badge-');
+  const html = await renderPage('/experiments', { repositories: repos });
+  const card = html.match(/data-experiment-id="exp_seed_underpowered"[\s\S]*?<\/li>/)[0];
+  assert.match(card, /data-testid="exp-state">Inconclusive \(underpowered\)</);
+  assert.match(card, /data-testid="caps"/);
+  assert.match(card, /data-testid="stop-rules"/);
+  assert.match(card, /data-testid="data-through">data through /);
+  assert.doesNotMatch(card, /Win|Loss/, 'an inconclusive experiment never renders a win or loss badge');
+
+  const running = html.match(/data-experiment-id="exp_seed_running"[\s\S]*?<\/li>/)[0];
+  assert.match(running, /data-testid="exp-state">Running</);
+  assert.match(html, /₹500\.00/, 'the max spend cap formats as money');
+});
+
+test('the dashboard experiments panel reads the experiment repository, not the dead raw-event stream', async () => {
+  const repos = seededRepos('pages-dashboard-exp-');
+  const html = await renderPage('/', { repositories: repos });
+  assert.match(html, /Open experiments · 2/, 'both seeded experiments reach the dashboard');
+  assert.match(html, /data-experiment-id="exp_seed_running"/);
+  assert.match(html, /data-experiment-id="exp_seed_underpowered"/);
+  assert.match(html, /Exact-intent search budget test/, 'the running experiment renders its name');
+  assert.match(html, /State: Running · arms: 2/);
+  assert.match(html, /State: Inconclusive · arms: 2/, 'the persisted inconclusive state renders on the dashboard too');
+});
+
+test('re-seeding after an evaluation does not clobber the experiment state', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pages-reseed-'));
+  const dbPath = join(dir, 'app.db');
+  seed({ dbPath });
+  const repos = createRepositories(openDatabase(dbPath));
+  // An evaluation between the two seed runs: exactly the write a re-seed
+  // must never revert or re-date (updateState is the same surface the
+  // evaluate route uses).
+  repos.experiments.updateState('tenant_demo', 'exp_seed_underpowered', {
+    state: 'matured', evaluation_result: 'win', evaluation_reason: null,
+    evaluated_at: '2026-09-25T12:00:00.000Z', data_through: '2026-09-25T11:00:00.000Z',
+  });
+
+  const second = seed({ dbPath });
+  assert.equal(second.alreadySeeded, true, 'a repeat seed reports alreadySeeded');
+
+  const after = repos.experiments.get('tenant_demo', 'exp_seed_underpowered');
+  assert.equal(after.state, 'matured', 'a later evaluation is not reverted by a re-seed');
+  assert.equal(after.evaluation_result, 'win');
+  assert.equal(after.evaluated_at, '2026-09-25T12:00:00.000Z', 'evaluated_at is not rewritten');
+  assert.equal(after.data_through, '2026-09-25T11:00:00.000Z', 'data_through is not rewritten');
+});
+
+test('the composer is mounted on the error shell and on the ideal page', async () => {
+  const repos = seededRepos('pages-composer-');
+  const ideal = await renderPage('/experiments', { repositories: repos });
+  assert.match(ideal, /data-testid="hypothesis-composer"/);
+  assert.match(ideal, /<label for="composer-title">Title</);
+  // Every composer field carries its own namespaced draft key: the fields
+  // client.js persists are exactly the ones the markup declares.
+  for (const key of ['opp_exp_draft_title', 'opp_exp_draft_thesis', 'opp_exp_draft_cap']) {
+    assert.match(ideal, new RegExp(`data-draft-key="${key}"`), `${key} is persisted`);
+  }
+
+  const errorShell = await renderPage('/experiments', { repositories: repos, override: 'error' });
+  assert.match(errorShell, /Experiment fetch failed/, 'the error panel still renders');
+  assert.match(errorShell, /data-testid="hypothesis-composer"/, 'the composer stays mounted beside the error');
+  for (const key of ['opp_exp_draft_title', 'opp_exp_draft_thesis', 'opp_exp_draft_cap']) {
+    assert.match(errorShell, new RegExp(`data-draft-key="${key}"`), `${key} survives the error shell`);
+  }
+});
+
+// A minimal DOM for client.js: the fields the composer markup declares, the
+// localStorage behind them, and nothing else the page script touches. Enough
+// to drive the draft round trip AC-5 claims — type, reload, still there.
+function draftHarness({ fields = {}, stored = {} } = {}) {
+  const listeners = new Map();
+  const storage = new Map(Object.entries(stored));
+  const made = Object.keys(fields).map((key) => ({
+    dataset: { draftKey: key },
+    value: fields[key],
+    addEventListener(type, handler) {
+      listeners.set(`${key}:${type}`, handler);
+    },
+  }));
+  globalThis.document = {
+    title: 'Experiments · live',
+    body: { dataset: { state: 'live' } },
+    getElementById: () => null,
+    querySelectorAll: (selector) => (selector === '[data-draft-key]' ? made : []),
+    querySelector: () => null,
+    addEventListener: () => {},
+  };
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+      setItem: (key, value) => storage.set(key, value),
+    },
+  };
+  return { fields: made, listeners, storage };
+}
+
+let clientLoad = 0;
+async function loadClient() {
+  clientLoad += 1;
+  await import(`../../src/web/client.js?draft-run=${clientLoad}`);
+}
+
+test('typed composer fields are saved to localStorage and restored on the next load', async () => {
+  try {
+    const typed = draftHarness({
+      fields: { opp_exp_draft_title: '', opp_exp_draft_thesis: '', opp_exp_draft_cap: '' },
+    });
+    await loadClient();
+    const type = (key, value) => {
+      typed.fields.find((field) => field.dataset.draftKey === key).value = value;
+      typed.listeners.get(`${key}:input`)();
+    };
+    type('opp_exp_draft_title', 'Exact-intent search deserves more budget');
+    type('opp_exp_draft_thesis', 'Qualified CPL should fall because intent is narrower.');
+    type('opp_exp_draft_cap', '500000000');
+    assert.equal(typed.storage.get('opp_exp_draft_title'), 'Exact-intent search deserves more budget');
+    assert.equal(typed.storage.get('opp_exp_draft_thesis'), 'Qualified CPL should fall because intent is narrower.');
+    assert.equal(typed.storage.get('opp_exp_draft_cap'), '500000000');
+
+    // The reload: fresh, empty fields, the same storage behind them — what the
+    // error shell does to a draft the user is still writing.
+    const reloaded = draftHarness({
+      fields: { opp_exp_draft_title: '', opp_exp_draft_thesis: '', opp_exp_draft_cap: '' },
+      stored: Object.fromEntries(typed.storage),
+    });
+    await loadClient();
+    const restored = Object.fromEntries(reloaded.fields.map((field) => [field.dataset.draftKey, field.value]));
+    assert.equal(restored.opp_exp_draft_title, 'Exact-intent search deserves more budget');
+    assert.equal(restored.opp_exp_draft_thesis, 'Qualified CPL should fall because intent is narrower.');
+    assert.equal(restored.opp_exp_draft_cap, '500000000');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+test('an empty database still renders the research-prompt empty state', async () => {
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  const html = await renderPage('/opportunities', { repositories: repos });
+  assert.match(html, /data-testid="opportunities-empty"/);
+  assert.match(html, /lead quality dropped by campaign/);
+  assert.match(html, /search demand is growing for your converting intent/);
+  assert.match(html, /below your current qualified CPL/);
+
+  // The copy above is static and also renders on the pre-change page, so it
+  // cannot tell the two branches apart. What this change actually moved is the
+  // branch condition: the queue is now driven by the repository, so one stored
+  // opportunity must replace the empty state with the ranked list.
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_pages_first',
+    record: {
+      opportunity_id: 'opp_pages_first', tenant_id: 'tenant_demo', name: 'First bet',
+      value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    },
+    score: 0.9208,
+  });
+  const ranked = await renderPage('/opportunities', { repositories: repos });
+  assert.doesNotMatch(ranked, /data-testid="opportunities-empty"/, 'the empty state yields to the ranked list');
+  assert.match(ranked, /data-testid="opportunity-row"/);
+  assert.match(ranked, /opp_pages_first/);
+  assert.match(ranked, /0\.9208/, 'the stored score renders on the row');
+});
