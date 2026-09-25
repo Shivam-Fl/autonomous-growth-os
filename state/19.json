@@ -104,6 +104,160 @@
   "stopped_at": null,
   "dispatched_stage": "plan",
   "validated_from": "plan",
-  "validated_at": "2026-09-25T09:10:46.458Z",
-  "validated_ac_changes": []
+  "validated_at": "2026-09-25T09:41:56.421Z",
+  "validated_ac_changes": [],
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Posting a decision without state_snapshot_id is rejected (400 MISSING_STATE_SNAPSHOT) and posting one whose alternatives lack a do-nothing entry is rejected (400 MISSING_DO_NOTHING), both with stable error codes and no row written; unknown snapshot id is 422 UNKNOWN_SNAPSHOT with nothing written",
+        "how_to_verify": "CI runs test/domain/decisions.test.js schema-rejection cases and test/api/decisions.test.js 400/422 cases",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "test"
+      },
+      {
+        "check": "Frozen replay over both fixture scenarios returns one AGGREGATE calibration report with precision 0.70 (exactly 7 correct of 10 matured) and false-intervention rate 0.33 (exactly 2 needless of 6 matured interventions, 2/6=0.333 rounded to two decimals), and the run executes zero mutations (no capability issued, no executor call, no spend event written, mutationsExecuted is 0); this report is CI-only and never rendered on /journal",
+        "how_to_verify": "CI runs the aggregate frozen-replay calibration cases in test/domain/decisions.test.js (asserts evaluated=10, correct=7, interventions=6, needless=2) plus the zero-mutation assertion in test/api/decisions.test.js",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "test"
+      },
+      {
+        "check": "A simulator episode whose qualified CPL meets the target still lists frontier proposals and contains valid do-nothing decisions carrying reasons",
+        "how_to_verify": "CI runs the target-met episode case in test/domain/decisions.test.js",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "On /journal, decisions decided within the lag window show status awaiting maturity with an expected evaluation date, and a failed replay keeps every prior journal row on screen with a per-scenario Retry button",
+        "how_to_verify": "Boot with seed data, open http://localhost:3000/journal, read the awaiting-maturity row and its date; open http://localhost:3000/journal?state=error and confirm prior entries plus per-scenario retry",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "check": "On /journal the decision table filters by action class and status, opening a row shows a detail drawer with alternatives including do-nothing, expected effect distributions, downside, evidence and memory refs, critic result and policy id, and a live calibration summary computed from the decisions repository shows precision 1.00 over 2 matured and false-intervention 0.00 over 1 intervention with 1 awaiting maturity (em-dash for each rate when nothing is evaluated yet); empty, loading, partial and error shells all render with copy",
+        "how_to_verify": "Boot with seed data, open http://localhost:3000/journal, use the class and status selects, open a row, read the drawer and the live calibration summary numbers; append ?state=empty, ?state=loading, ?state=partial, ?state=error to see each shell; confirm the frozen 0.70 replay numbers never appear on the page",
+        "id": "AC-5",
+        "source": "TR-15",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Render the frozen replay aggregate (0.70/0.33) in the /journal calibration panel and GET /v1/calibration",
+        "rejected_because": "The panel would show numbers unrelated to the rows on screen on every boot, and the server would have to import scenario data from under test/ into production code; live repository rates keep the panel honest about the journal and leave the frozen report as the CI-only calibration proof IAC-2 needs"
+      },
+      {
+        "approach": "Store decisions only as decision.recorded raw_events envelopes with payload validation and no new tables",
+        "rejected_because": "TR-6 requires an immutable StateSnapshot row that every decision references by id with a 422 on unknown ids; a foreign-key-grade reference needs a snapshots table, and querying filtered journal rows plus live calibration over loose event payloads repeats the funnel-table workaround instead of reusing the repository pattern"
+      }
+    ],
+    "approach": "Take rejection option (a) live-truth and pin ONE calibration source for every live surface: the /journal panel and GET /v1/calibration are computed from the decisions repository via an evaluation outcome carried on the decision record itself. Extend validateDecisionRecord with an optional evaluation object {outcome: correct|incorrect, needless: boolean, evaluated_at: UTC ISO-8601} present only on matured decisions; live calibration math is precision = correct/evaluated and false-intervention = needless/interventions (selected_action != do_nothing) rounded to two decimals, with null rates (rendered as em-dash) when the denominator is zero. Seed exactly three decisions producing deterministic live totals (evaluated=2, correct=2, interventions=1, needless=0, awaiting=1) so QA reads precision 1.00 / false-intervention 0.00 on the page. Keep the frozen replay evaluator as a pure domain function over test/fixtures/replay-scenarios.json that is CI-only: src/ never imports test fixtures, and the 0.70/0.33 aggregate appears only in tests, never on the page. Persist with migration 003 plus tenant-scoped repositories; expose the snapshot/decision/calibration endpoints; upgrade /journal to read the decisions repository with filters, drawer, live summary, and the five shells.",
+    "assumptions": [
+      "Decisions #17 (measurement) and #18 (Meta read) are merged, so computeFunnel, maturityFor, policyBand, and the FakeMetaAdsProvider patterns exist to reuse",
+      "No mutation or approval execution is in scope: the replay path must not import the executor or policy kernel, and the journal drawer has no approve or execute button",
+      "Money in decisions (expected value deltas) stays in integer micros per TR-1; the drawer formats via the existing money module"
+    ],
+    "confidence": 82,
+    "confidence_rationale": "Live-truth removes the contradiction the reviewer proved: every live sentence now names the decisions repository and every 0.70 sentence is fenced as CI-only with the fixture staying under test/ so no production import exists; seed arithmetic is 2/2 and 0/1 which cannot drift, and all surfaces reuse established patterns (append-only repositories, ?state= shells, node:test suites).",
+    "files": [
+      {
+        "action": "create",
+        "change": "New pure module src/domain/decisions.js with: DECISION_CLASSES list; validateDecisionRecord(input) requiring decision_id (dec_ prefix), tenant_id, state_snapshot_id, decided_at UTC ISO-8601, alternatives array containing exactly one action do_nothing entry with non-empty reason plus at least one non-do-nothing alternative, expected_outcomes distributions as {mean,p10,p90} numbers, risk {expected_downside_micros integer, worst_reasonable_case string}, evidence_refs and memory_refs arrays, critic_result string, policy_decision_id string, model_versions and prompt_versions arrays, plus optional evaluation {outcome: correct|incorrect, needless: boolean, evaluated_at: UTC ISO-8601} allowed only alongside a matured decided_at and rejected otherwise; errors are {code,message,details} with stable codes MISSING_STATE_SNAPSHOT, MISSING_DO_NOTHING, BAD_DISTRIBUTION, INVALID_MONEY, BAD_EVALUATION. evaluationStatus(decision, nowIso): matured when nowIso >= expectedEvaluationAt else awaiting-maturity; expectedEvaluationAt = decided_at + 120h. Example computed: decided 2026-09-20T00:00:00.000Z -> expected evaluation 2026-09-25T00:00:00.000Z. calibrationReport(decisionRows): LIVE aggregate over repository rows with an evaluation present: precision = correct/evaluated else null; falseInterventionRate = needless/interventions (selected_action != do_nothing) else null; both rounded to two decimals; returns {precision, falseInterventionRate, evaluated, correct, interventions, needless, awaitingMaturity}. Example computed (the pinned seed totals): evaluated=2 correct=2 -> precision 1.00; interventions=1 needless=0 -> 0.00; awaitingMaturity=1. Invariants: correct <= evaluated and needless <= interventions, all integers; every row without evaluation carries an expected evaluation date. frontierCheck(episode): hitting the CPL target returns keepProposing true and requires at least one do-nothing decision with reason. evaluateReplay(scenarios): folds frozen scenarios into the single AGGREGATE CI-only calibration report plus perScenario breakdown, imports nothing that can mutate (no executor, no policy kernel, no fetch, never imports test fixtures from src/), returns {precision, falseInterventionRate, evaluated, correct, interventions, needless, perScenario, mutationsExecuted: 0}.",
+        "path": "src/domain/decisions.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add migration 003_journal_tables creating state_snapshots (tenant_id, snapshot_id PRIMARY KEY per tenant, decided basis KPIs JSON, budgets JSON, funnel JSON, health JSON, memories JSON, created_at) and decisions (tenant_id, decision_id, state_snapshot_id, action_class, selected_action, record JSON including optional evaluation, decided_at, expected_evaluation_at, status) with BEFORE UPDATE/DELETE triggers aborting on both tables (decisions append-only like raw_events; snapshots immutable), plus status index on (tenant_id, status, decided_at).",
+        "path": "src/data/db.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add createStateSnapshotRepository (create idempotent on snapshot_id, get tenant-scoped, list deterministic by created_at, snapshot_id) and createDecisionRepository (create idempotent on decision_id returning {created:false,id} on re-post, get tenant-scoped, list with optional class/status filters ordered by decided_at, decision_id, listEvaluated/listAwaiting for live calibration) behind createRepositories as snapshots and decisions; all SQL binds tenant_id; no update or delete surface; calibration counts derive from stored record.evaluation fields.",
+        "path": "src/data/repositories.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add POST /v1/snapshots (201 {snapshot_id}, 400 on bad body with {code,message} envelope), POST /v1/decisions (runs validateDecisionRecord then snapshots.get, 400 MISSING_STATE_SNAPSHOT or MISSING_DO_NOTHING or BAD_EVALUATION, 422 UNKNOWN_SNAPSHOT {code:UNKNOWN_SNAPSHOT} writing nothing, 201 {decision_id, status, expected_evaluation_at} with idempotent re-post returning the existing id), GET /v1/decisions?class=&status= (deterministic decided_at, decision_id order), GET /v1/decisions/:id (full record: alternatives, expected_outcomes, risk, evidence_refs, memory_refs, critic_result, policy_decision_id, model_versions, evaluation when present), GET /v1/calibration (LIVE aggregate precision, false_intervention_rate, evaluated, correct, interventions, needless, awaiting_maturity computed from the decisions repository via record.evaluation; rates are null when their denominator is zero). Unknown snapshot id is a 422; nothing executes; no route imports test fixtures.",
+        "path": "src/api/routes.js"
+      },
+      {
+        "action": "edit",
+        "change": "Rewrite journal(): ideal renders a filter form (two native selects, action class and status, GET submit, labelled, keyboard operable) plus a table (When, Action class, Selected, Expected, Matured, Status with row counts and deterministic sort) where each row is a link/button opening the detail drawer; the drawer shows alternatives including the do-nothing entry with its reason, expected effect distributions (mean/p10/p90), downside estimate with worst-reasonable-case, evidence and memory refs, critic result, and policy decision id, plus a Close button returning focus to the invoking row; below the table a LIVE calibration summary panel reads the decisions repository and shows precision 1.00 over 2 matured, false-intervention 0.00 over 1 intervention, 1 awaiting maturity on seeded boot, and an em-dash for each rate when its denominator is zero (copy: Precision — (no matured evaluations yet)). Partial renders awaiting-maturity rows with expected evaluation dates (copy: Awaiting maturity — expected evaluation 25 Sept 2026). Error names the failed scenario (copy: Replay evaluation failed for scenario replay-tracking-outage. Every prior journal entry is preserved and untouched.) with a per-scenario Retry button. Empty keeps Shadow mode has not started copy and the Start the first replay link. Loading keeps skeleton rows with cached calibration and a refreshing indicator. Narrow widths collapse the table to cards and the drawer to a full-screen overlay per docs/ui.md. The page never reads the frozen replay fixture.",
+        "path": "src/web/pages.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add drawer behaviour: opening a journal row fetches the detail endpoint content into the drawer region, moves focus into the drawer, announces via the aria-live region, and Close/Escape returns focus to the invoking row; filter selects submit natively with no JS required.",
+        "path": "src/web/client.js"
+      },
+      {
+        "action": "edit",
+        "change": "After the existing journey events, write one state snapshot (state_seed_1) then three decisions through the new repositories with fixed ids for idempotent re-seeding: dec_seed_matured_1 (budget-change intervention decided 150h ago, full alternatives and critic/policy ids, evaluation {outcome:correct, needless:false}) + dec_seed_donothing_1 (campaign-status do-nothing decided 150h ago with reason qualified CPL within 15% of target; no frontier move beats holding spend, evaluation {outcome:correct, needless:false}) + dec_seed_awaiting_1 (budget-change intervention decided 6h ago, no evaluation, expected evaluation +120h). Live totals this produces: evaluated=2, correct=2, precision 1.00; interventions=1, needless=0, false-intervention 0.00; awaiting=1.",
+        "path": "scripts/seed.js"
+      },
+      {
+        "action": "create",
+        "change": "Frozen replay fixture (CI-only, never imported by src/) with two scenarios whose matured counts sum to the pinned aggregate: replay-cpl-hold with 6 matured decisions (4 correct, 2 wrong; 4 interventions of which 2 needless) plus replay-tracking-outage with 4 matured decisions (3 correct, 1 wrong; 2 interventions, 0 needless) and 2 awaiting-maturity entries excluded from matured counts. AGGREGATE totals: 10 matured, 7 correct -> precision 7/10 = 0.70 exactly; 6 matured interventions, 2 needless -> 2/6 = 0.333... reported as 0.33. evaluateReplay output is byte-deterministic on these counts. Replay failure fixture replay-broken references a missing snapshot to exercise per-scenario retry preserving prior entries.",
+        "path": "test/fixtures/replay-scenarios.json"
+      }
+    ],
+    "issue": 19,
+    "kind": "feature",
+    "out_of_scope": [
+      "IAC follow-ups that belong to later slices: executing or approving any mutation (safety slice), opportunity ranking and experiment evaluation (their own slices)",
+      "Per-action-class trust ledgers and autonomy promotion (TR-19): this slice records calibration, it does not grant authority",
+      "Google Ads reuse of the journal contract: Meta-first per the binding epic #14 answer"
+    ],
+    "qa_script": [
+      "npm run sdlc:seed && npm run sdlc:serve, then POST the 10-event click-to-revenue journey to POST /v1/events and confirm GET /v1/metrics qualified CPL",
+      "POST /v1/snapshots then POST /v1/decisions: once valid (201), once without state_snapshot_id (400), once without a do-nothing alternative (400), once with an unknown snapshot id (422); re-post the valid one and confirm the same decision_id returns",
+      "Open http://localhost:3000/journal on the seeded boot: use the class and status filters, open a row to read alternatives, distributions, downside, evidence/memory refs, critic result and policy id, and read the LIVE calibration summary (precision 1.00 over 2 matured, false-intervention 0.00 over 1 intervention, 1 awaiting maturity); the frozen 0.70/0.33 aggregate is CI-only and must not appear on the page",
+      "Open http://localhost:3000/journal?state=partial for the awaiting-maturity row with its expected evaluation date and ?state=error to confirm prior entries survive with per-scenario retry; run npm run sdlc:verify for the full suite including the frozen-replay 0.70/0.33 cases"
+    ],
+    "risks": [
+      "New tables touch src/data/db.js migrations: a bad migration breaks boot for every page; mitigated by following the existing 001/002 migration pattern and temp-DB test coverage",
+      "Journal page rewrite could regress the dashboard decision feed which reads decision.recorded events: the feed is left untouched and journal reads move to the decisions repository, with pages tests asserting both"
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "rejects a decision write with no state_snapshot_id (MISSING_STATE_SNAPSHOT)",
+          "rejects a decision write with no do-nothing alternative (MISSING_DO_NOTHING)",
+          "rejects bad expected-outcome distributions, non-integer money, and malformed evaluation objects (BAD_EVALUATION)",
+          "marks recent decisions awaiting-maturity with expected evaluation = decided_at + 120h (computed example 2026-09-20 -> 2026-09-25)",
+          "live calibration over repository rows returns precision 1.00 (2 correct of 2 evaluated) and false-intervention 0.00 (0 needless of 1 intervention) with awaitingMaturity=1, and null rates rendered as em-dash when nothing is evaluated",
+          "aggregate frozen fixture returns precision 0.70 (7 correct of 10 matured) and false-intervention 0.33 (2 needless of 6 interventions): asserts evaluated=10, correct=7, interventions=6, needless=2 with per-scenario split 6+4 matured",
+          "target-met episode keeps proposing frontier moves and records do-nothing decisions with reasons"
+        ],
+        "path": "test/domain/decisions.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "POST /v1/decisions valid body returns 201 with status and expected_evaluation_at; re-post returns the same decision_id without duplicating",
+          "POST without snapshot id returns 400 and writes nothing; POST with unknown snapshot id returns 422 and writes nothing",
+          "GET /v1/decisions filters by class and status in deterministic order; GET /v1/decisions/:id returns alternatives, downside, evidence, critic and policy fields",
+          "GET /v1/calibration returns the LIVE repository aggregate (precision 1.00, false-intervention 0.00, evaluated 2, awaiting 1 on seed; null rates when unevaluated) and never the frozen 0.70 fixture",
+          "frozen replay run executes zero mutations: no capability, executor, or spend side effect exists on the path"
+        ],
+        "path": "test/api/decisions.test.js"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "journal ideal renders filters, drawer content fields, and the LIVE calibration summary (1.00 over 2 matured, 0.00 over 1 intervention) after seeding",
+          "journal partial shows the awaiting-maturity row with its expected evaluation date",
+          "journal error names the scenario, preserves prior entries, and offers per-scenario retry",
+          "all five journal shells render without writing to storage"
+        ],
+        "path": "test/web/pages.test.js"
+      }
+    ],
+    "understanding": "Issue #19 is the shadow-mode slice of epic #14: before any spend moves, the system records what it would do with predicted impact in a decision journal, evaluates predictions at maturity, and reports calibration (precision, false-intervention rate). The contract face is the decision record (immutable StateSnapshot reference, do-nothing alternative, expected distributions, downside, evidence/memory refs, critic result, policy id, evaluation scheduled at maturity); the UI face is the /journal page (filterable table, detail drawer, live calibration summary, all five states). Dependencies #17 (measurement) and #18 (Meta read) are done, so maturity math and provider patterns exist to reuse; the binding epic #14 answer fixes Meta-first ordering. v2 was rejected because the live panel (computed from the decisions repository, which held 3 seed rows with no evaluation-outcome field) and the QA script (precision 0.70 over 10 matured from the frozen replay) named two different data sources as one; v3 takes rejection option (a) live-truth: the record gains an evaluation outcome, the seed writes evaluated outcomes producing 1.00/0.00 live rates, the frozen 0.70 aggregate stays CI-only under test/ and never reaches the page, and every live sentence names the repository.",
+    "version": 3
+  }
 }
