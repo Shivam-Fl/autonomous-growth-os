@@ -18,58 +18,7 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
-  "touch_paths": [],
-  "acceptance": [],
-  "planned_route": [
-    "plan",
-    "implement",
-    "review",
-    "qa"
-  ],
-  "on_complete": "merge",
-  "artifacts": {},
-  "failure_history": [],
-  "review_history": [],
-  "review_root_caused": [],
-  "created_at": "2026-09-25T08:49:41.551Z",
-  "updated_at": "2026-09-25T08:52:26.919Z",
-  "history": [
-    {
-      "at": "2026-09-25T08:49:58.636Z",
-      "agent": "intake",
-      "action": "-> planning"
-    },
-    {
-      "at": "2026-09-25T08:52:00.144Z",
-      "agent": "router",
-      "action": "route plan -> implement -> review -> qa (model, confidence 85)"
-    },
-    {
-      "at": "2026-09-25T08:52:22.764Z",
-      "agent": "plan",
-      "action": "plan attempt 1"
-    },
-    {
-      "at": "2026-09-25T08:52:26.919Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    }
-  ],
-  "resume_at": null,
-  "flow_plan": {
-    "kind": "bug",
-    "confidence": 85,
-    "matched_rule": null,
-    "gates": {},
-    "councils": {
-      "plan": "single"
-    },
-    "decided_at": "2026-09-25T08:52:00.144Z"
-  },
-  "stopped_at": null,
-  "dispatched_stage": "plan",
-  "validated_work_order": {
+  "work_order": {
     "acceptance": [
       {
         "check": "Dashboard Qualified CPL card shows only the tenant-currency spend: with one INR 3,000,000,000 spend row, one USD 3,000,000,000 legacy spend row and one lead_qualified row, the card reads ₹3,000.00 (not ₹6,000.00), matching GET /v1/metrics for the same tenant",
@@ -156,7 +105,61 @@
     "understanding": "Issue #31 carries three non-blocking review findings from #29, each explicitly requiring re-verification before planning since that PR kept moving. I verified all three against current main and all three still reproduce: (1) the dashboard KPI strip (src/web/pages.js:341) calls computeFunnel(rows) without the tenant currency while GET /v1/metrics (src/api/routes.js:142) passes it, so pre-fix mixed-currency legacy rows corrupt dashboard CPL while the API excludes them; (2) latestTimestamp in src/data/repositories.js:101 has zero callers anywhere in the repo (staleness goes through dataThrough); (3) journeyRows in test/domain/measurement.test.js:21 accepts tenantId but never stamps tenant_id on rows, and the cross-tenant test additionally gives the second tenant different event_ids (suffix _x), so its volume-6 assertion passes with or without tenant-keyed dedup. No human decisions are recorded in plan/brief.md and no prior plan was rejected.",
     "version": 1
   },
+  "touch_paths": [],
+  "acceptance": [],
+  "planned_route": [
+    "plan",
+    "implement",
+    "review",
+    "qa"
+  ],
+  "on_complete": "merge",
+  "artifacts": {},
+  "failure_history": [],
+  "review_history": [],
+  "review_root_caused": [],
+  "created_at": "2026-09-25T08:49:41.551Z",
+  "updated_at": "2026-09-25T08:52:26.919Z",
+  "history": [
+    {
+      "at": "2026-09-25T08:49:58.636Z",
+      "agent": "intake",
+      "action": "-> planning"
+    },
+    {
+      "at": "2026-09-25T08:52:00.144Z",
+      "agent": "router",
+      "action": "route plan -> implement -> review -> qa (model, confidence 85)"
+    },
+    {
+      "at": "2026-09-25T08:52:22.764Z",
+      "agent": "plan",
+      "action": "plan attempt 1"
+    },
+    {
+      "at": "2026-09-25T08:52:26.919Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    }
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "bug",
+    "confidence": 85,
+    "matched_rule": null,
+    "gates": {},
+    "councils": {
+      "plan": "single"
+    },
+    "decided_at": "2026-09-25T08:52:00.144Z"
+  },
+  "stopped_at": null,
+  "dispatched_stage": "plan",
   "validated_from": "plan",
   "validated_at": "2026-09-25T08:55:48.980Z",
-  "validated_ac_changes": []
+  "validated_ac_changes": [],
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-09-25T08:56:04.685Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5829691935"
 }
