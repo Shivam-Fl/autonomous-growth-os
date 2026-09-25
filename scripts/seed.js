@@ -276,17 +276,17 @@ const SEED_OPPORTUNITIES = [
   {
     opportunity_id: 'opp_seed_expensive',
     name: 'Expensive high-quality campaign',
-    value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
   },
   {
     opportunity_id: 'opp_seed_cheap',
     name: 'Cheap low-quality campaign',
-    value: 2000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost: 100, downside: 2, delay: 1,
+    value_micros: 2_000_000_000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost_micros: 100_000_000, downside: 2, delay: 1,
   },
   {
     opportunity_id: 'opp_seed_low',
     name: 'Low-reach retargeting bet',
-    value: 1000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost: 500, downside: 2, delay: 2,
+    value_micros: 1_000_000_000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost_micros: 500_000_000, downside: 2, delay: 2,
   },
 ];
 

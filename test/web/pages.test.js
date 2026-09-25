@@ -414,11 +414,49 @@ test('ranked rows render stored score plus all eight score components in reposit
     const row = rowHtml(id);
     assert.match(row, /data-testid="opportunity-row"/);
     assert.match(row, /data-testid="score-components"/);
-    for (const component of ['value', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost', 'downside', 'delay']) {
+    for (const component of ['value_micros', 'pSuccess', 'fit', 'infoValue', 'reversibility', 'cost_micros', 'downside', 'delay']) {
       assert.match(row, new RegExp(`data-component="${component}"`), `${id} renders its ${component}`);
     }
   }
   assert.match(rowHtml('opp_seed_expensive'), /0\.9208/, 'the stored score renders on the winning row');
+});
+
+test('the opportunity row renders money as rupees, never as bare micros', async () => {
+  const repos = seededRepos('pages-opp-money-');
+  const html = await renderPage('/opportunities', { repositories: repos });
+  const row = html.match(/<li class="opportunity-row"[\s\S]*?data-opportunity-id="opp_seed_expensive"[\s\S]*?<\/li>/)[0];
+
+  // 6_000_000_000 micros is 6000 rupees: the two money components go through
+  // money(), so a reader never has to know the unit to read the row.
+  assert.match(row, /value ₹6000\.00/);
+  assert.match(row, /cost ₹1900\.00/);
+  assert.doesNotMatch(row, /6000000000/, 'the bare micros never render');
+  assert.doesNotMatch(row, /1900000000/, 'the bare micros never render');
+  // The six dimensionless components stay plain numbers.
+  assert.match(row, /success probability 0\.6/);
+  assert.match(row, /downside 2/);
+});
+
+test('a component-less or legacy-shaped row renders the placeholder, never ₹NaN', async () => {
+  // A record stored before the micros rename carries value/cost, so
+  // components.value_micros is undefined. money(undefined) is ₹NaN, so the
+  // null check stands in front of it.
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
+  repos.opportunities.create({
+    tenant_id: 'tenant_demo',
+    opportunity_id: 'opp_legacy',
+    record: {
+      opportunity_id: 'opp_legacy', tenant_id: 'tenant_demo', name: 'Legacy bet',
+      value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+    },
+    score: 0.9208,
+  });
+  const html = await renderPage('/opportunities', { repositories: repos });
+  const row = html.match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /data-component="value_micros">value —</);
+  assert.match(row, /data-component="cost_micros">cost —</);
+  assert.doesNotMatch(row, /₹NaN/);
 });
 
 test('the seeded underpowered experiment renders the Inconclusive badge, never Win or Loss', async () => {
@@ -434,6 +472,13 @@ test('the seeded underpowered experiment renders the Inconclusive badge, never W
   const running = html.match(/data-experiment-id="exp_seed_running"[\s\S]*?<\/li>/)[0];
   assert.match(running, /data-testid="exp-state">Running</);
   assert.match(html, /₹500\.00/, 'the max spend cap formats as money');
+  // The caps render exactly once per card: the card used to print them twice
+  // (a bare span and an identical div below it), and matching the testid alone
+  // passed against either copy.
+  const capLines = running.match(/₹500\.00/g) ?? [];
+  assert.equal(capLines.length, 1, 'the max spend cap appears exactly once in the card');
+  assert.equal((running.match(/₹200\.00/g) ?? []).length, 1, 'the max downside cap appears exactly once');
+  assert.equal((card.match(/data-testid="caps"/g) ?? []).length, 1, 'one caps element per card');
 });
 
 test('the dashboard experiments panel reads the experiment repository, not the dead raw-event stream', async () => {
@@ -577,7 +622,7 @@ test('an empty database still renders the research-prompt empty state', async ()
     opportunity_id: 'opp_pages_first',
     record: {
       opportunity_id: 'opp_pages_first', tenant_id: 'tenant_demo', name: 'First bet',
-      value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
     },
     score: 0.9208,
   });

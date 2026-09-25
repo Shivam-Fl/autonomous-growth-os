@@ -10,22 +10,22 @@ import {
 const EXPENSIVE = {
   opportunity_id: 'opp_seed_expensive',
   tenant_id: 'tenant_demo',
-  value: 6000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost: 1900, downside: 2, delay: 1,
+  value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
 };
 const CHEAP = {
   opportunity_id: 'opp_seed_cheap',
   tenant_id: 'tenant_demo',
-  value: 2000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost: 100, downside: 2, delay: 1,
+  value_micros: 2_000_000_000, pSuccess: 0.2, fit: 0.5, infoValue: 0.8, reversibility: 0.5, cost_micros: 100_000_000, downside: 2, delay: 1,
 };
 const LOW = {
   opportunity_id: 'opp_seed_low',
   tenant_id: 'tenant_demo',
-  value: 1000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost: 500, downside: 2, delay: 2,
+  value_micros: 1_000_000_000, pSuccess: 0.2, fit: 0.4, infoValue: 0.5, reversibility: 0.5, cost_micros: 500_000_000, downside: 2, delay: 2,
 };
 const GENERIC = {
   opportunity_id: 'opp_generic',
   tenant_id: 'tenant_demo',
-  value: 1000, pSuccess: 0.5, fit: 0.8, infoValue: 1.2, reversibility: 0.9, cost: 100, downside: 2, delay: 1,
+  value_micros: 1_000_000_000, pSuccess: 0.5, fit: 0.8, infoValue: 1.2, reversibility: 0.9, cost_micros: 100_000_000, downside: 2, delay: 1,
 };
 
 test('scores the pinned examples exactly: generic 2.16, expensive 0.9208, cheap 0.40, low 0.01', () => {
@@ -61,7 +61,7 @@ test('the validated record stores all eight score components plus the computed s
   const opportunity = validated.opportunity;
   assert.deepEqual(
     Object.keys(opportunity).sort(),
-    ['cost', 'delay', 'downside', 'fit', 'infoValue', 'name', 'opportunity_id', 'pSuccess', 'reversibility', 'tenant_id', 'value'].sort(),
+    ['cost_micros', 'delay', 'downside', 'fit', 'infoValue', 'name', 'opportunity_id', 'pSuccess', 'reversibility', 'tenant_id', 'value_micros'].sort(),
   );
   const score = scoreOpportunity(opportunity);
   assert.ok(Number.isFinite(score) && score > 0, 'scores are finite positive numbers');
@@ -81,17 +81,34 @@ test('cheap low-quality vs expensive high-quality: the expensive campaign wins o
   assert.ok(expectedContribution(expensive) > expectedContribution(cheap));
 });
 
-test('a zero cost is floored, never infinite and never throws', () => {
-  const validated = validateOpportunity({ ...GENERIC, cost: 0 });
+test('expectedContribution is total: an unrepresentable record reads 0, never Infinity or NaN', () => {
+  // validation rejects this shape, so the record is built by hand here — the
+  // same defence-in-depth scoreOpportunity has. Infinity used to be the result
+  // and JSON.stringify turned it into null on the wire.
+  const overflowing = expectedContribution({ ...GENERIC, value_micros: 1e303, pSuccess: 1, cost_micros: 0 });
+  assert.equal(overflowing, 0, 'not Infinity, not NaN, and never serialised as null');
+  assert.equal(Number.isFinite(overflowing), true);
+  assert.equal(JSON.stringify({ expected_contribution_micros: overflowing }), '{"expected_contribution_micros":0}');
+  // A record stored before the micros rename reads 0 too, not NaN.
+  const { value_micros, cost_micros, ...withoutMoney } = GENERIC;
+  const legacy = expectedContribution({ ...withoutMoney, value: 1000, cost: 100 });
+  assert.equal(legacy, 0);
+});
+
+test('a zero cost is floored at one currency unit in micros, never infinite and never throws', () => {
+  const validated = validateOpportunity({ ...GENERIC, cost_micros: 0 });
   assert.equal(validated.ok, true);
   const score = scoreOpportunity(validated.opportunity);
   assert.ok(Number.isFinite(score), 'the score is a finite number');
   assert.ok(score > 0);
-  assert.equal(score, 216, 'cost 0 acts as the divisor floor 1: 432/1/2/1');
+  // The money unit travels with the floor: 432_000_000 micros of numerator over
+  // a 1_000_000-micros floor is 432, not 432_000_000. A floor left at 1 would
+  // silently rescale this to 216_000_000.
+  assert.equal(score, 216, 'cost_micros 0 acts as the one-unit floor: 432M/1M/2/1');
 });
 
 test('zero downside and zero delay are floored the same way as cost', () => {
-  const validated = validateOpportunity({ ...GENERIC, cost: 100, downside: 0, delay: 0 });
+  const validated = validateOpportunity({ ...GENERIC, cost_micros: 100_000_000, downside: 0, delay: 0 });
   const score = scoreOpportunity(validated.opportunity);
   assert.ok(Number.isFinite(score) && score > 0, 'no divide-by-zero and no infinite score');
 });
@@ -110,18 +127,31 @@ test('invalid components reject with OPP_BAD_COMPONENT', () => {
   }
 });
 
-test('a negative cost or value rejects with OPP_BAD_MONEY', () => {
-  const value = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', value: -5 });
-  assert.equal(value.error.code, 'OPP_BAD_MONEY');
-  const cost = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', cost: -100 });
-  assert.equal(cost.error.code, 'OPP_BAD_MONEY');
+test('a negative, fractional or unsafe cost or value rejects with OPP_BAD_MONEY', () => {
+  // Money is integer micros: a fractional rupee and anything above
+  // MAX_SAFE_INTEGER cannot be stored exactly, so it is rejected at the door
+  // rather than rounded into a different amount than the caller sent.
+  for (const bad of [
+    { value_micros: -5 },
+    { value_micros: 6_000_000.5 },
+    { value_micros: Number.MAX_SAFE_INTEGER + 2 },
+    { cost_micros: -100 },
+    { cost_micros: 1_900_000_000.5 },
+    { cost_micros: 1e303 },
+  ]) {
+    const result = validateOpportunity({ ...GENERIC, opportunity_id: 'opp_bad', ...bad });
+    assert.equal(result.ok, false, `${Object.keys(bad)[0]} ${bad[Object.keys(bad)[0]]} must reject`);
+    assert.equal(result.error.code, 'OPP_BAD_MONEY', `${JSON.stringify(bad)} reports the money code`);
+    assert.ok(result.error.message.length > 0);
+  }
 });
 
 test('components whose product overflows are rejected, so an infinite score is never stored', () => {
-  // Every component is finite and in range on its own: value 1e308 times
-  // infoValue 1e308 overflows only as a product. Unbounded, the score would be
-  // Infinity, which serialises as null and sorts above every real bet.
-  const result = validateOpportunity({ ...GENERIC, value: 1e308, infoValue: 1e308 });
+  // Every component is finite and in range on its own: a safe-integer
+  // value_micros times infoValue 1e308 overflows only as a product. Unbounded,
+  // the score would be Infinity, which serialises as null and sorts above every
+  // real bet.
+  const result = validateOpportunity({ ...GENERIC, value_micros: 9_007_199_254_740_991, infoValue: 1e308 });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, 'OPP_BAD_COMPONENT');
   assert.ok(result.error.message.length > 0);
@@ -131,7 +161,7 @@ test('an unscorable record scores finite and ranks last, never above a real bet'
   // validateOpportunity is the gate for that shape, so the record is built by
   // hand here: scoreOpportunity must still return a finite number and the rank
   // function must place it below every real score (SQL would sort it first).
-  const overflow = scoreOpportunity({ ...GENERIC, value: 1e308, infoValue: 1e308 });
+  const overflow = scoreOpportunity({ ...GENERIC, value_micros: 9_007_199_254_740_991, infoValue: 1e308 });
   assert.equal(overflow, 0, 'an overflow scores 0 — finite, and the lowest rank');
   const ranked = rankOpportunities([
     { opportunity_id: 'opp_overflow', score: overflow },

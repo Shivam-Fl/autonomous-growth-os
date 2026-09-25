@@ -455,32 +455,38 @@ export function buildApp({ repositories }) {
       return errorResponse(response, 400, evaluated.error);
     }
     const evaluatedAt = utcNow();
-    if (evaluated.outcome) {
-      repositories.evaluations.append({
-        tenant_id: tenantId,
-        experiment_id: experiment.experiment_id,
-        evaluated_at: evaluatedAt,
-        result: evaluated.outcome,
-        reason: evaluated.reason ?? null,
-        counts,
-      });
-      // State updates on the experiments table itself are legal here and only
-      // here: the row is mutable working state, outcomes live on the
-      // append-only evaluation rows.
-      repositories.experiments.updateState(tenantId, experiment.experiment_id, {
-        state: evaluated.next_state,
-        evaluation_result: evaluated.outcome,
-        evaluation_reason: evaluated.reason ?? null,
-        evaluated_at: evaluatedAt,
-        data_through: evaluatedAt,
-      });
-    }
+    // evaluateExperiment always returns a truthy outcome on the non-error path
+    // (inconclusive, win or loss), so the append below always runs before the
+    // 200 and the response always carries both flags.
+    const { appended } = repositories.evaluations.append({
+      tenant_id: tenantId,
+      experiment_id: experiment.experiment_id,
+      evaluated_at: evaluatedAt,
+      result: evaluated.outcome,
+      reason: evaluated.reason ?? null,
+      counts,
+    });
+    // State updates on the experiments table itself are legal here and only
+    // here: the row is mutable working state, outcomes live on the append-only
+    // evaluation rows.
+    repositories.experiments.updateState(tenantId, experiment.experiment_id, {
+      state: evaluated.next_state,
+      evaluation_result: evaluated.outcome,
+      evaluation_reason: evaluated.reason ?? null,
+      evaluated_at: evaluatedAt,
+      data_through: evaluatedAt,
+    });
     response.status(200).json({
       experiment_id: experiment.experiment_id,
       outcome: evaluated.outcome,
       reason: evaluated.reason ?? null,
       next_state: evaluated.next_state,
       z: evaluated.z ?? null,
+      // The evaluation row is append-only: a same-millisecond collision is
+      // deduplicated, not overwritten, and the wire says which it was (the
+      // raw-events POST precedent).
+      appended,
+      duplicate: !appended,
     });
   });
 
