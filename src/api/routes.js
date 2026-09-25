@@ -1,5 +1,5 @@
 // HTTP surface: GET /health, the five server-rendered pages, static assets,
-// POST /v1/events ingest, GET /v1/metrics, and a {code,message} error
+// POST /v1/events ingest, GET /v1/metrics, GET /v1/learnings, and a {code,message} error
 // envelope for every API path that has no handler. Failed handlers never
 // leak a stack trace to the response.
 
@@ -157,6 +157,17 @@ export function buildApp({ repositories }) {
       data_through: latest,
       stale: isStale(now, latest),
       stale_age: staleAgeHours(now, latest) ?? null,
+    });
+  });
+
+  // The learnings listing (TR-10): tenant-scoped only, deterministic by
+  // (updated_at, id) from the repository, tamper-proof against cross-tenant
+  // reads because every query binds tenant_id.
+  app.get('/v1/learnings', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    response.json({
+      tenant_id: tenantId,
+      learnings: repositories.learnings.list(tenantId),
     });
   });
 

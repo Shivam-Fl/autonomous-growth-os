@@ -251,6 +251,138 @@ function createSagaRepository(db) {
   };
 }
 
+function createLearningRepository(db) {
+  const upsert = db.prepare(
+    `INSERT OR REPLACE INTO learnings
+      (tenant_id, id, claim, scope, evidence_refs, evidence_type, effect_metric, effect_estimate, effect_low, effect_high,
+       confidence, applicability, status, created_at, valid_from, stale_after, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectOne = db.prepare(
+    `SELECT tenant_id, id, claim, scope, evidence_refs, evidence_type, effect_metric, effect_estimate, effect_low, effect_high,
+       confidence, applicability, status, created_at, valid_from, stale_after, updated_at
+     FROM learnings WHERE tenant_id = ? AND id = ?`,
+  );
+  const selectAll = db.prepare(
+    `SELECT tenant_id, id, claim, scope, evidence_refs, evidence_type, effect_metric, effect_estimate, effect_low, effect_high,
+       confidence, applicability, status, created_at, valid_from, stale_after, updated_at
+     FROM learnings WHERE tenant_id = ? ORDER BY updated_at, id LIMIT ? OFFSET ?`,
+  );
+  // Scope prefilter: scope text equality is only a coarse SQL-level hint —
+  // it narrows rows whose stored scope mentions the context value verbatim.
+  // The structured scopeMatch gate in src/memory/learnings.js always runs
+  // after so a learning whose scope does not actually match is never served.
+  const selectForContext = db.prepare(
+    `SELECT tenant_id, id, claim, scope, evidence_refs, evidence_type, effect_metric, effect_estimate, effect_low, effect_high,
+       confidence, applicability, status, created_at, valid_from, stale_after, updated_at
+     FROM learnings WHERE tenant_id = ? AND status = 'accepted' ORDER BY updated_at, id`,
+  );
+  const insertCall = db.prepare(
+    `INSERT OR IGNORE INTO model_calls
+      (tenant_id, id, provider, model, prompt_version, tool_catalog_version, task_type,
+       tokens_in, tokens_out, latency_ms, cost_micros, usefulness, occurred_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectCalls = db.prepare(
+    `SELECT tenant_id, id, provider, model, prompt_version, tool_catalog_version, task_type,
+       tokens_in, tokens_out, latency_ms, cost_micros, usefulness, occurred_at
+     FROM model_calls WHERE tenant_id = ? ORDER BY occurred_at, id LIMIT ?`,
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    const effect = row.effect_metric === null ? null : {
+      metric: row.effect_metric,
+      estimate: row.effect_estimate,
+      interval: [row.effect_low, row.effect_high],
+    };
+    return {
+      id: row.id,
+      claim: row.claim,
+      scope: parseJson(row.scope, {}),
+      evidenceRefs: parseJson(row.evidence_refs, []),
+      evidenceType: row.evidence_type,
+      effect,
+      confidence: row.confidence,
+      applicability: row.applicability,
+      status: row.status,
+      createdAt: row.created_at,
+      validFrom: row.valid_from,
+      staleAfter: row.stale_after,
+      updatedAt: row.updated_at,
+      tenantId: row.tenant_id,
+    };
+  }
+
+  return {
+    /** Idempotent by fixed id (lrn_): re-writing a learning replaces the row
+     * for that tenant only. Rejection is a status transition, never a delete,
+     * so there is deliberately no delete function here. */
+    upsert(tenantId, learning) {
+      upsert.run(
+        tenantId,
+        learning.id,
+        learning.claim,
+        JSON.stringify(learning.scope ?? {}),
+        JSON.stringify(learning.evidenceRefs ?? []),
+        learning.evidenceType,
+        learning.effect?.metric ?? null,
+        learning.effect?.estimate ?? null,
+        learning.effect?.interval?.[0] ?? null,
+        learning.effect?.interval?.[1] ?? null,
+        learning.confidence,
+        learning.applicability,
+        learning.status,
+        learning.createdAt,
+        learning.validFrom,
+        learning.staleAfter,
+        learning.updatedAt,
+      );
+      return this.get(tenantId, learning.id);
+    },
+
+    get(tenantId, id) {
+      return shape(selectOne.get(tenantId, id));
+    },
+
+    list(tenantId, { offset = 0, limit = 200 } = {}) {
+      return selectAll.all(tenantId, limit, offset).map(shape);
+    },
+
+    /** Accepted rows only; the caller runs the full retrieval gate over them. */
+    listAccepted(tenantId) {
+      return selectForContext.all(tenantId).map(shape);
+    },
+
+    /** Append the model-router call record for the tenant. Immutable once
+     * written; usefulness is stubbed null until an evaluator fills it. */
+    recordCall(tenantId, call, { id = `mcall_${call.provider}_${Date.parse(call.occurredAt)}` } = {}) {
+      insertCall.run(
+        tenantId,
+        id,
+        call.provider,
+        call.model,
+        call.promptVersion,
+        call.toolCatalogVersion,
+        call.taskType,
+        call.tokensIn,
+        call.tokensOut,
+        call.latencyMs,
+        call.costMicros,
+        call.usefulness ?? null,
+        call.occurredAt,
+      );
+      return { recorded: true, id };
+    },
+
+    listCalls(tenantId, { limit = 200 } = {}) {
+      return selectCalls.all(tenantId, limit);
+    },
+  };
+}
+
 export function createRepositories(db) {
   return {
     tenants: createTenantRepository(db),
@@ -259,6 +391,7 @@ export function createRepositories(db) {
     idempotency: createIdempotencyRepository(db),
     derived: createDerivedRepository(db),
     sagas: createSagaRepository(db),
+    learnings: createLearningRepository(db),
   };
 }
 

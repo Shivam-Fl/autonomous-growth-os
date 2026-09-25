@@ -5,6 +5,7 @@
 import { openDatabase, DEFAULT_DB_PATH } from '../src/data/db.js';
 import { createRepositories, replayRawToDerived } from '../src/data/repositories.js';
 import { validateEvent } from '../src/domain/events.js';
+import { validateLearning } from '../src/memory/learnings.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
 
@@ -66,13 +67,25 @@ const DECISIONS = [
     event_id: 'evt_seed_decision_1',
     event_type: 'decision.recorded',
     occurred_at: occurredAt(),
-    payload: { class: 'budget change', expected: 'qualified CPL −8%', status: 'shadow' },
+    payload: {
+      class: 'budget change',
+      expected: 'qualified CPL −8%',
+      status: 'shadow',
+      evidence_refs: ['ev_seed_1'],
+      memory_refs: ['lrn_seed_1'],
+    },
   },
   {
     event_id: 'evt_seed_decision_2',
     event_type: 'decision.recorded',
     occurred_at: occurredAt(),
-    payload: { class: 'campaign status', expected: 'no change (do-nothing)', status: 'do-nothing' },
+    payload: {
+      class: 'campaign status',
+      expected: 'no change (do-nothing)',
+      status: 'do-nothing',
+      evidence_refs: ['ev_seed_2'],
+      memory_refs: ['lrn_seed_2'],
+    },
   },
   {
     event_id: 'evt_seed_learning_1',
@@ -82,6 +95,38 @@ const DECISIONS = [
       claim: 'search-brand qualified CPL tracks 18% below generic-prospecting',
       scope: 'campaign-level', evidence: 'raw_events spend + qualified leads',
     },
+  },
+];
+
+/** The two accepted learnings the knowledge layer serves. Fixed ids make
+ * repeat seeding an upsert no-op; fixed timestamps keep repeated runs from
+ * bumping the retrieval gate's age clock. */
+const SEED_LEARNINGS = [
+  {
+    id: 'lrn_seed_1',
+    claim: 'search-brand qualified CPL tracks 18% below generic-prospecting',
+    scope: { tenant: 'tenant_demo' },
+    evidenceRefs: ['ev_seed_1'],
+    evidenceType: 'observational',
+    confidence: 0.72,
+    status: 'accepted',
+    validFrom: '2026-09-25T00:00:00.000Z',
+    createdAt: '2026-09-25T00:00:00.000Z',
+    updatedAt: '2026-09-25T00:00:00.000Z',
+    staleAfter: '2027-09-25T00:00:00.000Z',
+  },
+  {
+    id: 'lrn_seed_2',
+    claim: 'exact-intent queries convert 2.1x above broad-prospecting',
+    scope: { tenant: 'tenant_demo' },
+    evidenceRefs: ['ev_seed_2'],
+    evidenceType: 'external_research',
+    confidence: 0.65,
+    status: 'accepted',
+    validFrom: '2026-09-25T00:00:00.000Z',
+    createdAt: '2026-09-25T00:00:00.000Z',
+    updatedAt: '2026-09-25T00:00:00.000Z',
+    staleAfter: '2027-09-25T00:00:00.000Z',
   },
 ];
 
@@ -120,6 +165,22 @@ export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
     }
   }
 
+  // Learnings arrive through the learning repository only (never direct SQL),
+  // each validated on the way in so a seed bug fails loudly rather than
+  // writing a malformed memory.
+  let learningsWritten = 0;
+  for (const candidate of SEED_LEARNINGS) {
+    const validated = validateLearning(candidate);
+    if (!validated.ok) {
+      throw validated.error;
+    }
+    const previous = repositories.learnings.get(TENANT.id, candidate.id);
+    repositories.learnings.upsert(TENANT.id, validated.learning);
+    if (!previous) {
+      learningsWritten += 1;
+    }
+  }
+
   if (appended > 0) {
     repositories.auditEvents.append({
       tenant_id: TENANT.id,
@@ -137,6 +198,7 @@ export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
   return {
     tenant: repositories.tenants.get(TENANT.id),
     appended,
+    learningsWritten,
     alreadySeeded: appended === 0,
   };
 }
