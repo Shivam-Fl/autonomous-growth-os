@@ -236,7 +236,14 @@
     ],
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/domain/money.js",
+    "src/web/pages.js",
+    "src/api/routes.js",
+    "test/domain/money.test.js",
+    "test/web/pages.test.js",
+    "test/api/events.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
