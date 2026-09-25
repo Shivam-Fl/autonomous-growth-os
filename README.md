@@ -5,9 +5,28 @@ experiments, measures real business outcomes against first-party truth rather th
 self-reporting, learns causally from what it did, and improves its own strategy — while never
 holding the credentials that would let it spend money unchecked.
 
-**Nothing is built yet.** The specification is in
-[`docs/spec/autonomous-growth-os.md`](docs/spec/autonomous-growth-os.md), and the architecture
-it gets built against is being decided on the first issue.
+The foundation slice is in place: integer-micros money, an append-only event store with
+replayable derived metrics, an idempotent in-process scheduler with sagas, and the five
+server-rendered screens on `localhost:3000` with `GET /health`.
+
+## Running it
+
+```sh
+npm run sdlc:serve   # boot on $PORT (default 3000), SQLite at $DB_PATH (default ./data/app.db)
+npm run sdlc:seed    # write the demo tenant through the repository layer (idempotent)
+npm run sdlc:ready   # curl /health
+npm run sdlc:verify  # npm ci + full node:test suite
+```
+
+## The five pages and the `?state=` preview override
+
+`/`, `/journal`, `/opportunities`, `/experiments` and `/approvals` each render the state the
+store is actually in: `empty` on a fresh database, `ideal` once `npm run sdlc:seed` has written
+the demo tenant. Loading, partial and error shells have no natural trigger in this slice
+(nothing has failed yet), so every page also takes a preview override — `?state=loading`,
+`?state=partial`, `?state=error` (plus `?state=empty` and `?state=ideal`) — which renders that
+shell without reading or writing anything differently. It exists so QA can drive every shell
+on a fresh database.
 
 ## How this repository is built
 

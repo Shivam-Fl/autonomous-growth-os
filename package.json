@@ -1,10 +1,18 @@
 {
   "name": "autonomous-growth-os",
+  "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "sdlc:verify": "echo \"sdlc:verify is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
-    "sdlc:serve": "echo \"sdlc:serve is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
-    "sdlc:seed": "echo \"sdlc:seed is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
-    "sdlc:ready": "echo \"sdlc:ready is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\""
+    "sdlc:verify": "npm ci --no-audit --no-fund && node --test",
+    "sdlc:serve": "node src/index.js",
+    "sdlc:seed": "node scripts/seed.js",
+    "sdlc:ready": "curl -fsS http://localhost:3000/health"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
   }
 }

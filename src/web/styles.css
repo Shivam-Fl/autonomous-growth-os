@@ -1,0 +1,345 @@
+/* Theme tokens verbatim from docs/ui.md; light theme only in v1, with the
+   tokens structured so a dark inversion maps each --color-* token without
+   touching layouts. */
+
+:root {
+  --color-bg: #F7F5F0;
+  --color-surface: #FFFFFF;
+  --color-ink: #1C1A16;
+  --color-muted: #6B655A;
+  --color-accent: #1D5FBF;
+  --color-good: #1E7E34;
+  --color-warn: #B26A00;
+  --color-bad: #B3261E;
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 40px;
+  --space-6: 48px;
+  --radius-1: 8px;
+  --font-body: system-ui, sans-serif;
+  --font-metrics: ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-accent);
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--color-surface);
+  padding: var(--space-1) var(--space-2);
+}
+
+.skip-link:focus {
+  left: var(--space-1);
+  z-index: 10;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-muted);
+}
+
+.app-header .brand {
+  font-weight: 600;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.app-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.app-header nav a {
+  color: var(--color-accent);
+  text-decoration: none;
+  padding: var(--space-1) 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.app-header nav a[aria-current="page"] {
+  color: var(--color-ink);
+  border-bottom: 2px solid var(--color-accent);
+}
+
+.header-status {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.tenant-name {
+  font-weight: 600;
+}
+
+#main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.page-footer {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  padding: var(--space-3);
+  text-align: center;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  padding: var(--space-3);
+}
+
+.panel h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 1.05rem;
+}
+
+.panel-error {
+  border-color: var(--color-bad);
+}
+
+.banner {
+  border-radius: var(--radius-1);
+  padding: var(--space-2) var(--space-3);
+}
+
+.banner-warn {
+  background: #FDF3E3;
+  border: 1px solid var(--color-warn);
+  color: var(--color-warn);
+}
+
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.kpi-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.kpi-label {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.kpi-value {
+  font-family: var(--font-metrics);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.4rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: var(--space-1);
+  border-bottom: 1px solid var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.checklist {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.checklist li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  padding: var(--space-2);
+}
+
+.check-step {
+  font-weight: 600;
+}
+
+.check-time {
+  color: var(--color-muted);
+}
+
+.maturity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.maturity-bar {
+  display: block;
+  background: var(--color-bg);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  height: 12px;
+  overflow: hidden;
+}
+
+.maturity-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-warn);
+}
+
+.maturity-label {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.skeleton-stack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #EDE9E0 25%, #F3F0E9 50%, #EDE9E0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+  border-radius: var(--radius-1);
+}
+
+.skeleton-row {
+  height: 28px;
+}
+
+.skeleton-card,
+.kpi-card.skeleton {
+  height: 88px;
+}
+
+@keyframes skeleton-pulse {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-1);
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: #FFFFFF;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.button-secondary {
+  background: var(--color-surface);
+  color: var(--color-accent);
+}
+
+.approval-list,
+.experiment-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-card,
+.experiment-card {
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.approval-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.approval-actions input {
+  flex: 1;
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-1);
+  font: inherit;
+}
+
+/* Narrow: single column under 900px; guard status first, KPI cards stacked. */
+@media (max-width: 900px) {
+  .kpi-strip {
+    grid-template-columns: 1fr;
+  }
+
+  #main {
+    padding: var(--space-2);
+  }
+}
