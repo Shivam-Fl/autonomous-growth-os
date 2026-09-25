@@ -241,3 +241,98 @@ test('normaliseGrowthEvent drops email and phone even when sent inside payload',
   assert.equal('phone' in result.event.payload, false);
   assert.equal(result.event.payload.lead_id, 'lead_9');
 });
+
+// Money integrity: spend can never be zero or negative (QA BUG-1), and the
+// funnel never sums a non-positive or foreign-currency spend row.
+test('normaliseGrowthEvent rejects a negative spend.observed value with NON_POSITIVE_SPEND', () => {
+  const result = normaliseGrowthEvent({
+    event_id: 'evt_qa_neg',
+    event_name: 'spend.observed',
+    occurred_at: '2026-09-25T10:30:00.000Z',
+    value: -100_000_000,
+    currency: 'INR',
+  }, 'tenant_qa');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'NON_POSITIVE_SPEND');
+  assert.equal(result.error.details.received, '-100000000');
+});
+
+test('normaliseGrowthEvent rejects spend.observed with value 0 with NON_POSITIVE_SPEND', () => {
+  const result = normaliseGrowthEvent({
+    event_id: 'evt_qa_zero',
+    event_name: 'spend.observed',
+    occurred_at: '2026-09-25T10:30:00.000Z',
+    value: 0,
+    currency: 'INR',
+  }, 'tenant_qa');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'NON_POSITIVE_SPEND');
+});
+
+test('normaliseGrowthEvent rejects a pre-normalised negative payload.amount_micros on spend.observed', () => {
+  const result = normaliseGrowthEvent({
+    event_id: 'evt_qa_pre',
+    event_name: 'spend.observed',
+    occurred_at: '2026-09-25T10:30:00.000Z',
+    payload: { amount_micros: -500_000_000, currency: 'INR' },
+  }, 'tenant_qa');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'NON_POSITIVE_SPEND');
+});
+
+test('normaliseGrowthEvent still accepts a positive spend and non-spend events are unaffected', () => {
+  const spend = normaliseGrowthEvent({
+    event_id: 'evt_qa_pos',
+    event_name: 'spend.observed',
+    occurred_at: '2026-09-25T10:30:00.000Z',
+    value: 7_200_000_000,
+    currency: 'INR',
+  }, 'tenant_qa');
+  assert.equal(spend.ok, true);
+  // A negative amount on a non-spend event (e.g. a correction row) is not
+  // spend: the positivity rule applies to spend.observed only.
+  const nonSpend = normaliseGrowthEvent({
+    event_id: 'evt_qa_refund',
+    event_name: 'refund',
+    occurred_at: '2026-09-25T10:30:00.000Z',
+    value: -1_000,
+    currency: 'INR',
+  }, 'tenant_qa');
+  assert.equal(nonSpend.ok, true);
+});
+
+test('computeFunnel skips non-positive spend rows so a +X/-X pair can no longer cancel to zero', () => {
+  // A legacy batch that already holds a negative spend row (append-only, so
+  // the ingest guard cannot remove it) must not corrupt the funnel.
+  const rows = [
+    { event_id: 'evt_pair_up', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { amount_micros: 100_000_000, currency: 'INR' } },
+    { event_id: 'evt_pair_down', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { amount_micros: -100_000_000, currency: 'INR' } },
+    { event_id: 'evt_pair_zero', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { amount_micros: 0, currency: 'INR' } },
+    journeyRows()[1], // the canonical 7_200_000_000 INR spend
+    ...journeyRows().slice(5, 8), // the three lead_qualified rows
+  ];
+  const funnel = computeFunnel(rows);
+  assert.equal(funnel.spend_micros, 7_300_000_000);
+  assert.equal(funnel.qualified_cpl_micros, Math.trunc(7_300_000_000 / 3));
+});
+
+test('computeFunnel with a tenant currency excludes foreign-currency spend rows', () => {
+  const rows = [
+    { event_id: 'evt_inr_1', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { amount_micros: 1_000_000_000, currency: 'INR' } },
+    { event_id: 'evt_usd_1', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { amount_micros: 1_000_000_000, currency: 'USD' } },
+    { event_id: 'evt_q1', event_type: 'lead_qualified', occurred_at: '2026-09-25T08:00:00.000Z', payload: { lead_id: 'lead_1' } },
+  ];
+  const guarded = computeFunnel(rows, 'INR');
+  assert.equal(guarded.spend_micros, 1_000_000_000);
+  assert.equal(guarded.qualified_cpl_micros, 1_000_000_000);
+  // A currency-less spend row is treated as tenant-currency for v1 leniency.
+  const unlabelled = computeFunnel([
+    { event_id: 'evt_plain', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { amount_micros: 2_000_000 } },
+    { event_id: 'evt_q2', event_type: 'lead_qualified', occurred_at: '2026-09-25T08:00:00.000Z', payload: { lead_id: 'lead_2' } },
+  ], 'INR');
+  assert.equal(unlabelled.spend_micros, 2_000_000);
+  // Single-argument calls keep today's behaviour on positive rows: the same
+  // mixed-currency rows still sum, so existing funnel tests are unaffected.
+  const unguarded = computeFunnel(rows);
+  assert.equal(unguarded.spend_micros, 2_000_000_000);
+});

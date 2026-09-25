@@ -89,10 +89,28 @@ export function buildApp({ repositories }) {
     if (!validated.ok) {
       return errorResponse(response, 400, validated.error);
     }
+    // Money integrity (QA BUG-2): one unit of account per tenant. A spend
+    // event whose currency differs from the tenant row's currency is a 400 —
+    // mixed-currency micros would sum into a CPL denominated in no real
+    // currency. Validation runs before tenant auto-creation, so the 400 still
+    // writes nothing.
+    const spendCurrency = validated.event.event_type === 'spend.observed'
+      ? validated.event.payload.currency
+      : undefined;
+    const existingTenant = repositories.tenants.get(tenantId);
+    if (spendCurrency !== undefined && existingTenant && existingTenant.currency !== spendCurrency) {
+      return errorResponse(response, 400, {
+        code: 'CURRENCY_MISMATCH',
+        message: `tenant ${tenantId} keeps ${existingTenant.currency}; spend in ${spendCurrency} was rejected`,
+        details: { tenant_currency: existingTenant.currency, received: spendCurrency },
+      });
+    }
     // An unknown explicit tenant auto-creates its row, idempotently, and only
     // after the event validated: a 4xx write-failure leaves no tenant row.
-    if (!repositories.tenants.get(tenantId)) {
-      repositories.tenants.create({ id: tenantId, name: tenantId, currency: 'INR' });
+    // A first spend event seeds the tenant currency; anything else defaults
+    // to INR as before.
+    if (!existingTenant) {
+      repositories.tenants.create({ id: tenantId, name: tenantId, currency: spendCurrency ?? 'INR' });
     }
     const { appended } = repositories.rawEvents.append(validated.event);
     // 202 both times; the duplicate flag tells the sender which delivery stuck.
@@ -102,7 +120,10 @@ export function buildApp({ repositories }) {
   app.get('/v1/metrics', (request, response) => {
     const tenantId = resolveTenantId(repositories, request.query.tenant_id);
     const rows = repositories.rawEvents.listByTypes(tenantId, FUNNEL_TYPES);
-    const funnel = computeFunnel(rows);
+    // The tenant row's currency (INR default when absent) excludes any
+    // foreign-currency spend rows legacy batches may still hold.
+    const tenantCurrency = repositories.tenants.get(tenantId)?.currency ?? 'INR';
+    const funnel = computeFunnel(rows, tenantCurrency);
     const latest = dataThrough(rows);
     const now = utcNow();
     const ageHours = latest ? (Date.parse(now) - Date.parse(latest)) / 3_600_000 : 0;

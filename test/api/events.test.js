@@ -147,3 +147,102 @@ test('POST unknown event_name returns 400 UNKNOWN_EVENT and a 4xx writes nothing
   assert.equal((await response.json()).code, 'UNKNOWN_EVENT');
   assert.equal(repositories.rawEvents.count('tenant_qa'), 10, 'a 4xx never writes a raw event');
 });
+
+// Money integrity (QA BUG-1): non-positive spend is rejected at the boundary
+// with a stable code, before tenant auto-creation, so nothing is written.
+test('POST negative spend.observed returns 400 NON_POSITIVE_SPEND and creates no tenant row', async () => {
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_neg_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_neg', value: -100_000_000, currency: 'INR' }),
+  });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.equal(body.code, 'NON_POSITIVE_SPEND');
+  assert.equal(typeof body.message, 'string');
+  assert.ok(!('stack' in body));
+  assert.equal(repositories.tenants.get('tenant_neg'), null, 'a rejected spend never creates the tenant row');
+  assert.equal(repositories.rawEvents.count('tenant_neg'), 0);
+});
+
+test('POST zero spend.observed returns 400 NON_POSITIVE_SPEND', async () => {
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_zero_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_neg', value: 0, currency: 'INR' }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, 'NON_POSITIVE_SPEND');
+  assert.equal(repositories.rawEvents.count('tenant_neg'), 0);
+});
+
+test('rejected spend leaves the tenant with no money on the books: CPL null, spend 0', async () => {
+  // Only a lead_qualified ever ingested for tenant_neg: spend must read as 0
+  // (never negative) and the CPL as null, not an inverted number.
+  const qualified = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_neg_qual', event_name: 'lead_qualified', occurred_at: NOW(), tenant_id: 'tenant_neg', lead_id: 'lead_neg', session_id: 'sess_neg' }),
+  });
+  assert.equal(qualified.status, 202);
+  const metrics = await (await fetch(url('/v1/metrics?tenant_id=tenant_neg'))).json();
+  assert.equal(metrics.spend_micros, 0);
+  assert.equal(metrics.qualified_volume, 1);
+  assert.equal(metrics.qualified_cpl_micros, null);
+});
+
+// Money integrity (QA BUG-2): one unit of account per tenant.
+test('POST foreign-currency spend to an existing tenant returns 400 CURRENCY_MISMATCH with unchanged metrics', async () => {
+  const before = await (await fetch(url('/v1/metrics?tenant_id=tenant_qa'))).json();
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_usd_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_qa', value: 1_000_000_000, currency: 'USD' }),
+  });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.equal(body.code, 'CURRENCY_MISMATCH');
+  assert.equal(repositories.rawEvents.count('tenant_qa'), 10, 'a rejected spend writes no raw event');
+  const after = await (await fetch(url('/v1/metrics?tenant_id=tenant_qa'))).json();
+  assert.equal(after.spend_micros, before.spend_micros, 'tenant spend never moves on a rejected currency');
+  assert.equal(after.qualified_cpl_micros, before.qualified_cpl_micros);
+});
+
+test('a USD-first journey auto-creates the tenant in USD and resolves CPL in USD', async () => {
+  const occurredAt = NOW();
+  const bodies = [
+    { event_id: 'evt_usd_j_spend', event_name: 'spend.observed', occurred_at: occurredAt, value: 9_000_000_000, currency: 'USD', session_id: 'sess_usd_j' },
+    { event_id: 'evt_usd_j_created', event_name: 'lead_created', occurred_at: occurredAt, lead_id: 'lead_usd', session_id: 'sess_usd_j' },
+    { event_id: 'evt_usd_j_qualified', event_name: 'lead_qualified', occurred_at: occurredAt, lead_id: 'lead_usd', session_id: 'sess_usd_j' },
+  ];
+  for (const body of bodies) {
+    const response = await fetch(url('/v1/events'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, tenant_id: 'tenant_usd' }),
+    });
+    assert.equal(response.status, 202, `${body.event_id} must ingest`);
+  }
+  assert.equal(repositories.tenants.get('tenant_usd').currency, 'USD', 'the first spend seeds the tenant currency');
+  const metrics = await (await fetch(url('/v1/metrics?tenant_id=tenant_usd'))).json();
+  assert.equal(metrics.spend_micros, 9_000_000_000);
+  assert.equal(metrics.qualified_volume, 1);
+  assert.equal(metrics.qualified_cpl_micros, 9_000_000_000);
+});
+
+test('a tenant first created by a non-spend event keeps the INR default and a later foreign spend is a 400', async () => {
+  const created = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_inr_default_created', event_name: 'lead_created', occurred_at: NOW(), tenant_id: 'tenant_inr_default', lead_id: 'lead_default' }),
+  });
+  assert.equal(created.status, 202);
+  assert.equal(repositories.tenants.get('tenant_inr_default').currency, 'INR');
+  const spend = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_inr_default_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_inr_default', value: 1, currency: 'USD' }),
+  });
+  assert.equal(spend.status, 400);
+  assert.equal((await spend.json()).code, 'CURRENCY_MISMATCH');
+});

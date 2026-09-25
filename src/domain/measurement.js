@@ -139,6 +139,20 @@ export function normaliseGrowthEvent(body, tenantId) {
       error: measurementError('INVALID_CURRENCY', `currency must be a known ISO 4217 code, got ${JSON.stringify(payload.currency)}`),
     };
   }
+  // Money integrity (QA BUG-1): spend can never be zero or negative, on either
+  // the body.value path or a pre-normalised payload.amount_micros — a negative
+  // spend inverts qualified CPL and a +X/-X pair cancels real spend to zero.
+  // Non-spend money (e.g. a negative refund) is not touched by this rule.
+  if (body.event_name === 'spend.observed' && payload.amount_micros !== undefined && payload.amount_micros <= 0) {
+    return {
+      ok: false,
+      error: measurementError(
+        'NON_POSITIVE_SPEND',
+        `spend.observed amount_micros must be a positive integer, got ${JSON.stringify(payload.amount_micros)}`,
+        { received: String(payload.amount_micros) },
+      ),
+    };
+  }
 
   return {
     ok: true,
@@ -154,10 +168,15 @@ export function normaliseGrowthEvent(body, tenantId) {
 }
 
 /**
- * Tenant-wide funnel over deduplicated event rows.
+ * Tenant-wide funnel over deduplicated event rows. `tenantCurrency` is the
+ * optional unit of account: when supplied, spend rows carrying an explicitly
+ * different currency are excluded, so legacy mixed-currency rows cannot
+ * corrupt the CPL (QA BUG-2). Rows without a currency are treated as
+ * tenant-currency for v1 leniency. Single-argument calls keep the behaviour
+ * existing tests rely on: positive rows only, no currency filtering.
  * Returns {spend_micros, qualified_volume, qualified_cpl_micros}.
  */
-export function computeFunnel(events) {
+export function computeFunnel(events, tenantCurrency) {
   const seen = new Set();
   const unique = [];
   for (const event of events) {
@@ -174,18 +193,28 @@ export function computeFunnel(events) {
       continue;
     }
     const amount = event.payload?.amount_micros;
-    if (typeof amount !== 'number' || !Number.isSafeInteger(amount)) {
-      continue; // corrupt or float money never enters the funnel
+    // Non-positive money never enters the funnel: ingest now rejects it, but
+    // raw_events is append-only (TR-20) so legacy batches can still hold it.
+    if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) {
+      continue; // corrupt, float or non-positive money never enters the funnel
+    }
+    if (tenantCurrency !== undefined) {
+      const currency = event.payload?.currency;
+      if (currency !== undefined && currency !== tenantCurrency) {
+        continue; // foreign-currency legacy row: excluded, never summed
+      }
     }
     spend += amount;
   }
   const qualified = unique.filter((event) => event.event_type === 'lead_qualified');
   const volume = qualified.length;
-  // Exact integer division; null (never division by zero) at zero volume.
+  // Exact integer division. Null (never a misleading number) when there is no
+  // volume or no spend: zero volume cannot divide, and zero spend means no
+  // cost data exists yet, so a "0 CPL" would claim free acquisitions.
   return {
     spend_micros: spend,
     qualified_volume: volume,
-    qualified_cpl_micros: volume > 0 ? Math.trunc(spend / volume) : null,
+    qualified_cpl_micros: volume > 0 && spend > 0 ? Math.trunc(spend / volume) : null,
   };
 }
 
