@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { openDatabase } from '../../src/data/db.js';
 import { createRepositories, replayRawToDerived } from '../../src/data/repositories.js';
 import { validateEvent } from '../../src/domain/events.js';
@@ -967,32 +966,422 @@ test('the experiment caps render through the same helper on both the ideal and t
 // H1_HOOK itself, so reverting the production call site to the pre-#46
 // class-coupled regex leaves the file green. Pin the call site itself.
 test('the production h1 assertion goes through H1_HOOK, not an inline regex', () => {
-  const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
-  const callSite = source.split('\n').find((line) => line.includes('the h1 carries the page-title hook'));
+  const source = readFileSync(new URL(import.meta.url), 'utf8');
+  // Built from parts so this line cannot match itself. With the needle
+  // unsplittable, .find() would return this very line the moment the
+  // production call site was deleted, and the test would fail on a secondary
+  // assertion instead of the one that names what went missing.
+  const needle = 'the h1 carries the page-title' + ' hook';
+  const lines = source.split('\n').filter((line) => line.includes(needle));
+  const callSite = lines[0];
   assert.ok(callSite, 'the 25-shell h1 assertion is still in this file');
+  assert.equal(lines.length, 1, 'the anchor is found exactly once, so it cannot match a second line');
   assert.match(callSite, /assert\.match\(html, H1_HOOK,/, 'the call site uses the pinned constant');
   assert.doesNotMatch(callSite, /class="page-title"/, 'the call site inlines no class-coupled regex');
 });
 
-// Issue #51 finding 2: this is the one place in the suite that asserts on a
-// class name, and deliberately so. The class is a styling hook, not a hook a
-// behavioural test may depend on, but it is the only thing that reaches the
-// .page-title rule — so the coupling is declared here instead of accidental.
-test('the shipped page h1 carries the styling class the stylesheet rules on', async () => {
-  const html = await renderPage('/', { repositories: freshRepos() });
+// The class, read off the rendered h1 rather than hard-coded, so the two ends
+// of the link are held by one check instead of two literals that happen to
+// agree. The pattern is anchored on whitespace on purpose: /\bclass="/ matches
+// inside data-class=, which is the false pass this ticket closes, and so does
+// the /<h1\s[^>]*\bclass="/ the issue proposed — [^>]* eats the 'data-' and \b
+// is a boundary between '-' and 'c'. This form tolerates either attribute
+// order, which is what #46 bought and must not be lost here.
+function pageTitleClass(html) {
   const h1 = /<h1[^>]*>/.exec(html)?.[0] ?? '';
   assert.match(h1, /data-testid="page-title"/, 'the page h1 is the hook under test');
-  assert.equal(/\bclass="([^"]*)"/.exec(h1)?.[1], 'page-title', 'the emitted h1 still carries the styling class');
+  return /\sclass="([^"]*)"/.exec(h1)?.[1] ?? '';
+}
+
+// Issue #51 finding 2: this is the one place in the suite that asserts on a
+// class name, and deliberately so. .sdlc/memory/qa/selectors.md says class
+// names are styling hooks and not assertions; the class is the single hook
+// that reaches the stylesheet rule, so the exception is declared here instead
+// of left accidental. That memory file is owned by the Librarian and does not
+// yet record the exception — it could not be edited from a ticket — so an
+// agent who reads the memory file and not this comment may take these pins for
+// a convention violation, or delete them as redundant. They are not.
+test('the shipped page h1 carries the styling class the stylesheet rules on', async () => {
+  const html = await renderPage('/', { repositories: freshRepos() });
+  const cls = pageTitleClass(html);
+  // A class carrying regex metacharacters cannot be escaped into the two
+  // lookups below, so fail loudly rather than build a pattern that might
+  // match the wrong rule.
+  assert.match(cls, /^[A-Za-z_-][A-Za-z0-9_-]*$/, 'the h1 carries one plain class name, with nothing to escape');
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  assert.ok(
+    new RegExp(`\\.${cls}\\s*\\{`).test(css),
+    `src/web/styles.css has a rule for .${cls}, the class the page h1 actually carries`,
+  );
+
+  assert.equal(
+    /\bclass="([^"]*)"/.exec('<h1 data-class="page-title" data-testid="page-title">x</h1>')?.[1],
+    'page-title',
+    'the word-boundary form this helper replaced matched data-class=, and that was the false pass',
+  );
+  assert.equal(
+    pageTitleClass('<h1 data-class="page-title" data-testid="page-title">x</h1>'),
+    '',
+    'a data-class attribute is not a class attribute',
+  );
+  assert.equal(
+    pageTitleClass('<h1 data-testid="page-title">x</h1>'),
+    '',
+    'a missing class attribute yields no class, not a false one',
+  );
 });
 
 // Issue #51 finding 4: the other end of the same link. Asserting the
 // stylesheet's own contents is convention-clean under
-// .sdlc/memory/qa/selectors.md and makes AC-2's claim machine-checkable.
-test('the .page-title rule still carries the declarations the page title depends on', () => {
+// .sdlc/memory/qa/selectors.md and makes AC-2's claim machine-checkable. The
+// rule is resolved from the class the h1 carries, so the two ends may move
+// together — and the message names which end moved, because a one-sided rename
+// is the case where the reader needs telling.
+test('the rule the page h1 carries still holds the declarations the page title depends on', async () => {
+  const html = await renderPage('/', { repositories: freshRepos() });
+  const cls = pageTitleClass(html);
   const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
-  const rule = /\.page-title\s*\{([^}]*)\}/.exec(css);
-  assert.ok(rule, 'src/web/styles.css defines a .page-title rule');
+  const rule = new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`).exec(css);
+  assert.ok(rule, `src/web/styles.css defines a .${cls} rule for the class the page h1 carries`);
   assert.match(rule[1], /margin:\s*0\s*;/, 'the browser default h1 margin is cancelled');
   assert.match(rule[1], /font-size:\s*1\.4rem\s*;/, 'the page title keeps the display size');
   assert.match(rule[1], /line-height:\s*1\.25\s*;/, 'the page title keeps its line height');
+});
+
+// ---------------------------------------------------------------------------
+// The cascade guard. A declaration is not a rendering: CSS decides what the
+// browser applies by cascade, so a rule that outranks the class rule — higher
+// specificity, or equal and later, including inside an at-rule — leaves every
+// declaration assertion above satisfied and the heading wrong. node:test has no
+// DOM and cannot read a computed style, so the helpers below work out which
+// rule the browser would apply to <main id="main"><h1 class="cls"> and name the
+// ones that beat it. A resolver that guessed at CSS it cannot model would be
+// the same false pass again, so it throws on unsupported syntax instead.
+// ---------------------------------------------------------------------------
+
+// The three things the page title depends on. The margin bucket lists every
+// shorthand and longhand that can set the h1's margin-top: a candidate that
+// beats the class rule on any of them moves the rendered top margin.
+const PAGE_TITLE_PROPERTIES = [
+  { group: 'font-size', properties: ['font-size'] },
+  { group: 'line-height', properties: ['line-height'] },
+  { group: 'margin-top', properties: ['margin', 'margin-top', 'margin-block', 'margin-block-start'] },
+];
+
+function unsupportedSelector(selector, reason) {
+  return new Error(`the cascade guard cannot read the selector '${selector}': ${reason}`);
+}
+
+// Cheap reachability, run before any parsing, so a selector the guard does not
+// evaluate (.checklist li:not(.x)) is skipped without being parsed and never
+// breaks the suite. html, body and '*' count as reaching the h1 by
+// inheritance, and a branch that carries the class is re-checked exactly by
+// parseSelector below — so being generous here can only produce a failure or
+// a throw, never a false pass.
+function mayReachPageTitle(selector, cls) {
+  if (selector === '' || selector.startsWith('@')) return false;
+  if (['0%', '100%', 'from', 'to'].includes(selector)) return false;
+  const last = selector.split('>').pop().trim();
+  if (['*', 'html', 'body'].includes(last)) return true;
+  if (selector.split(/[\s>]+/).includes('h1')) return true;
+  return last.includes(`.${cls}`);
+}
+
+// Supported vocabulary: id, class, attribute, single-colon pseudo-class, type,
+// '*', and the descendant and '>' combinators (comma lists are split by the
+// caller). A pseudo-element, a '+' or '~', or a functional pseudo-class such as
+// :not(…) throws, naming the offending selector. Only branches that may reach
+// the h1 are ever parsed, so this cannot fire on unrelated CSS.
+function parseSelector(selector, cls) {
+  // The two supported combinators, and the only whitespace a selector carries.
+  const compounds = selector.split(/\s*>\s*|\s+/).filter((compound) => compound !== '');
+  let ids = 0;
+  let classes = 0;
+  let types = 0;
+  let matchesPageTitle = false;
+
+  compounds.forEach((compound, position) => {
+    let rest = compound;
+    let lastCarriesClass = false;
+    let lastIsH1 = false;
+    let lastIsUniversal = false;
+
+    while (rest !== '') {
+      if (rest.startsWith('::')) throw unsupportedSelector(selector, 'a pseudo-element');
+      if (rest.startsWith('+') || rest.startsWith('~')) {
+        throw unsupportedSelector(selector, `the '${rest[0]}' combinator`);
+      }
+      if (rest.startsWith(':')) {
+        const pseudo = /^:[A-Za-z-]+/.exec(rest);
+        if (!pseudo) throw unsupportedSelector(selector, `the token '${rest}'`);
+        if (rest[pseudo[0].length] === '(') {
+          throw unsupportedSelector(selector, `the functional pseudo-class '${pseudo[0]}('`);
+        }
+        classes += 1;
+        rest = rest.slice(pseudo[0].length);
+        continue;
+      }
+      const simple = /^(?:#[A-Za-z_][\w-]*|\.[A-Za-z_-][\w-]*|\[[^\]]*\]|\*|[A-Za-z][\w-]*)/.exec(rest);
+      if (!simple) throw unsupportedSelector(selector, `the token '${rest}'`);
+      const token = simple[0];
+      if (token.startsWith('#')) ids += 1;
+      else if (token.startsWith('.')) {
+        classes += 1;
+        lastCarriesClass = token === `.${cls}`;
+      } else if (token.startsWith('[')) classes += 1;
+      else if (token === '*') lastIsUniversal = true;
+      else {
+        types += 1;
+        lastIsH1 = token === 'h1';
+      }
+      rest = rest.slice(token.length);
+    }
+
+    if (position === compounds.length - 1) {
+      matchesPageTitle = lastCarriesClass || lastIsH1 || lastIsUniversal
+        || compound === 'html' || compound === 'body';
+    }
+  });
+
+  return { specificity: [ids, classes, types], matchesPageTitle };
+}
+
+function specificityOf(selector, cls) {
+  return parseSelector(selector, cls).specificity;
+}
+
+// Greater specificity wins; equal specificity is decided by source order, so
+// the later declaration is the one the browser applies.
+function beats(candidate, baseline) {
+  for (let rank = 0; rank < 3; rank += 1) {
+    if (candidate.specificity[rank] !== baseline.specificity[rank]) {
+      return candidate.specificity[rank] > baseline.specificity[rank];
+    }
+  }
+  return candidate.index > baseline.index;
+}
+
+// Flatten the stylesheet into rules in document order, lifting @media and
+// @supports contents up: a responsive override of the h1's font-size is a real
+// override at that width, and the failure message has to name the condition so
+// the reader knows when it bites. Keyframes describe an animation rather than a
+// rendered element, so they are skipped with their bodies.
+function readStylesheet(css) {
+  const rules = [];
+
+  const walk = (text, atRules) => {
+    let at = 0;
+    while (at < text.length) {
+      const brace = text.indexOf('{', at);
+      if (brace === -1) return;
+      // An at-rule statement rather than a block — @import, @charset — has no
+      // braces, so step over its semicolon instead of swallowing the next rule.
+      const statement = text.indexOf(';', at);
+      if (statement !== -1 && statement < brace) {
+        at = statement + 1;
+        continue;
+      }
+      const selector = text.slice(at, brace).trim();
+      let depth = 1;
+      let end = brace + 1;
+      while (end < text.length && depth > 0) {
+        if (text[end] === '{') depth += 1;
+        else if (text[end] === '}') depth -= 1;
+        end += 1;
+      }
+      const body = text.slice(brace + 1, end - 1);
+
+      if (/^@(media|supports)\b/i.test(selector)) walk(body, [...atRules, selector]);
+      else if (selector !== '' && !selector.startsWith('@')) {
+        rules.push({ selector, body, atRules, index: rules.length });
+      }
+      at = end;
+    }
+  };
+
+  walk(css.replace(/\/\*[\s\S]*?\*\//g, ''), []);
+  return rules;
+}
+
+function declarations(body) {
+  return body.split(';').map((declaration) => {
+    const colon = declaration.indexOf(':');
+    if (colon === -1) return null;
+    return {
+      property: declaration.slice(0, colon).trim().toLowerCase(),
+      value: declaration.slice(colon + 1).trim(),
+      important: /!\s*important\s*$/i.test(declaration),
+    };
+  }).filter((declaration) => declaration !== null);
+}
+
+function branchesOf(rule) {
+  return rule.selector.split(',').map((branch) => branch.trim());
+}
+
+// Every declaration that would beat the class rule for one of the three
+// properties the page title depends on, with the message the reader needs.
+function outrankingPageTitleDeclarations(css, cls) {
+  const rules = readStylesheet(css);
+  const offenders = [];
+  const classRule = rules.filter((rule) => branchesOf(rule).includes(`.${cls}`)).pop();
+
+  for (const { group, properties } of PAGE_TITLE_PROPERTIES) {
+    const subject = `the page h1's ${group}`;
+    if (!classRule) {
+      offenders.push({
+        selector: `.${cls}`,
+        atRules: [],
+        group,
+        property: group,
+        message: `src/web/styles.css has no .${cls} rule, and ${subject} is set entirely by something else`,
+      });
+      continue;
+    }
+    const classBranch = branchesOf(classRule).find((branch) => branch === `.${cls}`);
+    const baseline = { specificity: parseSelector(classBranch, cls).specificity, index: classRule.index };
+    const held = declarations(classRule.body).filter((entry) => properties.includes(entry.property));
+    if (held.length === 0) {
+      offenders.push({
+        selector: classBranch,
+        atRules: classRule.atRules,
+        group,
+        property: group,
+        message: `${classBranch} declares no ${properties.join(' or ')}, so ${subject} is not held by the class rule`,
+      });
+      continue;
+    }
+    const winner = held[0];
+
+    for (const rule of rules) {
+      if (rule.index === classRule.index) continue;
+      for (const selector of branchesOf(rule)) {
+        if (!mayReachPageTitle(selector, cls)) continue;
+        const candidate = parseSelector(selector, cls);
+        if (!candidate.matchesPageTitle) continue;
+        for (const entry of declarations(rule.body).filter((one) => properties.includes(one.property))) {
+          if (!entry.important && !beats({ ...candidate, index: rule.index }, baseline)) continue;
+          const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
+          const because = entry.important
+            ? 'carries !important, which outranks any declaration of the same property'
+            : `outranks .${cls} at (${candidate.specificity.join(',')})`;
+          offenders.push({
+            selector,
+            atRules: rule.atRules,
+            group,
+            property: entry.property,
+            message: `the selector '${selector}'${inside} sets ${entry.property}: ${entry.value} and ${because} — `
+              + `${subject} would be ${entry.value} instead of ${winner.property}: ${winner.value}`,
+          });
+        }
+      }
+    }
+  }
+
+  return offenders;
+}
+
+test('nothing outranks the page title rule for the typography the h1 depends on', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const html = await renderPage('/', { repositories: freshRepos() });
+  const cls = pageTitleClass(html);
+  const inMedia = `${css}\n@media (max-width: 900px) { #main h1 { font-size: 2.4rem; } }\n`;
+
+  // The shipped stylesheet must be clean, and it is the case that proves the
+  // resolver is not simply flagging everything: the '*' reset and the body
+  // typography both reach the h1 and both lose to the class rule.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(css, cls).map((offender) => offender.message),
+    [],
+    'nothing in the shipped stylesheet beats the class rule for the h1',
+  );
+
+  const override = '#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }';
+  const bySelectorAndProperty = (offenders) => offenders.map((one) => `${one.selector} ${one.property}`);
+
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls)),
+    ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
+    'a later, higher-specificity h1 rule is named once per property — this leaves every declaration above satisfied',
+  );
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(inMedia, cls)),
+    ['#main h1 font-size'],
+    'the same override inside a media query is a real override at that width',
+  );
+  assert.match(
+    outrankingPageTitleDeclarations(inMedia, cls)[0].message,
+    /@media \(max-width: 900px\)/,
+    'the message names the condition the override bites in',
+  );
+  assert.deepEqual(
+    // Anchored on the resolved class, not the literal, or the insertion would
+    // silently no-op under a coordinated rename and this case would pass green.
+    bySelectorAndProperty(outrankingPageTitleDeclarations(css.replace(`.${cls} {`, `${override}\n\n.${cls} {`), cls)),
+    ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
+    'specificity decides, not source order: the same rule declared above the class rule still fails',
+  );
+
+  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n* { font-size: 2.4rem; }\n`, cls), [],
+    "'*' reaches every element but loses to the class rule at (0,1,0), so the heading is unaffected");
+  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem; }\n`, cls), [],
+    'body reaches the h1 by inheritance and still loses at (0,0,1)');
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1 { font-size: 2.4rem !important; }\n`, cls)),
+    ['h1 font-size'],
+    '!important beats the class rule on specificity alone, which a guard that ignored it would miss',
+  );
+
+  // A coordinated rename of the class is a styling decision both ends may make
+  // together; a one-sided one is a loud failure. This is the behaviour #51's
+  // work order said it wanted and its delivered literals did not permit. All
+  // three are stated against the class the h1 actually carries, so they hold
+  // whichever name it carries.
+  const renamed = css.replaceAll(`.${cls}`, '.renamed-away');
+  assert.deepEqual(outrankingPageTitleDeclarations(renamed, 'renamed-away'), [], 'both ends renamed together is green');
+  assert.ok(outrankingPageTitleDeclarations(renamed, cls).length > 0, 'renaming only the stylesheet fails');
+  assert.ok(outrankingPageTitleDeclarations(css, 'renamed-away').length > 0, 'renaming only the markup fails');
+
+  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n.checklist li:not(.x) { font-size: 2rem; }\n`, cls), [],
+    'a selector that cannot reach the page h1 is skipped unparsed, so the guard does not throw on CSS it never evaluates');
+});
+
+test('the cascade resolver agrees with CSS on specificity', () => {
+  const cls = 'page-title';
+
+  assert.deepEqual(specificityOf('*', cls), [0, 0, 0], "'*' is not a type name");
+  assert.deepEqual(specificityOf('body', cls), [0, 0, 1], 'a bare type is one c');
+  assert.deepEqual(specificityOf('h1', cls), [0, 0, 1], 'the h1 type is one c');
+  assert.deepEqual(specificityOf('.page-title', cls), [0, 1, 0], 'a class is one b');
+  assert.deepEqual(specificityOf('.a.b', cls), [0, 2, 0], 'a compound of two classes is two b');
+  assert.deepEqual(specificityOf('[aria-current="page"]', cls), [0, 1, 0], 'an attribute selector is one b');
+  assert.deepEqual(specificityOf('a:hover', cls), [0, 1, 1], 'a single-colon pseudo-class is a b, not a c');
+  assert.deepEqual(specificityOf('#main', cls), [1, 0, 0], 'an id is one a');
+  assert.deepEqual(specificityOf('#main h1', cls), [1, 0, 1], 'a descendant adds its ancestor to the specificity');
+  assert.deepEqual(specificityOf('main > h1', cls), [0, 0, 2], "'>' is a combinator, not a type name");
+
+  const pageTitle = { specificity: specificityOf('.page-title', cls), index: 99 };
+  assert.ok(beats({ specificity: specificityOf('#main h1', cls), index: 0 }, pageTitle),
+    "'#main h1' beats '.page-title' a hundred rules earlier");
+  assert.ok(beats({ specificity: specificityOf('.a.b', cls), index: 0 }, { ...pageTitle, specificity: specificityOf('.a', cls) }),
+    "'.a.b' beats '.a'");
+  assert.ok(!beats({ specificity: specificityOf('*', cls), index: 99 }, pageTitle), "'*' beats nothing, at any source position");
+  assert.ok(beats({ ...pageTitle, index: 5 }, { ...pageTitle, index: 4 }), 'equal specificity is decided by source order');
+  assert.ok(!beats({ ...pageTitle, index: 4 }, { ...pageTitle, index: 5 }), 'and not by the reverse');
+
+  assert.ok(parseSelector('body', cls).matchesPageTitle, 'body reaches the h1 by inheritance');
+  assert.ok(parseSelector('*', cls).matchesPageTitle, 'the universal selector reaches every element');
+  assert.ok(parseSelector('h1', cls).matchesPageTitle, 'an h1 type selector reaches the h1');
+  assert.ok(parseSelector('main .page-title', cls).matchesPageTitle, 'a descendant of the class matches the h1');
+  assert.equal(parseSelector('#main', cls).matchesPageTitle, false, 'an ancestor id does not match the h1 itself');
+  assert.equal(parseSelector('.panel h2', cls).matchesPageTitle, false, 'a different element does not match the h1');
+  assert.equal(parseSelector('.page-title-extra', cls).matchesPageTitle, false, 'a longer class name is not the class');
+
+  // Unsupported syntax throws rather than parsing to a number it invented: a
+  // stylesheet the guard cannot model must fail the suite loudly, not pass it
+  // for the wrong reason.
+  assert.throws(() => specificityOf('.checklist li:not(.x)', cls), /:not\(/, 'a functional pseudo-class throws');
+  assert.throws(() => specificityOf('.page-title::after', cls), /pseudo-element/, 'a pseudo-element throws');
+  assert.throws(() => specificityOf('h1 + p', cls), /'\+' combinator/, "the '+' combinator throws");
+  assert.throws(() => specificityOf('h1 ~ p', cls), /'~' combinator/, "the '~' combinator throws");
 });
