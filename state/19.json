@@ -351,5 +351,8 @@
       "diagnosis": "The implement step (model glm-5.3-flash via the LiteLLM proxy) was struck by repeated upstream provider failures — three `[server_error] upstream service timeout` streaming errors at 11:02:03, 11:12:22 and 11:22:50 — and never finished inside its ~90-minute step budget, so GitHub killed it with `The action has timed out` (duration_ms=5410660). No repo code, test, compiler, or plan error appears anywhere in the log; the work order is sound and this is the first failure on the issue (prior_signatu",
       "run": "36122142187"
     }
-  ]
+  ],
+  "retry_after": "2026-09-25T12:03:00.998Z",
+  "retry_stage": "implement",
+  "parked_at": "2026-09-25T11:43:01.259Z"
 }
