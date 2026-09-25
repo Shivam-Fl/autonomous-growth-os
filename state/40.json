@@ -543,7 +543,7 @@
   "work_order_posted_at": "2026-09-25T18:45:27.733Z",
   "work_order_from": "root-cause",
   "work_order_comment": "5837748866",
-  "implemented_version": 2,
+  "implemented_version": 3,
   "qa": {
     "verdict": "fail",
     "introduced_bugs": 1,
