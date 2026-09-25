@@ -50,6 +50,13 @@ const judged = kind === 'bug'
   ? { ...wo, kind, reproduced: observed || (wo.reproduced === true && (wo.evidence ?? []).length > 0) }
   : wo;
 let { gate, reason } = planGate(judged, { ...cfg, gates });
+// Say whose gate it is. The route may add plan approval to a ticket the config does not gate —
+// the router can sense something a person should read — but "gates.plan_approval is on" named
+// the config, on a repository whose config has it off, and sent its owner looking for a switch
+// nobody had flipped (growth-os #40).
+if (gate === 'human' && gates.plan_approval && !cfg.gates?.plan_approval && reason === 'gates.plan_approval is on') {
+  reason = 'the router asked for a person to read this plan when it routed the issue — its reason is in the Route comment above; config does not require it';
+}
 
 // The plan reviewer approved but said the confidence is higher than the plan has earned. That is
 // the finding min_confidence exists for, reached by a reader instead of a number.
