@@ -167,7 +167,12 @@
     "debate_summary": "v1 was rejected on one objection: the offender sweep required in qa_script step 3 and quoted in AC-1 filtered only on right edge past the viewport, then told the tester that any listed element is a real overflow 'not a scrollable region's content' — the exact category a correct implementation of this plan produces, so the right implementation failed its own QA step. Answered in v2 in the same breath as each mention: the sweep is now ancestor-aware (`.filter(el => !el.closest('.skip-link') && !el.closest('.table-scroll') && el.getBoundingClientRect().right > window.innerWidth + 0.5)`), its closing sentence states that content past the right edge inside a .table-scroll region is the expected, correct result and not a failure, and names those two exemptions as the only ones. AC-1 carries the same qualification and keeps the load-bearing checks the objection endorsed — scrollWidth <= innerWidth and the three KPI cards' maturity bars fully on screen, both of which sit outside any table region. AC-4 is unchanged in substance and now says why no exemption is needed there. A risk entry records the naive-sweep hazard so a QA run that re-derives the sweep sees it. Nothing else in v1 changed: the diagnosis, the two CSS rules, the wrapper, the files and the tests are as measured.",
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/web/styles.css",
+    "src/web/pages.js",
+    "test/web/pages.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
