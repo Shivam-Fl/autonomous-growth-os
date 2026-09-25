@@ -293,7 +293,7 @@
   ],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:49.874Z",
-  "updated_at": "2026-09-25T11:46:24.842Z",
+  "updated_at": "2026-09-25T11:46:32.336Z",
   "history": [
     {
       "at": "2026-09-25T08:49:47.525Z",
@@ -429,6 +429,11 @@
       "at": "2026-09-25T11:46:24.842Z",
       "agent": "release",
       "action": "-> merged"
+    },
+    {
+      "at": "2026-09-25T11:46:32.336Z",
+      "agent": "system",
+      "action": "lock released"
     }
   ],
   "epic": 14,
