@@ -16,8 +16,16 @@
     "n": 1,
     "run": "36115257837"
   },
-  "halted": null,
-  "pending": null,
+  "pending": {
+    "stage": "implement",
+    "rework": null,
+    "requested_at_head": null,
+    "qa_run": null,
+    "from": null,
+    "pr": null,
+    "work_order_version": 1,
+    "at": "2026-09-25T09:25:49.069Z"
+  },
   "work_order": {
     "acceptance": [
       {
@@ -157,7 +165,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "bug",
     "confidence": 85,
@@ -168,8 +176,8 @@
     },
     "decided_at": "2026-09-25T08:52:00.144Z"
   },
-  "stopped_at": "plan",
-  "dispatched_stage": "plan",
+  "stopped_at": null,
+  "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-25T08:55:48.980Z",
   "validated_ac_changes": [],
