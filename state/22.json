@@ -183,7 +183,20 @@
     "understanding": "Issue #22 is the strategist slice of epic #14: rank competing bets with stored score components (spec section 26 opportunity economy: value x pSuccess x fit x infoValue x reversibility / cost / downside / delay) and settle them with L1/L2 experiments (native A/B plus Bayesian levels) that carry caps, stop rules and a first-class inconclusive state, reusing the quality funnel (qualified CPL over downstream events) so a cheap low-quality campaign loses to an expensive high-quality one. The codebase today has no scoring or evaluation code: src/web/pages.js renders opportunities/experiments from placeholder raw events (opportunity.scored, experiment.started) that nothing ever writes, and there is no src/domain/opportunities.js, src/domain/experiments.js, no tables, and no API for either. Dependencies #19 (decision journal) and #21 (research mesh plus learnings) are merged, so the decision record, research-observations panel and retrieval gate exist to consume. The recorded human answer (Meta Ads first, Google after) means no Google experiment adapter in this slice.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/domain/opportunities.js",
+    "src/domain/experiments.js",
+    "src/data/db.js",
+    "src/data/repositories.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "src/web/client.js",
+    "scripts/seed.js",
+    "test/domain/opportunities.test.js",
+    "test/domain/experiments.test.js",
+    "test/api/opportunities.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
