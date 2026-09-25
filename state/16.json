@@ -584,33 +584,26 @@
   "failure_packet": {
     "issue": 16,
     "pr": 27,
-    "head": "cd9e0d3df2bd01111beb305c9fa2a374f572eb19",
-    "stage": "ci",
-    "attempt": 4,
+    "head": "4c1b8cc56611caf3995045d2f4b20e84a61264da",
+    "stage": "qa",
+    "attempt": 1,
     "occurrences": 1,
     "error_type": "unknown",
-    "error_signature": "01495bc7d1165a48",
-    "raw_excerpt": "verify\tFail if any check failed\t﻿2026-09-25T01:10:52.5936478Z ##[group]Run exit 1\nverify\tFail if any check failed\t2026-09-25T01:10:52.5936736Z ^[[36;1mexit 1^[[0m\nverify\tFail if any check failed\t2026-09-25T01:10:52.5961165Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}\nverify\tFail if any check failed\t2026-09-25T01:10:52.5961584Z ##[endgroup]\nverify\tFail if any check failed\t2026-09-25T01:10:52.6003549Z ##[error]Process completed with exit code 1.",
-    "digest": "The ci stage failed and no known error pattern matched. The raw output is below.",
+    "error_signature": "1cb3813330792f30",
+    "raw_excerpt": "sdlc: app never became ready: sdlc:ready (curl -fsS http://localhost:3000/health) kept failing for 420s (last: curl: (7) Failed to connect to localhost port 3000 after 0 ms: Couldn't connect to server).\nThis is an environment failure, not a product defect — QA is blocked, not failed.",
+    "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
     "decision": "triage",
     "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
     "context": {
       "work_order_version": 1,
-      "failed_checks": [
-        "ci-verify"
-      ],
-      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36080839278",
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36082089833",
       "prior_signatures": [
         "implement:unknown:3ed18acf24906ff0",
         "implement:unknown:e03083d351cc8121",
         "implement:agent-runtime:6d9400ca9ea09242",
-        "implement:agent-runtime:a4b7d12ca6b21274"
+        "implement:agent-runtime:a4b7d12ca6b21274",
+        "ci:unknown:01495bc7d1165a48"
       ]
-    },
-    "triage": {
-      "verdict": "repair",
-      "diagnosis": "The implementer shipped tests that import a data layer it never created. test/api/health.test.js, test/web/pages.test.js and test/workflows/scheduler.test.js (plus scripts/seed.js) all import openDatabase from src/data/db.js and createRepositories from src/data/repositories.js, but branch sdlc/issue-16 contains no src/data/ directory at all — those two work-order files (the node:sqlite bootstrap and the tenant-scoped repositories with replay) are missing, along with the planned test/data/append-only.test.js and test/data/tenant-isolation.test.js. The 12 domain tests that do not touch the data layer pass; only the 3 that import the missing modules fail. Re-running CI unchanged fails identically; the fix is project code squarely inside the current work order's file list.",
-      "evidence": "verify Unit tests: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/runner/work/autonomous-growth-os/autonomous-growth-os/src/data/db.js' imported from test/api/health.test.js (same error from test/web/pages.test.js and test/workflows/scheduler.test.js); # pass 12 # fail 3. git ls-tree on sdlc/issue-16 (cd9e0d3) lists src/api, src/domain, src/web, src/workflows but no src/data/ and no test/data/."
     }
   },
   "triage_history": [
