@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { utcNow } from './db.js';
 import { SCOPE_FIELDS } from '../memory/learnings.js';
-import { rankOpportunities } from '../domain/opportunities.js';
+import { rankOpportunities, readableComponents } from '../domain/opportunities.js';
 
 function parseJson(text, fallback) {
   if (text === null || text === undefined) {
@@ -584,16 +584,20 @@ function createOpportunityRepository(db) {
       opportunity_id: row.opportunity_id,
       name: record.name ?? row.opportunity_id,
       record,
-      components: {
-        value_micros: record.value_micros,
-        pSuccess: record.pSuccess,
-        fit: record.fit,
-        infoValue: record.infoValue,
-        reversibility: record.reversibility,
-        cost_micros: record.cost_micros,
-        downside: record.downside,
-        delay: record.delay,
-      },
+      // All eight component keys, always, projected by the domain's shared
+      // readability rule: a component this build cannot stand behind is
+      // present-and-null, never a dropped key, because JSON.stringify removes
+      // an undefined key and a caller cannot tell a component the build chose
+      // not to return from a component that was never stored. The same rule
+      // decides expectedContribution and what the page renderer prints, so one
+      // stored record cannot be readable here and unreadable there.
+      //
+      // This is a wire-format change, and it applies to all eight keys, not
+      // only the two money components: a client that distinguished
+      // `'fit' in components` from `components.fit === null` — or did so for
+      // value_micros, as the previous projection's own example did — will see
+      // the difference.
+      components: readableComponents(record),
       score: row.score,
       created_at: row.created_at,
     };
