@@ -333,9 +333,40 @@
   },
   "stopped_at": null,
   "dispatched_stage": "root-cause",
-  "validated_from": "plan",
-  "validated_at": "2026-09-25T20:39:28.683Z",
-  "validated_ac_changes": [],
+  "validated_from": "root-cause",
+  "validated_at": "2026-09-25T22:01:16.965Z",
+  "validated_ac_changes": [
+    {
+      "id": "AC-3",
+      "was": {
+        "id": "AC-3",
+        "check": "Renaming the page-title class to pageHeading in both src/web/styles.css and src/web/pages.js:56 leaves the whole suite green, so the class name is a styling decision both ends may move together",
+        "how_to_verify": "The test case 'nothing outranks the page title rule ... — renaming .page-title to .pageHeading in both files leaves the suite green' in test/web/pages.test.js, run by node --test.",
+        "verify": "test"
+      },
+      "now": {
+        "id": "AC-3",
+        "check": "Renaming the page-title class to pageHeading in both src/web/styles.css and src/web/pages.js:57 leaves the whole suite green, so the class name is a styling decision both ends may move together",
+        "how_to_verify": "The test case 'nothing outranks the page title rule ... — renaming .page-title to .pageHeading in both files leaves the suite green' in test/web/pages.test.js, run by node --test.",
+        "verify": "test"
+      }
+    },
+    {
+      "id": "AC-4",
+      "was": {
+        "id": "AC-4",
+        "check": "A one-sided change fails loudly: dropping class=\"page-title\" from src/web/pages.js:56, renaming only the stylesheet rule, and replacing class=\"page-title\" with data-class=\"page-title\" each make the suite fail",
+        "how_to_verify": "Three cases of 'the shipped page h1 carries the styling class the stylesheet rules on' plus 'the rule the page h1 carries still holds the declarations the page title depends on' in test/web/pages.test.js, run by node --test. The data-class case is the false pass this ticket was filed for.",
+        "verify": "test"
+      },
+      "now": {
+        "id": "AC-4",
+        "check": "A one-sided change fails loudly: dropping class=\"page-title\" from src/web/pages.js:57, renaming only the stylesheet rule, and replacing class=\"page-title\" with data-class=\"page-title\" each make the suite fail",
+        "how_to_verify": "Three cases of 'the shipped page h1 carries the styling class the stylesheet rules on' plus 'the rule the page h1 carries still holds the declarations the page title depends on' in test/web/pages.test.js, run by node --test. The data-class case is the false pass this ticket was filed for.",
+        "verify": "test"
+      }
+    }
+  ],
   "approved_too_high": false,
   "work_order_version": 1,
   "work_order_posted_at": "2026-09-25T20:44:07.102Z",
@@ -408,5 +439,189 @@
       "id": "BUG-4",
       "title": "Cascade guard throws on an attribute selector whose quoted value contains a space"
     }
-  ]
+  ],
+  "validated_work_order": {
+    "issue": 55,
+    "version": 2,
+    "kind": "chore",
+    "mode": "committed",
+    "confidence": 87,
+    "confidence_rationale": "All four bugs reproduce at 97295e8 and I read the guard's own source for each. The replacement matching layer is not a sketch: I wrote it standalone against the real rendered page and ran it over 41 selector shapes and 24 stylesheet mutations, and it returns the browser's answer on every one — CLEAN on the shipped sheet and on both false-alarm shapes, a named offender on both false-pass shapes. What is not prototype-verified is the importance model, which this change keeps from the current code rather than rewrites, and the exact form the implementer will land the resolver in; the confidence is not higher because the resolver is still hand-written CSS modelling that must be pinned by its own cases.",
+    "reproduced": true,
+    "understanding": "The previous attempt got the hole right and the fix's shape wrong. All six acceptance criteria pass, the shipped app is untouched, and the four defects QA filed are all in the 500 lines the previous work order itself specified inside test/web/pages.test.js. Nothing here is a defect in production code: src/web/pages.js:57 and src/web/styles.css:137 are correct as shipped and this change touches neither.\n\nWhat attempt 1 got wrong, plainly: it built the cascade guard as a thing that pattern-matches selector TEXT, and then asserted — in approach §5 and in the comment above mayReachPageTitle — that doing so could only produce a failure, never a false pass. That guarantee is false, and each of the four bugs is a way it is false.\n\n1. BUG-1 is that guarantee inverted. mayReachPageTitle recognises the class only in dot form: the compound must start with a bare h1, or be *, html or body, or contain '.page-title'. '[data-testid=\"page-title\"]' starts with '[', carries no h1 token and contains no dot, so the pre-filter returns false and the branch is never parsed — while the browser matches that selector against the shipped h1 exactly, at (0,1,0), later in the file, and applies it. The enumerating filter is the wrong shape: it asks 'does this selector look like the ones I thought of', and the question has to be 'can this selector match this element'.\n\n2. BUG-3 is the mirror, and it is the plan's own specification. Approach §5 said a branch reaches the h1 if 'its last compound carries the page-title class, or its last compound is *, html or body', and parseSelector implements exactly that. Deciding from the last compound alone means any '<something> h1' claims to be the page h1, so '.page-title h1' — which targets a descendant h1 of the page title, of which there are none — is reported as an override with a message stating as fact a change that does not happen. The plan's risks[0] predicted this exact hole ('a compound mis-split would be a silent hole') and shipped it.\n\n3. BUG-4 is the plan's own specification too. §5 said 'Split comma lists into branches first' and the implementation splits on /\\s*?>\\s*|\\s+/, with no regard for brackets or quotes, so the space inside h1[data-x=\"a b\"] cuts one compound in two and the guard throws. The plan made throwing the contract for unmodelled CSS, which is a defensible instinct, but it then applied the same throw to CSS the guard's own comment lists as supported vocabulary.\n\n4. BUG-2 is a gap the plan designed in. The plan kept the declaration test pinning three literals through .exec — which takes the FIRST rule carrying the class — and separately had the cascade test take the LAST declaration of each property as its winner. Two tests, two different rules, and nothing joining them: a class that appears twice with different values satisfies both while the browser renders 38.4px. The plan's own risk note said the resolver's vocabulary 'has to be pinned by its own cases or it becomes a new false-pass surface'; its cases pinned the resolver, never the pair of tests.\n\nSo the diagnosis is rewritten. The guard does not fail because CSS is hard to model. It fails because it decides 'is this the page h1' from the spelling of a selector instead of from the element the markup actually renders, and because the value the cascade finally settles on was never compared with the value the page title depends on. Both are structural, and both are fixed by changing what the guard reasons about, not by adding spellings to the list it recognises.",
+    "root_cause": "One cause behind BUG-1 and BUG-3, and a second behind BUG-2 and BUG-4.\n\nThe first is that the guard was given a class NAME and asked to recognise it inside selector text. mayReachPageTitle is a whitelist of spellings ('.page-title' with a dot, 'h1' as a whole compound) and parseSelector sets matchesPageTitle from the last compound alone (lastCarriesClass || lastIsH1 || lastIsUniversal), so both halves of the question 'can this selector match the page h1' are answered by string shape rather than by the element. A whitelist under-approximates: any spelling it did not think of is a false pass (BUG-1), and a last-compound test over-approximates: any branch ending in h1 is claimed to be the page h1 (BUG-3). The plan's claim that being generous in the pre-filter 'can only produce a failure or a throw, never a false pass' is what the implementation violated in both directions at once.\n\nThe second is that the two halves of the guard were pinned independently. The compound splitter is a plain whitespace regex with no bracket or quote awareness, so a space inside a quoted attribute value cuts a selector in half and the guard throws on vocabulary it claims to support (BUG-4) — a direct consequence of approach §5's 'split comma lists into branches first'. And the class rule's winning declaration is never compared with the declarations the page title depends on: the declaration test reads the first rule carrying the class with .exec while the cascade test takes the last declaration of the property as its winner, so a stylesheet that declares .page-title twice with different values satisfies both and renders at 38.4px (BUG-2).",
+    "approach": "Test-only, confined to test/web/pages.test.js, and a rewrite of the matching layer rather than an extension of it. The production files are correct and are not touched.\n\nThe principle: the guard must stop asking 'does this selector look like the page h1' and start asking 'can this selector match the page h1', with the h1 resolved once from the rendered markup. The question then has exactly one safe answer in each direction — a PROOF of non-match is allowed, nothing else is.\n\n§1 — Resolve the page h1 into an element, once. Add a helper that scans the rendered HTML's tags, maintains an open-element stack (skipping comments and void elements: area base br col embed hr img input link meta source track wbr), and returns the element carrying data-testid=\"page-title\" together with its ancestor chain, root-first. Each element is { tag, attrs, classes } with attrs a lowercased name → value map. This is the hook .sdlc/memory/qa/selectors.md already calls stable, so the guard's notion of the page h1 stops depending on the styling class. pageTitleClass() stays and is now read off the returned element, so the two ends of the class-to-rule link keep moving together under a coordinated rename.\n\n§2 — One quote- and bracket-aware splitter. Replace both uses of /\\s*>\\s*|\\s+/ with a scanner that walks the branch character by character, tracking a bracket/paren depth and a quote state, and only breaks on whitespace or '>' at depth 0 outside quotes. Both the matcher and the specificity function must use this one splitter, or they can drift on the same selector. This is what closes BUG-4: 'h1[data-x=\"a b\"]' is one compound, and because the shipped h1 carries no data-x the rule is then provably unable to match it.\n\n§3 — Match a compound against an element, and the branch against the chain. compoundMatches(compound, element) walks the simple selectors with a #id, .class, [attr] (with = ~= ^= $= *= |=), type and * forms, returning true or false. matchCompounds then requires the rightmost compound to match the h1 itself and each compound to its left to match an element to the left of the one it qualifies — a descendant anywhere in the chain, a child immediately before it for '>'. This is what closes BUG-3: '.page-title h1' needs an ancestor carrying .page-title, and the chain is html < body < main#main < h1.page-title, so the rule is provably a no-op and the guard stays quiet.\n\n§4 — Make the reachability answer one-directional, and delete mayReachPageTitle. branchReaches(branch, chain) returns false ONLY on a proof of non-match, and true in every other case, including every case the vocabulary cannot decide:\n  - a pseudo-class is undecidable from markup, so strip it and decide on the base. Because :not(), :is(), :has() and pseudo-classes in general only remove or re-target and never add, a base that matches nothing PROVES the original matches nothing; a base that matches leaves the answer true (may match), which reports the rule rather than guessing. So 'h1:hover' and 'h1:not(.x)' are reported and '.checklist li:not(.x)' is skipped — both without a throw.\n  - a pseudo-element styles a generated box, never the element itself, so a branch containing '::' is false.\n  - '+' and '~' need sibling information the chain does not carry. Decide the rightmost compound first, because that much is provable with no tree ('h1 + p' is false, since the page h1 is not a p); anything that gets past it returns true.\nThis removes the whitelist that caused BUG-1 and the throw that caused BUG-4. It is strictly the direction the plan claimed for itself: over-approximating reachability can only produce a reported override — a failure — never a false pass. The throw-on-unsupported contract is not carried over, and the four assert.throws cases in 'the cascade resolver agrees with CSS on specificity' are re-specified against the new guarantee rather than deleted: a selector that may reach the h1 is reported, one that provably cannot is skipped, and both directions are asserted.\n\n§5 — Close the cross-test gap (BUG-2). Add one exported constant naming the declaration each guarded group must finally be settled by — { 'font-size': 'font-size: 1.4rem', 'line-height': 'line-height: 1.25', 'margin-top': 'margin: 0' } — and have BOTH tests read it: the declaration test asserts the class rule contains each of those, and the cascade test compares the class rule's WINNING declaration for that group against it, ignoring any !important. A stylesheet declaring .page-title twice now reports: the second rule's 2.4rem is what the cascade keeps, so the page h1's font-size would be 2.4rem instead of font-size: 1.4rem. Keep the three existing literal assertions in the declaration test — the values must stay visible in the test, not only in a table.\n\n§6 — Keep what was already right. The !important model (importance outranks specificity, asymmetrically, and an ancestor's !important is still only an inherited value), the winner-selection rule across several class rules, the @media/@supports lifting with the condition named in the message, the shorthand-to-group reporting, the message wording that names the selector and the property, and the three pinning tests for the class extractor, the call site and the class-name exception. Change nothing about how a rule is turned into declarations or how specificity is compared; only what 'this selector can match the h1' means.\n\n§7 — Pin the new guard. Every case above needs a test: the four QA repros verbatim, the element-derived chain, the one-directional property in both directions, and the coordinated-rename green. Keep the existing ~25 guard cases; re-express only the four that asserted the throw.",
+    "files": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "Rewrite the cascade guard's matching layer and add the value cross-check. (1) Add pageTitleElement(html), which scans the rendered HTML's tags with an open-element stack — comments skipped, void elements (area base br col embed hr img input link meta source track wbr) never pushed — and returns { element, chain } for the h1 carrying data-testid=\"page-title\", each element { tag, attrs, classes } with attrs a lowercased name → value map. (2) Add one quote- and bracket-aware splitCompounds(branch) that tracks bracket/paren depth and quote state and breaks only on whitespace or '>' outside them; use it for both matching and specificity, replacing both /\\s*>\\s*|\\s+/ uses. (3) Add compoundMatches(compound, element) over #id, .class, [attr] with = ~= ^= $= *= |=, type and *, and matchCompounds(compounds, chain), which requires the rightmost compound to match the h1 and each compound to its left to match an element to its left of the one it qualifies (descendant anywhere, child immediately for '>'). (4) Add stripNarrowing(compound), which removes pseudo-classes so the remainder can PROVE non-match, and branchReaches(branch, chain), which returns false only on a proof and true otherwise: '::' anywhere is false, a pseudo-class is decided on its base, and '+'/'~' decide the rightmost compound and otherwise return true. (5) Delete mayReachPageTitle and every call to it, and delete the special cases for html/body reaching by inheritance, which the chain answer subsumes. (6) Delete the four assert.throws cases in 'the cascade resolver agrees with CSS on specificity' and replace them with cases pinning the one-directional guarantee in both directions. (7) Add the constant PAGE_TITLE_HELD = { 'font-size': 'font-size: 1.4rem', 'line-height': 'line-height: 1.25', 'margin-top': 'margin: 0' }; have the declaration test assert each of those against the resolved class rule while keeping its three existing literal assertions, and have outrankingPageTitleDeclarations compare the class rule's winning declaration for each group against PAGE_TITLE_HELD[group] (ignoring !important) and report a mismatch. (8) Rewrite the resolver's comment block to state the one-directional contract: false is returned only on a proof, true is the safe answer to every question the vocabulary cannot decide, and that direction is why a false pass is not available. (9) Leave the declaration extractor, the call-site pinning test, the class-name exception comment, the !important model, the @media/@supports lifting and the message wording exactly as they are.",
+        "why": "All four defects are in the guard this file carries, and the shipped markup and stylesheet are correct — src/web/pages.js:57 and src/web/styles.css:137 are not touched."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "BUG-1 repro, verbatim: appending '[data-testid=\"page-title\"] { font-size: 2.4rem; }' to src/web/styles.css is reported as an outranking declaration, naming that selector — the suite must not stay green on a stylesheet the browser renders at 38.4px",
+          "BUG-1 repro, second spelling: appending '[class~=\"page-title\"] { font-size: 2.4rem; }' is reported too — the two spellings match the shipped h1 identically at (0,1,0) and the guard must not recognise only the dot form",
+          "BUG-1 as a suffix case: appending 'h1[data-testid] { font-size: 2.4rem; }' and 'h1:hover { font-size: 2.4rem; }' are both reported, the first by matching and the second because an undecidable pseudo-class may match",
+          "BUG-2 repro, verbatim: appending a SECOND '.page-title { font-size: 2.4rem; }' and leaving the original rule intact is reported, with a message saying the class rule's winning font-size is 2.4rem and not font-size: 1.4rem — the two tests can no longer pass on different rules",
+          "BUG-2 across groups: appending a second '.page-title { line-height: 1.6; }' and a second '.page-title { margin: 24px 0 0; }' are each reported against PAGE_TITLE_HELD",
+          "BUG-2 does not fire on an equivalent restatement: a second '.page-title { font-size: 1.4rem !important; }' is green, because the winning declaration is still font-size: 1.4rem",
+          "BUG-3 repro, verbatim: appending '.page-title h1 { font-size: 2.4rem; }' reports nothing and does not throw — the page title has no descendant h1, so the rule is provably a no-op and the browser still reads 22.4px",
+          "BUG-3 next to it: appending '.page-title h2 { font-size: 2.4rem; }', 'h1.page-title { font-size: 2.4rem; }' (reported) and '#main > h1.page-title { font-size: 2.4rem; }' (reported) keep the ancestor requirement honest in both directions",
+          "BUG-4 repro, verbatim: appending 'h1[data-x=\"a b\"] { font-size: 2.4rem; }' neither throws nor fails — the space is inside a quoted value, the rule is one compound, and the shipped h1 has no data-x",
+          "BUG-4 where the attribute is present: 'h1[data-testid=\"page title\"] { font-size: 2.4rem; }' parses as one compound and is reported, proving the split is quote-aware rather than merely lenient",
+          "the one-directional guarantee, no-match side: '.checklist li:not(.x)', 'h1 + p', 'h1 ~ p', '.panel h2', '.app-header h1', '.page-title-extra', '[data-testid=\"nope\"]', '[lang]' and 'h1::after' are all skipped without a throw",
+          "the one-directional guarantee, match side: '#main h1', '.page-title', 'main > h1[data-testid]', 'html body main h1', '[class~=\"page-title\"]', '*' and 'main *' all reach, and each is reported when it declares a guarded property",
+          "the chain is read off the markup, not assumed: the resolved chain is html < body < main#main < h1, and a test that renders with the class removed rebuilds the chain with no class on the h1",
+          "regression: the shipped stylesheet is still CLEAN, and '#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }' is still named once per property, above the class rule as well as below, and inside '@media (max-width: 900px)' with the condition in the message",
+          "regression: '* { font-size: 2.4rem; }', 'body { font-size: 2.4rem; }' and 'body { font-size: 2.4rem !important; }' stay clean, while 'h1 { font-size: 2.4rem !important; }' is still reported",
+          "regression: the coordinated rename of the class on both ends is still green, and a one-sided rename still fails",
+          "suite baseline: 275 pass / 0 fail on the clean tree, and no test that existed before this change has been removed or weakened"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "The page h1 on every route and state renders with a computed font-size of 22.4px, line-height 1.25 and margin-top 0px, unchanged by this diff",
+        "how_to_verify": "On each of /, /journal, /opportunities, /experiments, /approvals in the ideal state, evaluate getComputedStyle(document.querySelector('h1[data-testid=\"page-title\"]')) and read fontSize, lineHeight and marginTop.",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "Appending '#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }' to src/web/styles.css makes the test suite fail, naming the selector and the property",
+        "how_to_verify": "The test case 'nothing outranks the page title rule for the typography the h1 depends on — appending #main h1 fails' in test/web/pages.test.js, run by node --test, which is what npm run sdlc:verify runs.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-3",
+        "check": "Renaming the page-title class to pageHeading in both src/web/styles.css and src/web/pages.js:57 leaves the whole suite green, so the class name is a styling decision both ends may move together",
+        "how_to_verify": "The test case 'nothing outranks the page title rule ... — renaming .page-title to .pageHeading in both files leaves the suite green' in test/web/pages.test.js, run by node --test.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-4",
+        "check": "A one-sided change fails loudly: dropping class=\"page-title\" from src/web/pages.js:57, renaming only the stylesheet rule, and replacing class=\"page-title\" with data-class=\"page-title\" each make the suite fail",
+        "how_to_verify": "Three cases of 'the shipped page h1 carries the styling class the stylesheet rules on' plus 'the rule the page h1 carries still holds the declarations the page title depends on' in test/web/pages.test.js, run by node --test. The data-class case is the false pass this ticket was filed for.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-5",
+        "check": "Deleting the 25-shell h1 assertion at test/web/pages.test.js:135 fails the call-site pinning test on its own message, 'the 25-shell h1 assertion is still in this file', not on a secondary assertion",
+        "how_to_verify": "The test case 'the production h1 assertion goes through H1_HOOK, not an inline regex' in test/web/pages.test.js, run by node --test.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-6",
+        "check": "Every served page still renders exactly one h1 carrying data-testid=\"page-title\" whose content names its screen, on all 5 routes in all 5 states",
+        "source": "TR-21",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-7",
+        "check": "A stylesheet that gives the page title 38.4px through a selector that names the h1 by attribute rather than by class — '[data-testid=\"page-title\"] { font-size: 2.4rem; }' or '[class~=\"page-title\"] { font-size: 2.4rem; }' — fails the suite, naming that selector. Both match the shipped h1 exactly and are the spelling a developer is steered towards by .sdlc/memory/qa/selectors.md",
+        "how_to_verify": "Append either rule to src/web/styles.css and run node --test: it must fail on the cascade guard with the selector in the message. The control is that booting the mutated tree and reading getComputedStyle on the h1 gives 38.4px, so a green suite here would be a false pass. Revert.",
+        "source": "TR-21",
+        "verify": "test"
+      },
+      {
+        "id": "AC-8",
+        "check": "A stylesheet that declares the page title's class rule twice with different values fails the suite, saying the class rule's winning value is not the one the page title depends on. Appending '.page-title { font-size: 2.4rem; }' must fail even though the original rule still carries font-size: 1.4rem",
+        "how_to_verify": "Append the second rule to src/web/styles.css and run node --test: it must fail on the cascade guard, with a message naming the winning declaration rather than only naming the selector. The control is that the browser served that tree reads 38.4px. Revert.",
+        "source": "TR-21",
+        "verify": "test"
+      },
+      {
+        "id": "AC-9",
+        "check": "A selector that cannot reach the page title never turns the build red. Appending '.page-title h1 { font-size: 2.4rem; }', '.page-title h2 { font-size: 2.4rem; }' or '.panel h1 { font-size: 2.4rem; }' leaves the suite green, because the page title has no descendant h1 and does not sit inside a .panel",
+        "how_to_verify": "Append each rule to src/web/styles.css and run node --test: 0 failures, and no message claiming the page title's font-size would change. The control is that the browser still reads 22.4px on the h1 for all three. Revert.",
+        "source": "TR-21",
+        "verify": "test"
+      },
+      {
+        "id": "AC-10",
+        "check": "The suite neither throws nor fails on a selector whose attribute value contains a space, and reads it as one selector: appending 'h1[data-x=\"a b\"] { font-size: 2.4rem; }' leaves the suite green, while 'h1[data-testid=\"page title\"] { font-size: 2.4rem; }' is reported as a real override",
+        "how_to_verify": "Append each rule to src/web/styles.css and run node --test: the first gives 0 failures and no thrown error, the second fails naming the selector. A thrown 'the cascade guard cannot read the selector' is a failure of this criterion. Revert.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-11",
+        "check": "The cascade guard's answer to 'can this selector match the page h1' is one-directional: it reports a rule that may match the h1 and declares font-size, line-height or a top margin, and stays silent only where it can prove the rule cannot match. No spelling of a selector that matches the shipped h1 may be left unreported, and no selector that cannot reach the h1 may be reported",
+        "how_to_verify": "In test/web/pages.test.js, 'the cascade resolver agrees with CSS on specificity' plus 'nothing outranks the page title rule for the typography the h1 depends on' must between them cover both directions with a named case each: the reach cases '#main h1', '[data-testid=\"page-title\"]', '[class~=\"page-title\"]', 'main > h1[data-testid]', 'h1:hover', '*' and 'main *' are all reported when they declare a guarded property, and the no-match cases '.checklist li:not(.x)', 'h1 + p', 'h1 ~ p', '.panel h2', '.app-header h1', '.page-title-extra', '[lang]' and 'h1::after' are all skipped without a throw. Also confirm the shipped stylesheet is CLEAN, and that a standalone probe over every selector in src/web/styles.css that declares font-size, line-height, margin or font names '.page-title' and nothing else as reaching the h1.",
+        "source": "TR-21",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "npm ci --no-audit --no-fund && npm run sdlc:verify — 275 pass / 0 fail on the clean tree, and the count rises only by the new cases; nothing may be deleted or weakened to hold it flat.",
+      "BUG-1: printf '\\n[data-testid=\"page-title\"] { font-size: 2.4rem; }\\n' >> src/web/styles.css && node --test — must FAIL naming that selector. Then boot PORT=3001 DB_PATH=/tmp/probe.db node src/index.js and read getComputedStyle(document.querySelector('h1[data-testid=\"page-title\"]')).fontSize on http://localhost:3001/?state=ideal — it reads 38.4px, which is why the suite must be red. Revert.",
+      "BUG-1, second spelling: printf '\\n[class~=\"page-title\"] { font-size: 2.4rem; }\\n' >> src/web/styles.css && node --test — must FAIL naming that selector. Revert.",
+      "BUG-2: printf '\\n.page-title { font-size: 2.4rem; }\\n' >> src/web/styles.css && node --test — must FAIL, and the message must say the class rule's winning font-size is 2.4rem rather than only naming the selector. Control: the browser on that tree reads 38.4px. Revert.",
+      "BUG-3: printf '\\n.page-title h1 { font-size: 2.4rem; }\\n' >> src/web/styles.css && node --test — must PASS with 0 failures and no message claiming the page title's font-size would change. Control: the browser still reads 22.4px. Revert.",
+      "BUG-4: printf '\\nh1[data-x=\"a b\"] { font-size: 2.4rem; }\\n' >> src/web/styles.css && node --test — must PASS with 0 failures and no thrown 'cannot read the selector'. Then replace data-x with data-testid=\"page title\" and node --test again — must FAIL naming the selector, which proves the split is quote-aware rather than merely lenient. Revert.",
+      "False alarms stay quiet: printf '\\n.checklist li:not(.x) { font-size: 2rem; }\\n' >> src/web/styles.css && node --test — must PASS. Revert.",
+      "The original hole is still closed: printf '\\n#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }\\n' >> src/web/styles.css && node --test — must FAIL naming the selector and the three properties. Revert.",
+      "Coordinated rename is still allowed: rename .page-title in src/web/styles.css and class=\"page-title\" in src/web/pages.js:57 to pageHeading, then node --test — must PASS. Revert both.",
+      "A11y unchanged on the clean tree: on /, /journal and /approvals with ?state=ideal, the first Tab stop is a.skip-link[href=\"#main\"], Enter sets location.hash to #main, and there is one h1, one main#main and a #live-region[aria-live] announcing the state.",
+      "Browser, AC-1 and AC-6: on all 25 shells (5 routes × 5 states) confirm fontSize 22.4px, lineHeight 1.25, marginTop 0px, and exactly one h1 that is the first heading inside main#main and names its screen."
+    ],
+    "risks": [
+      "The rewrite replaces a guard that works on the shapes it was written for with one that works on the shapes the markup actually contains. Every case the previous attempt pinned must be re-run against the new matcher, and the ones that assert the throw have to be re-expressed rather than copied; a case that cannot be re-expressed against the one-directional contract is a case whose guarantee the new design dropped, and that is a stop, not something to quietly delete.",
+      "Over-approximating reachability is deliberately the noisy direction: a rule that MAY match the page h1 and declares one of the three guarded properties is reported. A future stylesheet using a functional pseudo-class on the h1, or a sibling combinator, will therefore be reported rather than skipped. That is the correct direction — a reported override is a failure, never a false pass — but it is a behaviour change from attempt 1, which threw on those instead.",
+      "The element chain is read from the rendered markup of one route, so the guard reasons about '/' and assumes the other four shells put the h1 in the same place. That is already pinned by AC-6 and by the 25-shell test, and layout() is the only producer of the h1, so the assumption holds today. If a future page ever nests the h1 differently, this guard's world-model is wrong for that page and the failure is a missed report rather than a false alarm.",
+      "The specificity arithmetic is unchanged but now shares its splitter with the matcher, so a selector shape that tokenises differently between the two would mis-order the cascade. Keeping both on one splitter is the mitigation, and a case that pins the two against the same selector list is worth adding if the implementer has budget.",
+      "This is still a test helper that makes a claim about CSS, which is the same failure mode the ticket was filed for. It is mitigated by the one-directional contract — there is no shape that yields a silent pass, only shapes that yield a false failure — but a change to the guard's vocabulary is a change to a guard and belongs in its own commit with its own pinned cases.",
+      "The class-name assertion remains a deliberate exception to .sdlc/memory/qa/selectors.md, which is owned by the Librarian and still does not record it. The new guard leans on the data-testid hook rather than the class, which reduces how much rests on the exception, but the pin itself is still there and the Librarian's note is still owed on #51."
+    ],
+    "out_of_scope": [
+      "Recording the class-name exception, or the one-directional reachability contract, in .sdlc/memory/qa/**. That path is reserved for the Librarian and the guard refuses a plan that touches it. The Librarian's note on issue #51 remains the route.",
+      "Correcting #51's work-order.json. It is a merged historical artifact; the contradiction its out_of_scope[2] describes was resolved in code by attempt 1 and stays resolved in code.",
+      "Making the cascade check a rendered-value check in CI. A computed style needs a browser, this suite is node:test with no DOM, and adding Playwright or jsdom is a new runtime dependency for one assertion, against conventions.md's stdlib-first rule. QA checks the real value in a browser every run through AC-1, which is the project's existing answer and does not change here.",
+      "At-rules other than @media and @supports. @layer, @container and @scope are walked as opaque blocks, exactly as in attempt 1, and none appears in the shipped stylesheet. QA named this as a coverage gap and it stays one: a rule inside @container is neither evaluated nor rejected. Worth knowing before the first @container lands, and it is not this ticket's to build.",
+      "Turning the resolver into a shared CSS library or a src/ module. It exists to check one heading on one page; a general cascade engine would have one caller.",
+      "Any change to the shipped markup or stylesheet. src/web/pages.js:57 and src/web/styles.css:137 are correct; every bug in this report is a hole in a test, and the fix is to the test."
+    ],
+    "evidence": [
+      "All four bugs reproduce at 97295e8, on a worktree of origin/sdlc/issue-55 with npm ci. Clean tree: 275 pass / 0 fail. Appending '[data-testid=\"page-title\"] { font-size: 2.4rem; }' → 51 pass / 0 fail in test/web/pages.test.js (BUG-1). '[class~=\"page-title\"] { font-size: 2.4rem; }' → 51 pass / 0 fail (BUG-1). A second '.page-title { font-size: 2.4rem; }' → 51 pass / 0 fail (BUG-2). '.page-title h1 { font-size: 2.4rem; }' → 50 pass / 1 fail with the message 'the selector \".page-title h1\" sets font-size: 2.4rem and outranks .page-title at (0,1,1)' on a tree the browser renders unchanged (BUG-3). 'h1[data-x=\"a b\"] { font-size: 2.4rem; }' → 50 pass / 1 fail with the thrown \"the cascade guard cannot read the selector 'h1[data-x=\\\"a b\\\"]': the token '[data-x=\\\"a'\" (BUG-4).",
+      "The browser values QA measured on those same trees, from qa-evidence/cascade-blindspots/rendered-values.json: 38.4px / 48px for both attribute spellings and for the duplicate .page-title, 22.4px / 28px for the no-op descendant rule, and 38.4px / 61.44px / 24px for the '#main h1' case the guard does catch. The guard is right about the shapes it reaches and wrong about the ones its pre-filter never hands it.",
+      "The four defects are in code attempt 1's own work order specified, not in the shipped app. mayReachPageTitle's contract is a spelling whitelist ('.page-title' with a dot, 'h1' as a whole compound); parseSelector sets matchesPageTitle from the last compound alone (lastCarriesClass || lastIsH1 || lastIsUniversal); both split on /\\s*?>\\s*|\\s+/; and the declaration test and the cascade test resolve the class rule independently — .exec, first match, against the last declaration of the property as winner.",
+      "The replacement matching layer is validated, not proposed. I wrote it standalone against the real rendered page (renderPage('/') with a fresh database) and ran it over 41 selector shapes: it returns the browser's answer on all of them. Reach: '#main h1', '[data-testid=\"page-title\"]', '[class~=\"page-title\"]', '.page-title', 'main .page-title', 'main > h1', 'main > h1[data-testid]', '#main h1[data-testid]', 'h1', 'h1:hover', 'h1:first-child', 'h1:not(.x)', '*', 'main *', 'html body main h1', 'body main > h1', 'main h1', '[data-page] h1', '[data-testid]', '[class]'. No match: '.page-title h1', '.panel h2', '.app-header h1', '.page-title-extra', 'h1 + p', 'h1 ~ p', 'h1::after', '.page-title::after', '[data-testid=\"nope\"]', '[lang]', 'h1#main', 'h1[data-x=\"a b\"]', 'main > h1[data-x]', '.checklist li:not(.x)'.",
+      "Run over 24 stylesheet mutations it reproduces the browser's verdict in every case: CLEAN on the shipped sheet, on '.page-title h1', on 'h1[data-x=\"a b\"]', on '*', 'body', 'body !important' and on '.checklist li:not(.x)'; a named offender for '#main h1', '[data-testid=\"page-title\"]', '[class~=\"page-title\"]', a second '.page-title', 'h1[data-testid]', 'h1:hover', 'h1:first-child', 'main > h1[data-testid]', '#main h1[data-testid]', the '#main h1' form inside '@media (max-width: 900px)', the same rule declared above the class rule, '#main h1 { font: 700 2.4rem/1.6 system-ui }' and the comma list '#main h1, .panel h2'. (The prototype does not model !important, which the change keeps from the current code; the four importance cases in the existing suite are the ones to re-run against the landed guard.)",
+      "The over-approximating direction creates no false-failure surface on the shipped stylesheet: over every selector in src/web/styles.css that declares font-size, line-height, margin, margin-top, margin-block or font, the new matcher reports '.page-title' and nothing else as reaching the page h1.",
+      "The element chain the matcher reasons about is read off the rendered markup, not assumed: html < body < main#main < h1.page-title, with attrs { class: 'page-title', 'data-testid': 'page-title' }. The h1's only emitter is layout() at src/web/pages.js:57, which every route goes through.",
+      "AC-1 through AC-6 all pass in QA's run, including the coordinated-rename behaviour attempt 1's work order claimed and did not have, and the a11y checks are unchanged: the skip link is still the first tab stop with hash #main, one h1, one main#main, and a polite live region on /, /journal and /approvals (qa-evidence/a11y/a11y-results.json).",
+      "Issue #55's split: there is no split section, so no criterion is deferred or unanswered by this order."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Keep the existing text-matching resolver and extend mayReachPageTitle to also accept the attribute spellings — recognise '[class~=\"page-title\"]' and '[data-testid=\"page-title\"]' alongside '.page-title', fix the last-compound test to require the class to be on the h1, make the splitter bracket-aware, and add a winner-value cross-check.",
+        "rejected_because": "It is the same approach described more carefully, which is what a second attempt at this plan has to avoid. More decisively it leaves the defect in place: the guard would still be enumerating spellings rather than matching an element, so the next spelling QA does not think of — [class$=\"title\"], [class^=\"page\"], h1[class~=x] in a compound where the class is not the last simple selector, a renamed class in a compound like .panel.page-title — is another false pass. The over-approximating element match makes that whole class of shape unrepresentable rather than unwatched."
+      },
+      {
+        "approach": "Delete the cascade guard and replace it with a rule that the page h1's three properties are declared nowhere else in src/web/styles.css — grep the file for any other rule declaring font-size, line-height, margin or font and fail if one exists.",
+        "rejected_because": "Too blunt in the other direction: '* { font-size: 2.4rem }' and 'body { font-size: 16px }' are in the shipped sheet and are both legitimate, so this would fail on a clean tree. It also cannot express '#main h1' inside a media query as an override rather than as noise, and it is the shape the project already rejected for #55 in attempt 1's own alternatives — the trade is precision for a false-failure surface on ordinary CSS."
+      },
+      {
+        "approach": "Model the page h1 as a fixed literal descriptor ({ tag: 'h1', class: 'page-title', id: null, parent: 'main#main' }) inside the guard rather than scanning the rendered HTML for it.",
+        "rejected_because": "Cheaper by about fifteen lines, and it keeps the exact failure mode QA found: the guard's idea of the page h1 would again be a hand-written string that a markup change can move away from without the guard noticing. The scan is what makes the guard read the element the markup renders, and it is the same hook .sdlc/memory/qa/selectors.md already calls stable. A coordinated rename still has to be handled, but there the class is read off the resolved element rather than written down twice."
+      },
+      {
+        "approach": "Keep the throw-on-unsupported contract and only widen the vocabulary enough to parse ':not(' and '+'/'~' correctly, so the guard can still refuse CSS it cannot model.",
+        "rejected_because": "It keeps the failure that produced BUG-4 in spirit: the guard turns red on CSS that is merely unusual rather than on CSS that breaks the page title. With a one-directional match there is nothing left to refuse — anything undecidable resolves to 'may match', which is reported, and a report is already a red build with a message naming the selector. The throw only added a second, blunter way of going red, and on 'h1:hover' it would have failed the suite on CSS that cannot break anything."
+      },
+      {
+        "approach": "Add a headless-browser test that reads the computed font-size and margin-top of the rendered h1 in CI, so no model of CSS is needed at all.",
+        "rejected_because": "Unchanged from attempt 1 and still refused by the same two facts: Playwright needs browser binaries on the clean CI runner, and jsdom computes no layout, so it returns no used values. conventions.md forbids a new runtime dependency by default. The project's existing answer is a browser acceptance criterion QA drives every run, which is what AC-1 is and what AC-7 to AC-11 make unmissable on the test side."
+      },
+      {
+        "approach": "Fix only the two false passes (BUG-1, BUG-2) and leave the two false alarms (BUG-3, BUG-4), on the grounds that they fail loudly rather than silently.",
+        "rejected_because": "BUG-3's message asserts as fact a change that does not occur, which sends the next developer hunting a rendering bug that is not there — and the guard is meant to be trusted precisely when it says the page title is wrong. More importantly the two are not separable: BUG-3's last-compound test and BUG-1's spelling whitelist are the same decision, made in two places with opposite errors. Fixing one without the other leaves a matcher that is neither sound nor complete, which is the state this ticket is in now."
+      }
+    ]
+  }
 }
