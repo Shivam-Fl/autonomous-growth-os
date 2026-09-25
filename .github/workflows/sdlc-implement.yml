@@ -207,7 +207,9 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.done != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # prepare + this + publish + cleanup stays under limits.lock_ttl_minutes (300), or the watchdog
+    # reclaims the lock from a running job; doctor adds the chain up.
+    timeout-minutes: 255
     # Read-only: this job runs the product's install scripts, its tests, its dev server and an
     # agent with a shell. Nothing here can push, dispatch, label or comment.
     #
@@ -319,7 +321,12 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 90
+        #
+        # 90 minutes was "far above any honest run" until the provider slowed: on growth-os the
+        # same model answered at 36 seconds a turn instead of 9, a 140-turn implement took 85
+        # minutes, and the next was cut off at 90 while still working. A hang detector sized to
+        # a good hour is a budget. Three and three-quarter hours is still a hang.
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}

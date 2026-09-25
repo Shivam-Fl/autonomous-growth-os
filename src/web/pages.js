@@ -10,6 +10,7 @@ import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
 import { formatMoney, fromMicros } from '../domain/money.js';
+import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
 const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals'];
@@ -368,7 +369,7 @@ function decisionFeed(state, { repositories, tenant }) {
 <td>${escapeHtml(event.occurred_at)}</td>
 <td>${escapeHtml(event.payload.class ?? 'unknown')}</td>
 <td>${escapeHtml(event.payload.expected ?? '—')}</td>
-<td>${escapeHtml(event.payload.status ?? 'shadow')}</td>
+<td>${escapeHtml(event.payload.status ?? 'shadow')} ${evidenceRefsCell(event)}</td>
 </tr>`).join('');
   return panel({
     title: `Decision feed · ${decisions.length} row${decisions.length === 1 ? '' : 's'}`,
@@ -588,6 +589,45 @@ function journalRow(row, index) {
 </tr>`;
 }
 
+/** The research-observations panel (TR-10): the tenant's accepted learnings,
+ * run through the retrieval gate — only rows that survive scoping, freshness
+ * and confidence reach the page, SQL-prefiltered by scope and capped at the
+ * latest 5 with their evidence tier. Rendered above the opportunity queue or
+ * its empty copy whenever at least one learning is serviceable. */
+function researchObservations(repositories, tenant) {
+  if (!tenant) {
+    return '';
+  }
+  const served = gateForRetrieval(repositories.learnings.listForContext(tenant.id, { tenant: tenant.id }), {
+    context: { tenant: tenant.id },
+    nowIso: new Date().toISOString(),
+  });
+  if (served.length === 0) {
+    return '';
+  }
+  const shown = served.slice(-5);
+  const items = shown.map((learning) => `<li class="learning-card">
+<strong>${escapeHtml(learning.claim)}</strong>
+<span>tier ${escapeHtml(EVIDENCE_TYPE_TIERS[learning.evidenceType] ?? 'E')} · confidence ${escapeHtml(learning.confidence.toFixed(2))} · evidence: ${escapeHtml(String(learning.evidenceRefs.length))} · ${escapeHtml(learning.id)}</span>
+</li>`).join('');
+  const count = shown.length === served.length ? `${served.length}` : `${shown.length} of ${served.length}`;
+  return panel({
+    title: `Research observations · ${count}`,
+    body: `<ul class="learning-list">${items}</ul>`,
+    testid: 'research-observations',
+  });
+}
+
+/** The decision row's evidence refs: payload refs rendered escaped and
+ * compactly; rows with none show an em-dash so the column stays aligned. */
+function evidenceRefsCell(event) {
+  const refs = [
+    ...(event.payload.evidence_refs ?? []),
+    ...(event.payload.memory_refs ?? []),
+  ];
+  return `<span class="maturity-label" data-testid="evidence-refs">${refs.length === 0 ? '—' : escapeHtml(refs.join(', '))}</span>`;
+}
+
 function opportunities(state, { repositories, tenant }) {
   if (state === 'loading') {
     return panel({ title: 'Loading opportunity queue', body: skeletonRows(3, 'skeleton-card') });
@@ -607,6 +647,7 @@ function opportunities(state, { repositories, tenant }) {
   if (state === 'partial') {
     const queue = eventsOf(repositories, tenant, 'opportunity.scored');
     return `<div class="banner banner-warn" role="status">Some experiment arms await maturity — scores shown are provisional until conversions mature.</div>
+${researchObservations(repositories, tenant)}
 ${panel({
     title: 'Ranked opportunities',
     body: queue.length === 0
@@ -621,21 +662,23 @@ ${panel({
 
   const queue = eventsOf(repositories, tenant, 'opportunity.scored');
   if (state === 'empty' || queue.length === 0) {
-    return emptyState({
+    return `${researchObservations(repositories, tenant)}
+${emptyState({
       title: 'The opportunity queue is empty',
       message: 'The strategist would investigate first: where recent lead quality dropped by campaign, what upstream search demand is growing for your converting intent, and which channels sit below your current qualified CPL. Running the first research pass populates this queue with ranked, scored bets.',
       action: `<a class="button" href="/opportunities?state=loading">Run the first research pass</a>`,
       testid: 'opportunities-empty',
-    });
+    })}`;
   }
 
-  return panel({
+  return `${researchObservations(repositories, tenant)}
+${panel({
     title: `Ranked opportunities · ${queue.length}`,
     body: `<ul>${queue.map((event) => `<li>
 <strong>${escapeHtml(event.payload.name ?? 'Opportunity')}</strong>
 — value ${escapeHtml(event.payload.value ?? '—')} · success probability ${escapeHtml(event.payload.probability ?? '—')}
 </li>`).join('')}</ul>`,
-  });
+  })}`;
 }
 
 function experiments(state, { repositories, tenant }) {

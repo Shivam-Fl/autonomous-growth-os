@@ -160,6 +160,59 @@ END;
 CREATE INDEX IF NOT EXISTS decisions_status_idx
 ON decisions (tenant_id, status, decided_at);`,
   },
+  {
+    // Additive knowledge-layer tables (issue #21): learnings (TR-10) and the
+    // model-call ledger (TR-23). Both tenant-bound. Learnings are upserted by
+    // fixed id (re-seeding is a no-op, never a delete); model_calls only ever
+    // grows, recording the call record the router returns.
+    // Renumbered from 003 to 004 at the merge with the journal slice, which
+    // took 003 for its state_snapshots/decisions tables: the migrations table
+    // records by name and every statement below is CREATE ... IF NOT EXISTS,
+    // so a database that already recorded 003_knowledge_tables (pre-merge
+    // boots) re-runs identically, and fresh boots apply 003 then 004 in order.
+    name: '004_knowledge_tables',
+    sql: `
+CREATE TABLE IF NOT EXISTS learnings (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  claim TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  evidence_refs TEXT NOT NULL,
+  evidence_type TEXT NOT NULL,
+  effect_metric TEXT,
+  effect_estimate REAL,
+  effect_low REAL,
+  effect_high REAL,
+  confidence REAL NOT NULL,
+  applicability REAL NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  valid_from TEXT NOT NULL,
+  stale_after TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS learnings_tenant_status_idx
+  ON learnings (tenant_id, status, updated_at, id);
+
+CREATE TABLE IF NOT EXISTS model_calls (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt_version TEXT,
+  tool_catalog_version TEXT,
+  task_type TEXT,
+  tokens_in INTEGER NOT NULL,
+  tokens_out INTEGER NOT NULL,
+  latency_ms INTEGER NOT NULL,
+  cost_micros INTEGER NOT NULL,
+  usefulness REAL,
+  occurred_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);`,
+  },
 ];
 
 /** Open the database at dbPath, applying any migrations not yet recorded. */
