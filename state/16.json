@@ -18,13 +18,13 @@
   },
   "pending": {
     "stage": "implement",
-    "rework": null,
-    "requested_at_head": null,
+    "rework": "fix:triage",
+    "requested_at_head": "cd9e0d3df2bd01111beb305c9fa2a374f572eb19",
     "qa_run": null,
     "from": null,
-    "pr": null,
+    "pr": 27,
     "work_order_version": 1,
-    "at": "2026-09-25T00:48:11.157Z"
+    "at": "2026-09-25T01:14:24.994Z"
   },
   "work_order": {
     "acceptance": [
