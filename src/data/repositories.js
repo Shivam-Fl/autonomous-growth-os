@@ -1,8 +1,9 @@
 // Repositories own all SQL: SQLite implementations of the persistence
 // interfaces the domain and workflows depend on. Every query binds tenant_id,
 // so isolation holds on every path; raw_events and audit_events expose no
-// update or delete surface (append-only, TR-20), and replayRawToDerived()
-// rebuilds derived_metrics from raw_events alone.
+// update or delete surface (append-only, TR-20), decisions are append-only
+// and state_snapshots immutable (TR-6, storage triggers in db.js), and
+// replayRawToDerived() rebuilds derived_metrics from raw_events alone.
 
 import { randomUUID } from 'node:crypto';
 import { utcNow } from './db.js';
@@ -247,6 +248,137 @@ function createSagaRepository(db) {
   };
 }
 
+function createSnapshotRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO state_snapshots (tenant_id, snapshot_id, created_at, kpis, budgets, funnel, health, memories) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const selectOne = db.prepare(
+    'SELECT tenant_id, snapshot_id, created_at, kpis, budgets, funnel, health, memories FROM state_snapshots WHERE tenant_id = ? AND snapshot_id = ?',
+  );
+  const selectAll = db.prepare(
+    'SELECT tenant_id, snapshot_id, created_at, kpis, budgets, funnel, health, memories FROM state_snapshots WHERE tenant_id = ? ORDER BY created_at, snapshot_id',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    return {
+      tenant_id: row.tenant_id,
+      snapshot_id: row.snapshot_id,
+      created_at: row.created_at,
+      kpis: parseJson(row.kpis, {}),
+      budgets: parseJson(row.budgets, []),
+      funnel: parseJson(row.funnel, {}),
+      health: parseJson(row.health, {}),
+      memories: parseJson(row.memories, []),
+    };
+  }
+
+  return {
+    /**
+     * Immutable by design (TR-6): the only write is this append. Re-creating
+     * an existing snapshot_id is a no-op, so a retry that re-posts a body
+     * never duplicates the row.
+     */
+    create({ tenant_id: tenantId, snapshot_id: snapshotId, kpis = {}, budgets = [], funnel = {}, health = {}, memories = [] }) {
+      insert.run(tenantId, snapshotId, utcNow(), JSON.stringify(kpis), JSON.stringify(budgets), JSON.stringify(funnel), JSON.stringify(health), JSON.stringify(memories));
+      return this.get(tenantId, snapshotId);
+    },
+
+    get(tenantId, snapshotId) {
+      return shape(selectOne.get(tenantId, snapshotId));
+    },
+
+    list(tenantId) {
+      return selectAll.all(tenantId).map(shape);
+    },
+  };
+}
+
+function createDecisionRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO decisions (tenant_id, decision_id, state_snapshot_id, action_class, selected_action, record, decided_at, expected_evaluation_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const selectOne = db.prepare(
+    'SELECT decision_id, tenant_id, state_snapshot_id, action_class, selected_action, record, decided_at, expected_evaluation_at, status FROM decisions WHERE tenant_id = ? AND decision_id = ?',
+  );
+  const selectAll = db.prepare(
+    'SELECT decision_id, tenant_id, state_snapshot_id, action_class, selected_action, record, decided_at, expected_evaluation_at, status FROM decisions WHERE tenant_id = ? ORDER BY decided_at, decision_id',
+  );
+  // Status/class filters for the journal table (deterministic decided_at,
+  // decision_id order, ui.md: every table sorts deterministically).
+  const selectFiltered = db.prepare(
+    'SELECT decision_id, tenant_id, state_snapshot_id, action_class, selected_action, record, decided_at, expected_evaluation_at, status FROM decisions WHERE tenant_id = ? AND (? IS NULL OR action_class = ?) AND (? IS NULL OR status = ?) ORDER BY decided_at, decision_id',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    const record = parseJson(row.record, {});
+    return {
+      decision_id: row.decision_id,
+      tenant_id: row.tenant_id,
+      state_snapshot_id: row.state_snapshot_id,
+      action_class: row.action_class,
+      selected_action: row.selected_action,
+      record,
+      decided_at: row.decided_at,
+      expected_evaluation_at: row.expected_evaluation_at,
+      status: row.status,
+      // Outcomes ride on the record itself; calibration counts read here.
+      ...record,
+    };
+  }
+
+  return {
+    /**
+     * Append-only: the only write is this insert. Idempotent on decision_id
+     * (TR-5) — a re-posted body returns the existing row and reports
+     * {created: false, ...it} so callers can tell new from duplicate.
+     */
+    create(input) {
+      const result = insert.run(
+        input.tenant_id,
+        input.decision_id,
+        input.state_snapshot_id,
+        input.action_class,
+        input.selected_action,
+        JSON.stringify(input),
+        input.decided_at,
+        input.expected_evaluation_at,
+        input.status,
+      );
+      const created = result.changes > 0;
+      return { created, ...this.get(input.tenant_id, input.decision_id) };
+    },
+
+    get(tenantId, decisionId) {
+      return shape(selectOne.get(tenantId, decisionId));
+    },
+
+    /**
+     * Tenant-scoped rows in deterministic order, optionally filtered by
+     * action class and status (the journal's two selects).
+     */
+    list(tenantId, { class: classFilter = null, status = null } = {}) {
+      return selectFiltered.all(tenantId, classFilter, classFilter, status, status).map(shape);
+    },
+
+    /** Evaluated rows (the record carries an outcome) — live calibration's
+     * precision and false-intervention denominators. */
+    listEvaluated(tenantId) {
+      return this.list(tenantId).filter((row) => row.record.evaluation !== undefined && row.record.evaluation !== null);
+    },
+
+    /** Rows awaiting maturity: no outcome written onto the record yet. */
+    listAwaiting(tenantId) {
+      return this.list(tenantId).filter((row) => row.record.evaluation === undefined || row.record.evaluation === null);
+    },
+  };
+}
+
 function createLearningRepository(db) {
   const upsert = db.prepare(
     `INSERT OR REPLACE INTO learnings
@@ -431,6 +563,8 @@ export function createRepositories(db) {
     idempotency: createIdempotencyRepository(db),
     derived: createDerivedRepository(db),
     sagas: createSagaRepository(db),
+    snapshots: createSnapshotRepository(db),
+    decisions: createDecisionRepository(db),
     learnings: createLearningRepository(db),
     callLogs: createCallLogRepository(db),
   };

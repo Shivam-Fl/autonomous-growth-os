@@ -20,6 +20,12 @@ import {
 } from '../domain/measurement.js';
 import { validateEvent } from '../domain/events.js';
 import { utcNow } from '../data/db.js';
+import {
+  calibrationReport,
+  expectedEvaluationAtIso,
+  evaluationStatus,
+  validateDecisionRecord,
+} from '../domain/decisions.js';
 import { FakeMetaAdsProvider, FAILURE_MODES } from '../integrations/meta_ads/fake.js';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -84,6 +90,11 @@ export function buildApp({ repositories }) {
           override: request.query.state ?? null,
           metaProvider,
           metaError,
+          // The journal's class/status filters come from the two GET selects;
+          // unknown values are ignored downstream.
+          filters: route === '/journal'
+            ? { class: request.query.class ?? null, status: request.query.status ?? null }
+            : null,
         }));
     });
   }
@@ -157,6 +168,140 @@ export function buildApp({ repositories }) {
       data_through: latest,
       stale: isStale(now, latest),
       stale_age: staleAgeHours(now, latest) ?? null,
+    });
+  });
+
+  // The decision-journal surface (TR-6, TR-15): snapshot registration,
+  // decision posts, and the live calibration aggregate. Nothing here
+  // executes or approves anything — shadow mode records, it does not act,
+  // and no route imports test fixtures.
+
+  app.post('/v1/snapshots', (request, response) => {
+    const body = request.body ?? {};
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return errorResponse(response, 400, { code: 'BAD_SNAPSHOT', message: 'snapshot body must be an object' });
+    }
+    if (typeof body.snapshot_id !== 'string' || body.snapshot_id.length === 0) {
+      return errorResponse(response, 400, {
+        code: 'BAD_SNAPSHOT',
+        message: 'snapshot_id is missing or empty',
+        details: { field: 'snapshot_id' },
+      });
+    }
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    const snapshot = repositories.snapshots.create({
+      tenant_id: tenantId,
+      snapshot_id: body.snapshot_id,
+      kpis: body.kpis ?? {},
+      budgets: body.budgets ?? [],
+      funnel: body.funnel ?? {},
+      health: body.health ?? {},
+      memories: body.memories ?? [],
+    });
+    // 201 both times: re-registering an existing snapshot_id is a no-op.
+    response.status(201).json({ snapshot_id: snapshot.snapshot_id });
+  });
+
+  app.post('/v1/decisions', (request, response) => {
+    const body = request.body ?? {};
+    const validated = validateDecisionRecord(body);
+    if (!validated.ok) {
+      return errorResponse(response, 400, validated.error);
+    }
+    const record = validated.record;
+    const tenantId = resolveTenantId(repositories, body.tenant_id);
+    // Unknown snapshot id is a 422 (TR-6): nothing is written without the
+    // immutable world the decision was made in.
+    const snapshot = repositories.snapshots.get(tenantId, record.state_snapshot_id);
+    if (!snapshot) {
+      return errorResponse(response, 422, {
+        code: 'UNKNOWN_SNAPSHOT',
+        message: `unknown state snapshot ${record.state_snapshot_id}`,
+        details: { state_snapshot_id: record.state_snapshot_id },
+      });
+    }
+    const status = evaluationStatus(record, utcNow());
+    const result = repositories.decisions.create({
+      ...record,
+      tenant_id: tenantId,
+      expected_evaluation_at: expectedEvaluationAtIso(record.decided_at),
+      status,
+    });
+    // Idempotent re-post (TR-5): the same decision_id returns the same row.
+    response.status(201).json({
+      decision_id: result.decision_id,
+      status: result.status,
+      expected_evaluation_at: result.expected_evaluation_at,
+      created: result.created,
+    });
+  });
+
+  app.get('/v1/decisions', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    const rows = repositories.decisions.list(tenantId, {
+      class: request.query.class ?? null,
+      status: request.query.status ?? null,
+    });
+    response.json({
+      tenant_id: tenantId,
+      count: rows.length,
+      decisions: rows.map((row) => ({
+        decision_id: row.decision_id,
+        decided_at: row.decided_at,
+        action_class: row.action_class,
+        selected_action: row.selected_action,
+        status: row.status,
+        expected_evaluation_at: row.expected_evaluation_at,
+      })),
+    });
+  });
+
+  app.get('/v1/decisions/:decisionId', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    const row = repositories.decisions.get(tenantId, request.params.decisionId);
+    if (!row) {
+      return errorResponse(response, 404, { code: 'UNKNOWN_DECISION', message: `no decision ${request.params.decisionId}` });
+    }
+    // The full record: alternatives (each with its expected effect
+    // distribution and the do-nothing reason), risk, evidence and memory
+    // refs, critic result, policy id, model and prompt versions, and the
+    // evaluation when the decision has matured into one.
+    response.json({
+      decision_id: row.decision_id,
+      tenant_id: row.tenant_id,
+      state_snapshot_id: row.state_snapshot_id,
+      decided_at: row.decided_at,
+      action_class: row.action_class,
+      selected_action: row.selected_action,
+      alternatives: row.alternatives,
+      risk: row.risk,
+      evidence_refs: row.evidence_refs,
+      memory_refs: row.memory_refs,
+      critic_result: row.critic_result,
+      policy_decision_id: row.policy_decision_id,
+      model_versions: row.model_versions,
+      prompt_versions: row.prompt_versions,
+      evaluation: row.evaluation ?? null,
+      status: row.status,
+      expected_evaluation_at: row.expected_evaluation_at,
+    });
+  });
+
+  app.get('/v1/calibration', (request, response) => {
+    const tenantId = resolveTenantId(repositories, request.query.tenant_id);
+    // LIVE truth only: computed from the decisions repository through the
+    // outcomes on the records (work order). The frozen replay's 0.70/0.33
+    // report is CI-only and never reaches a live surface.
+    const report = calibrationReport(repositories.decisions.list(tenantId));
+    response.json({
+      tenant_id: tenantId,
+      precision: report.precision,
+      false_intervention_rate: report.falseInterventionRate,
+      evaluated: report.evaluated,
+      correct: report.correct,
+      interventions: report.interventions,
+      needless: report.needless,
+      awaiting_maturity: report.awaitingMaturity,
     });
   });
 
