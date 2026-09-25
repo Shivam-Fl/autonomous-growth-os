@@ -1,5 +1,5 @@
 {
-  "source_sha": "36026d911653a8cf6a5403c8cdf227d2fd14f44b",
+  "source_sha": "bbc457f4c44ef2d8fdabc7519e0ef139b957055a",
   "source_repo": "Shivam-Fl/automated-ai-sdlc",
   "files": {
     ".github/workflows/ci-verify.yml": "e70d32c31bc0a09bfa049641664ea88027ffda2703b0058272ce14fa9ea250fd",
@@ -11,7 +11,7 @@
     ".github/workflows/sdlc-loop.yml": "4524cba941b71d2961f0717c7bef1a1414d30df5b465f026c7a57c2db923afd7",
     ".github/workflows/sdlc-maintainer.yml": "54edc45471ec2508b1778a7c81407c517ab6ad9ff92eefca9524a7fde1685b2f",
     ".github/workflows/sdlc-plan.yml": "906ea064d688473c2f45a4040398262ba6f0e3b96939d0f162de6068109ac0af",
-    ".github/workflows/sdlc-probe.yml": "a6639ced32bedb5a3b240ed06b784f5f6edfedecc85585080a0ad45b2e6f4a23",
+    ".github/workflows/sdlc-probe.yml": "fac5a69944b30cb85b6c1d5cac7a061411b5c52ca7374172ad861700387baac5",
     ".github/workflows/sdlc-project.yml": "70b455851b533411d693cf3b941a39b710151e16ded7e7011e6e26f137bb0342",
     ".github/workflows/sdlc-qa.yml": "aec0d21c1ff3ded86c13e9e698812fc8dadd89df95d2ae59e65305c0f2a5f2e9",
     ".github/workflows/sdlc-release.yml": "93d35a875b505c974d7ed694668a9670c87430b1dafa40eab2d2f3d516559447",
@@ -123,7 +123,7 @@
     ".sdlc/bin/maintainer-inputs.mjs": "f45265d501f6619453481c2cf304d443c47f13623dedfaf0fbfda51cbd377eb5",
     ".sdlc/bin/merge-memory-prs.mjs": "259a7da602c147a7cafffdea7e6428cd42a9166c31df012791eb23ea4da41dbe",
     ".sdlc/bin/merge-pr.mjs": "c5aff16f3a6ec6bb1dc46c958514f01265f7619ca68be964fe30bac795ab8a9a",
-    ".sdlc/bin/model-bridge.mjs": "d3c6953c7ff520cb701aa20a0e6ac90034f10cb2cfae8ed577ae7b56f62433d7",
+    ".sdlc/bin/model-bridge.mjs": "2919a88dc66f7ae0d6d26672b86d628ab209f9da4e1bdc6e9e80d63ddf0493c5",
     ".sdlc/bin/on-close.mjs": "de6e25879c58b3037022bbed285b04e03a6264b9a3ef70739e0f41efdd27c2b0",
     ".sdlc/bin/on-merge.mjs": "eac5052e5d9c1d53029bf28ab631053f6ee1f5e9a8181c1ab0c6629ca84be30e",
     ".sdlc/bin/open-memory-pr.mjs": "9f54d02bb19492fb39912a6b2be1eaf85fc340b631d3640b453166ce26a67fde",
@@ -137,7 +137,7 @@
     ".sdlc/bin/post-review.mjs": "d1b64c509d3d46936782eec21e05fa0c94277aa5ebad3031501efd5fa76c961c",
     ".sdlc/bin/post-stop.mjs": "47b1fcb9de26e83204f56678988a5959ba17b7ee59988698770602c6d352a973",
     ".sdlc/bin/post-work-order.mjs": "99adc8d7f2e3fc6cc7f5f67fa1daa9f8c5381396dd59f211ef251f8f238b2fde",
-    ".sdlc/bin/provider-settings.mjs": "fc5b9a121e8a18a41d734d4f61a2d30661b3741338191568a21e111dc1ec19a8",
+    ".sdlc/bin/provider-settings.mjs": "a7b1905d44a1302333f2b4489733f435bb14d699606eb9764ed9bd9a937ac294",
     ".sdlc/bin/publish-release-notes.mjs": "0a2e6cdd4127bd569372ad73d8b8ee32d61a7054497c566ff6e491ce308ca342",
     ".sdlc/bin/qa-credentials.mjs": "99dda0ea91ed9bc8a31ea61ce17dc10351e3250701d59dee081e04786cf67084",
     ".sdlc/bin/read-config.mjs": "bc0821c0b8307aaff4ad46e528086f1ff94f4019e8aa3e334b59eee3d2431d64",
@@ -170,6 +170,6 @@
     ".sdlc/bin/wake-dependents.mjs": "214d3afb8307d46d58f7c2bb0e535c66d7854f1ea5c2faf4b8279b9a2da5c851",
     ".sdlc/bin/watchdog-report.mjs": "28c36e3a877cd02f18e52425267f9d88de7ef33f83bf003936dc61f1902b0adf",
     ".sdlc/flow-graph.json": "bb0ce998b904bf37b8065d8cf5a542bbb995fd86ad39c6fbb4ac4a2d86ad9570",
-    "bin/sdlc": "1b644afc608501c8fb2c2c076b3696203dc528cb7c2146d396fcf4b6ef5aed2d"
+    "bin/sdlc": "eb24a0a22ba8e3183d286032a840cb08dfcafa3adf099c44ea0e0e52d15ad3ba"
   }
 }

@@ -629,9 +629,13 @@ async function liveProbe(cfg) {
   section('Live model probe (sdlc-probe.yml)');
   const arg = (flag) => { const i = process.argv.indexOf(flag); return i > 0 ? String(process.argv[i + 1] ?? '') : ''; };
   const models = arg('--models');
+  // On another gateway the configured map means nothing — and asking it would bill that
+  // gateway's balance for the paid models — so only the models named are probed.
+  const gateway = arg('--gateway');
   const runs = [];
   if (process.argv.includes('--bridge')) {
-    runs.push({ models, bridge: arg('--bridge'), api: process.argv.includes('--responses') ? 'responses' : '' });
+    runs.push({ models, bridge: arg('--bridge'), api: process.argv.includes('--responses') ? 'responses' : '',
+      gateway, direct: gateway && !models ? 'false' : '' });
   } else {
     // The configured OpenAI-only models are probed through the translator, since that is how
     // their stages call them — one run per OpenAI API, because one translator takes one route.
@@ -641,12 +645,15 @@ async function liveProbe(cfg) {
     runs.push({ models, bridge: groups.chat.join(','), api: '' });
     if (groups.responses.length) runs.push({ direct: 'false', bridge: groups.responses.join(','), api: 'responses' });
   }
-  for (const r of runs) await probeRun({ ...r, agent: process.argv.includes('--agent') });
+  if (gateway && !process.argv.includes('--bridge') && !models) {
+    return fail('--gateway needs --models or --bridge', 'the configured map is for the configured gateway; name the models to probe on this one');
+  }
+  for (const r of runs) await probeRun({ gateway, ...r, agent: process.argv.includes('--agent') });
 }
 
-async function probeRun({ models = '', bridge = '', api = '', direct = '', agent = false }) {
+async function probeRun({ models = '', bridge = '', api = '', direct = '', gateway = '', agent = false }) {
   const since = Date.now() - 60_000;   // our clock and the runner's disagree by seconds
-  const inputs = [['models', models], ['bridge', bridge], ['bridge_api', api], ['direct', direct],
+  const inputs = [['models', models], ['bridge', bridge], ['bridge_api', api], ['direct', direct], ['gateway', gateway],
     ['agent_check', bridge && agent ? 'true' : '']].filter(([, v]) => v).flatMap(([k, v]) => ['-f', `${k}=${v}`]);
   try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...inputs]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
@@ -968,7 +975,7 @@ if (!run) {
     '  setup                     interactive: scan this repo and write its config\n' +
     '  install --target <repo>   copy the framework into another repository\n' +
     '  init                      labels and state branch (run inside the repo)\n' +
-    '  doctor [--live [--models a,b] [--bridge a,b]]  verify every token, secret and integration\n' +
+    '  doctor [--live [--models a,b] [--bridge a,b] [--gateway url]]  verify every token, secret and integration\n' +
     '                            (--live: one real request per model, from the runner)\n' +
     '  status                    show every issue in flight\n' +
     '  halt                      disable every pipeline workflow and cancel its runs\n' +

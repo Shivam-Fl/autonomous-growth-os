@@ -18,6 +18,9 @@ on:
       bridge_api: { required: false, type: string, default: '' }
       # 'false' skips the direct Messages probe (a second run probing only another translator route).
       direct: { required: false, type: string, default: '' }
+      # Another gateway to probe on (https), in place of runtime.provider.base_url — to prove a
+      # model before switching to it, e.g. OpenCode's free models on Zen while the config says Go.
+      gateway: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -36,6 +39,8 @@ jobs:
       - name: Provider
         id: prov
         run: node .sdlc/bin/provider-settings.mjs
+        env:
+          PROBE_GATEWAY: ${{ inputs.gateway }}
       - name: One request per model
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -50,6 +55,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           BRIDGE: ${{ inputs.bridge }}
           BRIDGE_API: ${{ inputs.bridge_api }}
+          PROBE_GATEWAY: ${{ inputs.gateway }}
         run: |
           python3 -m venv /tmp/litellm
           /tmp/litellm/bin/pip install -q 'litellm[proxy]==1.102.1'

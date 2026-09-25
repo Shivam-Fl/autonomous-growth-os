@@ -33,6 +33,17 @@ export function openaiApis(cfg) {
     : Object.entries(v).map(([m, api]) => [m, String(api) === 'responses' ? 'responses' : 'chat']));
 }
 
+/**
+ * The config with its gateway replaced — for the probe only (sdlc-probe's `gateway` input), so a
+ * model on another gateway can be proven before anything is switched to it: OpenCode's free models
+ * are on Zen, the subscription's on Go, and one probe run could only ever ask the configured one.
+ */
+export function withGateway(cfg, url = process.env.PROBE_GATEWAY) {
+  if (!url) return cfg;
+  if (!/^https:\/\//.test(url)) throw new Error(`PROBE_GATEWAY must be an https URL, got "${url}"`);
+  return { ...cfg, runtime: { ...cfg.runtime, provider: { ...cfg.runtime?.provider, base_url: url } } };
+}
+
 /** Is any of these models served only on the OpenAI API? Then the job needs the translator. */
 export function needsBridge(cfg, models) {
   const apis = openaiApis(cfg);
@@ -124,7 +135,7 @@ if (isMain) {
   const models = process.env.BRIDGE ? process.env.BRIDGE.split(',').map((m) => m.trim()).filter(Boolean) : undefined;
   // Models named explicitly (the probe's --bridge) are the ones being translated, whatever the
   // configured list says: treating them as native sent them to /v1/messages, which answered 503.
-  const cfg = bridgeConfig(await loadConfig(), { models, openai: models, api: process.env.BRIDGE_API || 'chat' });
+  const cfg = bridgeConfig(withGateway(await loadConfig()), { models, openai: models, api: process.env.BRIDGE_API || 'chat' });
   if (!cfg.model_list.length) die('no models to bridge: set BRIDGE or runtime.provider.openai_models');
   writeFileSync(out, dump(cfg));
   process.stdout.write(`bridging ${cfg.model_list.map((m) => m.model_name).join(', ')} -> ${cfg.model_list[0].litellm_params.api_base}\n`);

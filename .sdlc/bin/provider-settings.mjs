@@ -17,9 +17,9 @@
 
 import { loadConfig, setOutput, die } from './lib/actions.js';
 import { modelFor } from './claude-args.mjs';
-import { needsBridge, startBridge } from './model-bridge.mjs';
+import { needsBridge, startBridge, withGateway } from './model-bridge.mjs';
 
-const cfg = await loadConfig();
+const cfg = withGateway(await loadConfig());
 const p = cfg.runtime?.provider ?? {};
 
 const env = {};
