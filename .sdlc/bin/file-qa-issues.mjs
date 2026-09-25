@@ -10,9 +10,10 @@
 // correct destination is its own ticket.
 
 import { readFileSync } from 'node:fs';
-import { gh, ghJson, loadConfig, setOutput, die } from './lib/actions.js';
+import { gh, ghJson, loadConfig, setOutput, die, repo as repoOf } from './lib/actions.js';
 import { advance } from './lib/advance.js';
 import { fileIssue } from './lib/file-issue.js';
+import { keepFollowUps, alike, bugSection, SEV_LABEL } from './lib/follow-ups.js';
 
 const cfg = await loadConfig();
 if (cfg.gates?.qa_files_issues === false) {
@@ -56,6 +57,21 @@ if (!outOfScope.length) {
   process.exit(0);
 }
 
+// On a PR, kept rather than filed: what QA found outside the PR's scope is filed together with the
+// review's leftover findings, as one ticket, when the PR merges (lib/follow-ups.js, from
+// on-merge). Filing here opened a ticket per QA run, beside the review's, for one issue. The
+// latest run's list replaces the earlier one's. An audit has no PR and nothing to merge: filing
+// is its whole deliverable, below.
+if (!audit) {
+  await keepFollowUps(repoOf(), sourceIssue, 'qa', outOfScope, { pr });
+  await gh(['pr', 'comment', pr, '--body',
+    `QA found ${outOfScope.length} pre-existing issue(s) outside this PR's scope. They do not block it — it ` +
+    "did not cause them — and they are filed with the review's follow-ups, as one ticket, when this merges."]).catch(() => {});
+  process.stdout.write(`kept ${outOfScope.length} pre-existing bug(s) for the follow-up filed at merge\n`);
+  setOutput('filed', '0');
+  process.exit(0);
+}
+
 // Open issues are what a bug can be a duplicate of. This listed every state, so a bug that came
 // back after its fix merged matched its own CLOSED ticket and was dropped as "(already open)" —
 // a regression reported as tracked, by a ticket nobody would ever look at again. A closed match
@@ -63,13 +79,6 @@ if (!outOfScope.length) {
 const listed = (state) => ghJson(['issue', 'list', '--state', state, '--limit', '200', '--json', 'number,title']);
 const existing = await listed('open');
 const closed = await listed('closed');
-const titleWords = (t) => new Set(String(t).toLowerCase().split(/\W+/).filter((w) => w.length > 3));
-const alike = (bug, other) => {
-  const words = titleWords(bug.title);
-  const theirs = titleWords(other.title);
-  return words.size > 2 && [...words].filter((w) => theirs.has(w)).length / words.size > 0.6;
-};
-const SEV_LABEL = { critical: 'p0', major: 'p1', minor: 'p2', trivial: 'p3' };
 
 let filed = 0;
 const links = [];
@@ -98,31 +107,11 @@ for (const bug of outOfScope) {
   fresh.push(was ? { ...bug, regression_of: was.number } : bug);
 }
 
-// QA's words, in a ticket the pipeline files — so each title and step is one line and each
-// description is quoted. The Router obeys the Decisions section of an issue the pipeline opened,
-// and a planner is held to its split acceptance; both are found by heading. A bug whose text
-// carried "## Decisions (recorded by the pipeline)" was a maintainer's decision on the ticket,
-// taken by whatever page the QA agent read.
-const one = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-const quote = (s) => String(s ?? '').split('\n').map((l) => `> ${l}`).join('\n');
+// QA's words are quoted line by line in the ticket (lib/follow-ups.js bugSection): the Router obeys
+// a Decisions section on an issue the pipeline opened, and a bug's text could carry one.
 
 if (fresh.length) {
-  const section = (bug) => [
-    `### ${one(bug.title)}`,
-    '',
-    `**Severity** ${bug.severity} (as judged by QA — reassess before planning).`,
-    '',
-    ...(bug.regression_of ? [`**Possible regression of #${bug.regression_of}**, which is closed — check ` +
-      'whether that fix was undone before treating this as new.', ''] : []),
-    '**Expected.**', quote(bug.expected),
-    '',
-    '**Actual.**', quote(bug.actual),
-    '',
-    '**Steps to reproduce**',
-    ...bug.repro.map((st, i) => `${i + 1}. ${one(st)}`),
-    ...(bug.suspected_cause ? ['', '**Suspected cause.**', quote(bug.suspected_cause)] : []),
-    ...(bug.reproducible ? ['', `**Reproducible:** ${one(bug.reproducible)}`] : []),
-  ].join('\n');
+  const section = bugSection;
 
   const body = [
     audit

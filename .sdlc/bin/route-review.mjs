@@ -15,7 +15,7 @@ import { advance } from './lib/advance.js';
 import { reviewVerdict, verdictBlock, unresolvedFindings, rejectionCriteria, repeatedCriterion } from './lib/routing.js';
 import { handOffNext, markResume, dispatchStage } from './lib/route-io.js';
 import { resolveStage } from './lib/flow-graph.js';
-import { fileIssue } from './lib/file-issue.js';
+import { keepFollowUps } from './lib/follow-ups.js';
 import { readFileSync, existsSync } from 'node:fs';
 
 const pr = process.env.PR || die('PR is required');
@@ -169,7 +169,6 @@ if (verdict === 'approve') {
   // severity, not a judgement that the finding is wrong — somebody already did the work of
   // finding it and writing the fix.
   const leftovers = council ? council.unresolved ?? [] : unresolvedFindings(reviews);
-  let filedNumber = null;
 
   // ONE follow-up issue, not one per finding.
   //
@@ -181,53 +180,20 @@ if (verdict === 'approve') {
   //
   // The findings still survive the PR that found them, which was the whole point. They
   // survive together, in one ticket, which is also how a person would have written them down.
+  // Kept, not filed: review and QA findings are filed together, once, when the PR merges
+  // (lib/follow-ups.js). Filing here opened a ticket per approving round — including rounds whose
+  // findings a later one fixed — and a second one from QA, for one issue. Replacing the list each
+  // time keeps only the final approval's leftovers; an empty list clears it.
+  await keepFollowUps(repoOf(), issue, 'review', leftovers.map((f) => ({ title: f.title, detail: f.detail })), { pr })
+    .catch((e) => process.stdout.write(`::warning::could not keep the review's leftover findings: ${e.message}\n`));
   if (leftovers.length) {
-    // The reviewer's words, in a ticket the pipeline files — so each title is one line and each
-    // detail is quoted. The Router obeys the Decisions section of an issue the pipeline opened,
-    // and a planner is held to its split acceptance; both are found by heading. A finding that
-    // carried "## Decisions (recorded by the pipeline)" and a maintainer's name in it was a
-    // decision on the follow-up, taken by whoever wrote the diff the reviewer read.
-    const quote = (s) => String(s).split('\n').map((l) => `> ${l}`).join('\n');
-    const body = [
-      `Non-blocking findings from the review of #${pr} (for #${issue}) that were not fixed in ` +
-      'that PR. The reviewer judged none of them worth holding the merge for — which is a ' +
-      'statement about severity, not a judgement that they are wrong.',
-      '',
-      ...leftovers.map((f) => `### ${f.title.replace(/\s+/g, ' ')}\n\n${quote(f.detail)}`),
-      '',
-      '---',
-      '',
-      '**Check each one still reproduces before planning it.** These were written against ' +
-      `#${pr} as it stood at review time, and that PR kept moving — a later round can close a ` +
-      'finding filed earlier in the same review cycle.',
-      '',
-      'Some of these may not hold up. Say so and drop them rather than implementing something ' +
-      'that was never wrong; a reason recorded here is worth more than a fix nobody needed.',
-      '',
-      `Depends on #${issue}.`,
-    ].join('\n');
-
-    // `sdlc:blocked` alone. `sdlc:triage` beside it is an in-flight label, so the follow-up
-    // counted as running and nothing ever offered it a slot: the dependency closed, the wake
-    // skipped it as already started, and the findings sat there with nothing going to start
-    // them. Blocked is what it is, and it is what wake-dependents re-offers.
-    const made = await fileIssue({
-      title: `Follow-ups from the review of #${pr}`,
-      labels: ['sdlc:blocked'],
-      start: false,
-      body,
-    });
-    if (made) {
-      filedNumber = made.number;
-      await gh(['pr', 'comment', pr, '--body',
-        `Approved. ${leftovers.length} non-blocking finding(s) were not addressed here, so they ` +
-        `are collected in #${made.number} rather than lost in this thread — one ticket, because ` +
-        'one ticket per nit is a backlog nobody can work through. It waits on ' +
-        `#${issue}: they are about code that only exists on this branch.`]).catch(() => {});
-      process.stdout.write(`filed #${made.number} with ${leftovers.length} unresolved finding(s)\n`);
-    }
+    await gh(['pr', 'comment', pr, '--body',
+      `Approved. ${leftovers.length} non-blocking finding(s) were not addressed here. They are kept, and ` +
+      "filed as one follow-up ticket together with anything QA finds outside this PR's scope, when this " +
+      'merges.']).catch(() => {});
+    process.stdout.write(`kept ${leftovers.length} unresolved finding(s) for the follow-up filed at merge\n`);
   }
-  setOutput('filed_findings', filedNumber ? '1' : '0');
+  setOutput('filed_findings', '0');
   // Explicit, because QA used to trigger on this workflow completing — which cannot see the
   // verdict, and so QA'd PRs the reviewer had just rejected. Which stage it is comes off the
   // route rather than out of this file: `sdlc-qa.yml` was correct for every ticket the
