@@ -168,6 +168,12 @@ in three weeks.
   its own if this ticket did not exist?** If yes, it is its own ticket. If no, it is either
   part of this change or decoration riding on it.
 
+**Paths no ticket may change**, whatever `forbidden_paths` says — the guard refuses the whole
+plan for one of them: `.sdlc/memory/**` (the Librarian's; it records what merged, selectors and
+QA notes included), the approved docs (`docs/spec/**`, `docs/prd.md`, `docs/trd.md`,
+`docs/ui.md`), and the framework (`.github/**`, `.sdlc/**`). If the change would need one, leave
+it out and say so in `risks`.
+
 ## If you cannot plan
 
 Say so — in `stop.json` at the repository root, **instead of** `work-order.json`:

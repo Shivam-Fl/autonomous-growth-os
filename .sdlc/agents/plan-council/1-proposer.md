@@ -40,3 +40,9 @@ Smallest change that fixes the root cause. Not the smallest change that hides th
 No new dependency for what a few lines do; no abstraction with one caller.
 
 Write to `plan/proposal.json`. Do not post anything to GitHub.
+
+**Paths no ticket may change**, whatever `forbidden_paths` says — the guard refuses the whole
+plan for one of them: `.sdlc/memory/**` (the Librarian's; it records what merged, selectors and
+QA notes included), the approved docs (`docs/spec/**`, `docs/prd.md`, `docs/trd.md`,
+`docs/ui.md`), and the framework (`.github/**`, `.sdlc/**`). If the change would need one, leave
+it out and say so in `risks`.

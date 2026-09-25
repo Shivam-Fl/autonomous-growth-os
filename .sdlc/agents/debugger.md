@@ -153,6 +153,12 @@ A work order matching `.sdlc/schemas/work-order.json`, with the fields this agen
   `"IAC-n: why it is not in this change"`. A work order that does neither for any of them is
   refused before it is kept, and you run again.
 
+**Paths no ticket may change**, whatever `forbidden_paths` says — the guard refuses the whole
+plan for one of them: `.sdlc/memory/**` (the Librarian's; it records what merged, selectors and
+QA notes included), the approved docs (`docs/spec/**`, `docs/prd.md`, `docs/trd.md`,
+`docs/ui.md`), and the framework (`.github/**`, `.sdlc/**`). If the change would need one, leave
+it out and say so in `risks`.
+
 ## Hard rules
 
 - **Never write a work order for a bug you did not reproduce.** `stop.json` is the correct
