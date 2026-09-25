@@ -380,11 +380,17 @@ function decisionFeed(state, { repositories, tenant }) {
 }
 
 function experimentsPanel(state, { repositories, tenant }) {
-  const experiments = eventsOf(repositories, tenant, 'experiment.started');
-  const cards = experiments.map((event) => `<li class="experiment-card">
-<strong>${escapeHtml(event.payload.name ?? 'Experiment')}</strong>
-<span>State: ${escapeHtml(event.payload.state ?? 'running')} · arms: ${escapeHtml(String(event.payload.arms ?? 2))}</span>
-</li>`).join('');
+  // Same source the /experiments page reads (issue #22): the repository, not
+  // the dead experiment.started raw-event stream nothing ever wrote.
+  const experiments = tenant ? repositories.experiments.list(tenant.id) : [];
+  const cards = experiments.map((experiment) => {
+    const badge = STATE_BADGES[experiment.state] ?? experiment.state;
+    const arms = experiment.record?.arms?.length ?? 0;
+    return `<li class="experiment-card" data-experiment-id="${escapeHtml(experiment.experiment_id)}">
+<strong>${escapeHtml(experiment.name)}</strong>
+<span>State: ${escapeHtml(badge)} · arms: ${escapeHtml(String(arms))}</span>
+</li>`;
+  }).join('');
   return panel({
     title: `Open experiments · ${experiments.length}`,
     body: experiments.length === 0

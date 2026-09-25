@@ -348,14 +348,18 @@ function seedExperiments(repositories) {
     }
     const experiment = validated.experiment;
     const previous = repositories.experiments.get(TENANT.id, candidate.experiment_id);
-    repositories.experiments.create({
+    const result = repositories.experiments.create({
       tenant_id: TENANT.id,
       experiment_id: candidate.experiment_id,
       record: experiment,
       state: experiment.state,
       data_through: experiment.data_through,
     });
-    if (experiment.state === 'inconclusive') {
+    // Only on first write: the result columns document the fixture's
+    // inconclusive outcome, and a re-seed must never revert them — they
+    // would clobber an experiment evaluated since the first run (a win
+    // back to inconclusive, evaluated_at/data_through re-dated).
+    if (result.created && experiment.state === 'inconclusive') {
       // Persisted result columns make the badge read Inconclusive on the
       // card; the evaluation row documents why it is not a win or a loss.
       repositories.experiments.updateState(TENANT.id, candidate.experiment_id, {
@@ -366,7 +370,7 @@ function seedExperiments(repositories) {
         data_through: experiment.data_through,
       });
     }
-    if (!previous) {
+    if (result.created && !previous) {
       written += 1;
     }
   }

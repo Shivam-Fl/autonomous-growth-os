@@ -436,6 +436,40 @@ test('the seeded underpowered experiment renders the Inconclusive badge, never W
   assert.match(html, /₹500\.00/, 'the max spend cap formats as money');
 });
 
+test('the dashboard experiments panel reads the experiment repository, not the dead raw-event stream', async () => {
+  const repos = seededRepos('pages-dashboard-exp-');
+  const html = await renderPage('/', { repositories: repos });
+  assert.match(html, /Open experiments · 2/, 'both seeded experiments reach the dashboard');
+  assert.match(html, /data-experiment-id="exp_seed_running"/);
+  assert.match(html, /data-experiment-id="exp_seed_underpowered"/);
+  assert.match(html, /Exact-intent search budget test/, 'the running experiment renders its name');
+  assert.match(html, /State: Running · arms: 2/);
+  assert.match(html, /State: Inconclusive · arms: 2/, 'the persisted inconclusive state renders on the dashboard too');
+});
+
+test('re-seeding after an evaluation does not clobber the experiment state', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pages-reseed-'));
+  const dbPath = join(dir, 'app.db');
+  seed({ dbPath });
+  const repos = createRepositories(openDatabase(dbPath));
+  // An evaluation between the two seed runs: exactly the write a re-seed
+  // must never revert or re-date (updateState is the same surface the
+  // evaluate route uses).
+  repos.experiments.updateState('tenant_demo', 'exp_seed_underpowered', {
+    state: 'matured', evaluation_result: 'win', evaluation_reason: null,
+    evaluated_at: '2026-09-25T12:00:00.000Z', data_through: '2026-09-25T11:00:00.000Z',
+  });
+
+  const second = seed({ dbPath });
+  assert.equal(second.alreadySeeded, true, 'a repeat seed reports alreadySeeded');
+
+  const after = repos.experiments.get('tenant_demo', 'exp_seed_underpowered');
+  assert.equal(after.state, 'matured', 'a later evaluation is not reverted by a re-seed');
+  assert.equal(after.evaluation_result, 'win');
+  assert.equal(after.evaluated_at, '2026-09-25T12:00:00.000Z', 'evaluated_at is not rewritten');
+  assert.equal(after.data_through, '2026-09-25T11:00:00.000Z', 'data_through is not rewritten');
+});
+
 test('the composer is mounted on the error shell and on the ideal page', async () => {
   const repos = seededRepos('pages-composer-');
   const ideal = await renderPage('/experiments', { repositories: repos });
