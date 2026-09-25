@@ -32,8 +32,14 @@ const gates = effectiveGates(cfg.gates ?? {}, ledger?.flow_plan?.gates ?? {});
 // no evidence. A plan from the debugger IS a bug fix whatever it calls itself, and a bug counts
 // as reproduced only when the plan says what was observed.
 const kind = from === 'debug' ? 'bug' : wo.kind;
+// A root-cause revision answers a failure the pipeline itself observed — a QA run with its trace
+// and evidence, or CI's output — so it is reproduced by construction. The rule below exists for a
+// debugger diagnosing a reported bug nobody has watched happen. Applied to root-cause, it sent
+// growth-os's v2 work order to a person as "never reproduced" minutes after QA had reproduced the
+// crash on the exact commit, and skipped the plan reviewer that should have read it.
+const observed = from === 'root-cause';
 const judged = kind === 'bug'
-  ? { ...wo, kind, reproduced: wo.reproduced === true && (wo.evidence ?? []).length > 0 }
+  ? { ...wo, kind, reproduced: observed || (wo.reproduced === true && (wo.evidence ?? []).length > 0) }
   : wo;
 let { gate, reason } = planGate(judged, { ...cfg, gates });
 

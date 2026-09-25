@@ -76,6 +76,12 @@ export function bridgeConfig(cfg, { models, openai: openaiGiven, api: apiGiven, 
         api_base: openai.has(m) ? `${gateway}/v1` : gateway,
         api_key: 'os.environ/ANTHROPIC_API_KEY',
         ...(Object.keys(headers).length ? { extra_headers: headers } : {}),
+        // Claude Code sends a thinking setting on some requests; LiteLLM turns it into
+        // `reasoning_effort`, and OpenCode's chat route refuses that outright — "native reasoning
+        // control reasoning_effort is not allowed" — so growth-os's implement runs died on their
+        // first model call, intermittently, as whichever request carried it. GLM thinks at its
+        // maximum by default and cannot be told otherwise, so nothing is lost by dropping it.
+        ...(openai.has(m) && api !== 'responses' ? { additional_drop_params: ['reasoning_effort'] } : {}),
       },
     })),
     litellm_settings: {

@@ -1,0 +1,54 @@
+# Wakes an issue parked for a provider cooldown, at the time it was promised.
+#
+# The cooldown used to be resumed only by the watchdog's `*/15` cron, and GitHub delays and drops
+# scheduled runs under load: on growth-os a 20-minute cooldown was resumed after 196 minutes and a
+# 40-minute one after 126, with no watchdog run at all for three hours. A dispatch is never
+# dropped, so the stage that parks the issue starts this, which waits out the cooldown on a runner
+# and then runs the same resume the watchdog would. The cron stays as the backstop; whichever runs
+# first resumes, and the other finds nothing due.
+#
+# Started only on a public repository, where runner minutes are free (lib/failure.js decides):
+# on a private one this would bill every minute of the wait, and the cron is the cheaper answer.
+name: sdlc-cooldown
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue: { required: true, type: string }
+      minutes: { required: true, type: string }
+
+# A newer cooldown for the same issue replaces the wait for the old one.
+concurrency:
+  group: sdlc-cooldown-${{ inputs.issue }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write         # resume-cooled-down writes the ledger
+  issues: write
+  actions: write          # and dispatches the stage it resumes
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 140    # the longest cooldown is 120 minutes
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: 22
+      - name: Kill switch
+        run: node .sdlc/bin/sdlc-ctl.mjs guard
+        env: { SDLC_ENABLED: "${{ vars.SDLC_ENABLED }}" }
+
+      - name: Wait out the cooldown
+        env: { MINUTES: "${{ inputs.minutes }}" }
+        run: |
+          case "$MINUTES" in ''|*[!0-9]*) echo "::error::minutes must be a whole number, got '$MINUTES'"; exit 1;; esac
+          [ "$MINUTES" -le 120 ] || { echo "::error::a cooldown is at most 120 minutes, got $MINUTES"; exit 1; }
+          sleep $(( MINUTES * 60 ))
+
+      - name: Start anything whose cooldown has passed
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: node .sdlc/bin/resume-cooled-down.mjs

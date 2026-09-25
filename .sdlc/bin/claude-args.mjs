@@ -186,6 +186,17 @@ export async function probe(cfg, env = process.env) {
   // turn, so the probe forces one tool call and records whether it came back.
   const TOOL = { name: 'record', description: 'Record a value.',
     input_schema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } };
+  // Claude Code asks for thinking on some requests. A route that refuses it fails those requests
+  // only — an agent run that dies on its first call one time in three, reported as an outage. So
+  // one request asks for it, as Claude Code does, and the answer is recorded.
+  const thinkingCheck = async (model) => {
+    try {
+      const res = await post({ model, max_tokens: 2048, thinking: { type: 'enabled', budget_tokens: 1024 },
+        messages: [{ role: 'user', content: 'Reply with the word ok.' }] }, 120_000);
+      const text = await res.text();
+      return { thinking: res.ok ? 'ok' : `refused (HTTP ${res.status}: ${text.replace(/\s+/g, ' ').slice(0, 240)})` };
+    } catch (e) { return { thinking: `thinking request failed: ${e.message}` }; }
+  };
   const toolCheck = async (model) => {
     try {
       const t0 = Date.now();
@@ -218,7 +229,7 @@ export async function probe(cfg, env = process.env) {
       const t0 = Date.now();
       const res = await post({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, 60_000);
       const entry = { role, model, status: res.status, body: (await res.text()).slice(0, 500), ms: Date.now() - t0 };
-      if (res.ok) Object.assign(entry, await toolCheck(model));
+      if (res.ok) Object.assign(entry, await toolCheck(model), await thinkingCheck(model));
       results.push(entry);
     } catch (e) {
       results.push({ role, model, status: 0, body: `request failed: ${e.message}` });

@@ -681,6 +681,10 @@ async function probeRun({ models = '', bridge = '', api = '', direct = '', agent
       if (r.role === 'catalog') { pass('the gateway lists', String(r.body).split(',').filter(Boolean).length + ' models'); process.stdout.write(`      ${r.body}\n`); }
       else if (r.status === 'bridged') continue;
       else if (r.status === 'skipped') warn(`${r.model} (${r.role}) was not probed`, r.body);
+      else if (r.status >= 200 && r.status < 300 && r.tools === 'ok' && r.thinking && r.thinking !== 'ok') {
+        (r.role === 'candidate' ? warn : fail)(`${r.model} refuses a request that asks for thinking: ${r.thinking}`,
+          r.role === 'candidate' ? 'Claude Code sends that on some requests' : `Claude Code sends that on some requests, so ${r.role} would fail intermittently`);
+      }
       else if (r.status >= 200 && r.status < 300 && r.tools === 'ok') pass(`${r.model} answers and calls tools`, r.role + timing);
       else if (r.status >= 200 && r.status < 300) {
         // A candidate that cannot call tools is information; a CONFIGURED stage that cannot is a
