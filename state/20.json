@@ -104,6 +104,329 @@
   "stopped_at": null,
   "dispatched_stage": "plan",
   "validated_from": "plan",
-  "validated_at": "2026-09-25T13:49:24.629Z",
-  "validated_ac_changes": []
+  "validated_at": "2026-09-25T14:26:27.836Z",
+  "validated_ac_changes": [],
+  "validated_work_order": {
+    "issue": 20,
+    "version": 4,
+    "kind": "feature",
+    "understanding": "Issue #20 is the safety slice of epic #14 and it is greenfield. I confirmed independently that the repo has the decision journal (src/domain/decisions.js), measurement/maturity bands, the Meta read adapter with a fake provider and its ?meta_error simulation, and server-rendered five-state pages — and that there is no src/policy/, no src/executor/, no guardian, no approvals store, no kill switch and no trust ledger anywhere under src/. The approvals page today (src/web/pages.js:741-800) reads raw events of type 'approval.requested' (no fixture ever writes one, so it is always empty), renders a hardcoded AUTONOMY_POSTURE constant at :734-739, and its Approve/Reject buttons at :791-792 have no listener. Nothing gates a mutation: there is no choke point between an ActionIntent and a provider write. Binding decision from the brief (and confirmed in the issue body): Meta Ads first, Google Ads later, so every write targets the Meta adapter seam. The split's five criteria (IAC-1..IAC-5) are each carried by one acceptance entry below.",
+    "root_cause": "There is no write path to gate. The repo has no module between an ActionIntent and a provider write, so the safety contract this issue is asked for — TR-2 credential isolation, TR-3 signed capabilities, TR-4 kill switches, TR-5 nonce idempotency plus reconciliation, TR-19 per-class trust, TR-24 fail-closed writes — has no code to hold it, and the approvals page cannot be more than a static shell because no approval row, receipt or trust row is stored anywhere.",
+    "approach": "Build the write path as four new modules plus one composition point, on the repo's existing patterns (additive migration, tenant-bound repositories, one pure function per rule, node:test suites mirroring src/). v3's diagnosis was right and I kept it; four mechanical defects in its executable surface are corrected here, plus seven gaps.\n\nCORRECTION 1 — nonce ownership (the sharpest finding in the critique, and it is real). v3 gave the kernel a mutating {claim(nonce)} port while omitting REPLAYED_NONCE from its own code list, and had the executor validate through the kernel BEFORE its action_records lookup. Those cannot both hold: the second delivery would hit claim() and get an error envelope, while AC-2 requires {executed:false, receipt_id}. Resolved by giving each check exactly one owner. The kernel's validation-time port becomes non-mutating {seen(nonce)} and REPLAYED_NONCE joins its code list, so the policy regression suite (AC-1) can assert it in isolation. The executor's durable dedupe on action_records.nonce runs FIRST: a delivery whose nonce already has a receipt returns {executed:false, receipt_id, reconciliation} without touching the kernel or the provider. This is idempotency, not a write — nothing is mutated — so a duplicate arriving while frozen returns its receipt rather than 409, and the routes layer says so explicitly. Check order is now stated in files[] and covered by tests.\n\nCORRECTION 2 — qa_script ordering. v3's step 6 ended with the guardian re-triggered (freeze active) and step 7 then expected a successful /v1/actions/execute, which files[8] itself specifies as 409 KILL_SWITCH_ACTIVE under a freeze. The idempotency step now runs BEFORE the guardian step, and the guardian step is last, so the freeze is never active across a step that needs a live write. AC-2's cross-reference is updated to the new step number.\n\nCORRECTION 3 — step renumbering. The three places that answer the recorded rejection still said 'qa_script steps 3-4' after v3 inserted a read-only GET step as the new step 3. The consuming approvals steps are 4 and 5; all three references are corrected. The substance of the rejection fix is unaffected and is confirmed correct: two pending fixtures with distinct fixed ids and distinct action classes satisfy AC-5's ordering and the script's opposite ordering, each consuming exactly one item, because the repositories' INSERT OR IGNORE on a fixed approval_id means a consumed fixture is never restored by re-seeding.\n\nCORRECTION 4 — the fresh-database step. v3 step 2 ran 'rm -f data/app.db && npm run sdlc:seed && npm run sdlc:serve', which cannot work: .sdlc/config.yml env.boot is 'npm run sdlc:serve', so the pipeline already owns the server; npm run sdlc:serve is a foreground process that never returns; and src/index.js:19-22 opens the DatabaseSync handle once for the process lifetime, so unlinking the file leaves the running server reading a deleted inode while the seed creates a new one it never opens. Replaced with a real reset: 'npm run sdlc:seed -- --reset-approvals' re-asserts the seeded approval fixtures and clears seeded kill switches in place, through the repository layer, in the same file the running server already has open. No unlink, no restart, and QA can re-run the script any number of times.\n\nGAPS FOLDED IN: the read path for the global (tenant_id='') kill-switch sentinel is now specified and tested, since repositories.js:4 promises every query binds tenant_id; pending-vs-lapsed is a read-time predicate so a row whose expires_at has passed cannot render in both the queue and the lapsed section; ACTION_CLASSES is derived from DECISION_CLASSES (src/domain/decisions.js:21-26) rather than restating four of its five names, with new-geography carried as an explicit policy-only extension; src/index.js joins files[] as the place the signing secret is composed; the five-state loading/error/partial early-returns in approvals() survive the rewrite verbatim so test/web/pages.test.js:58's /stale|await|Expired|provisional/i assertion still has something to match on an empty database; a successful reject is exercised; the seed reports its approvals count on stdout; the client gains an in-flight guard, updates the server-rendered pending count, and un-hides the reconciliation panel only for a write failure rather than for every non-2xx; an issued capability's expiry is clamped to min(ttlMs, approval.expires_at); docs/ui.md:35's typing-free explicit confirm is a real requirement, so approve is two-step. The .sdlc/memory/qa documents the plan changes are in files[], because QA reads them and environment.md:14 becomes false the moment ?meta_error reaches the write routes.\n\nEverything else in v3 stands: the fake provider's typed WRITE_METHODS and extended failure injection, the per-request provider built from ?meta_error exactly as src/api/routes.js:82-85 does for pages, the additive migration, the real queue, receipts, lapsed section, trust-ledger posture table and persistent layout banner, and no live mutation path at all (live.js gains no write method and the process holds no ad credentials).",
+    "files": [
+      {
+        "path": "src/policy/kernel.js",
+        "action": "create",
+        "change": "Pure domain module, no IO. ACTION_CLASSES is DERIVED from DECISION_CLASSES imported from src/domain/decisions.js (which already freezes budget-change, campaign-status, creative-refresh, campaign-launch) and extended by exactly one explicit policy-only entry, new-geography, each extension and each inherited class carrying microLimitMicros and requiredMaturityBand; do not restate the four shared names, and export the policy-only set so a caller can label those rows as policy-only rather than journal-representable. validateIntent(intent, {nowIso, trust}) -> {ok,intent}|{ok:false,error}. issueCapability(intent, {secret, policyVersion, ttlMs, nowIso, expiresAtCap}) signs with node:crypto createHmac and timingSafeEqual and returns the envelope {tenant, resource, action, constraints, expiry, nonce, policy_version} plus a cap_ id; expiry is min(now+ttlMs, expiresAtCap) when a cap is passed, so a capability minted from an approval can never outlive the approval. validateCapability(capability, {secret, nowIso, killSwitches, nonces}) -> {ok,capability}|{ok:false,error} with codes MALFORMED_CAPABILITY, BAD_SIGNATURE, EXPIRED_CAPABILITY, REPLAYED_NONCE, OVER_SCOPE (details name the violated constraint), KILL_SWITCH_ACTIVE, MICRO_LIMIT_EXCEEDED, MATURITY_BAND_BLOCKED. The two ports are INJECTED and non-mutating: killSwitches {isActive(scope, scopeId)}, nonces {seen(nonce)} — seen, not claim; claiming a nonce is the executor's job on action_records, and this module must never reserve one. Imports no driver, provider, sqlite or process.env; the secret arrives as an argument only.",
+        "why": "One roster, not two: v3 restated four of DECISION_CLASSES' five names and left the relationship unstated, which is the two-sources-of-truth failure src/domain/decisions.js:1-8 exists to prevent. One owner per nonce check is what makes AC-1 and AC-2 simultaneously satisfiable."
+      },
+      {
+        "path": "src/policy/trust.js",
+        "action": "create",
+        "change": "Pure. scoreFor(row) over a stored ledger row {evaluated, correct, needless, downside_penalties} and postureFor(actionClass, row, roster) -> 'autonomous-under-micro-limits' | 'approval-required' | 'shadow', with documented thresholds (autonomous requires >= 3 evaluated for that class, precision >= 0.90 and false-intervention rate <= 0.05), a pinned flag forcing shadow/approval regardless of score, and 'no evidence — approval required' for a class with no row (TR-24, fail closed). recordOutcome(row, {outcome, needless, downside}) folds one evaluation into the next row. No IO, no repository import, one implementation the page and the executor both call.",
+        "why": "TR-19 needs a per-class number and one pure function reading one stored ledger keeps the posture table and the executor on the same source."
+      },
+      {
+        "path": "src/strategy/guardian.js",
+        "action": "create",
+        "change": "Spend-spike detector (observed spend micros over the window against the seeded baseline) and tracking-loss detector (no qualified event past the freshness threshold), both over deterministic fixtures; evaluate(fixture, {nowIso}) -> {tripped, kind, details}. freeze({repositories, tenantId, kind, details, actor}) writes the kill-switch row WITH the real resolved tenant_id (never the '' global sentinel — nothing in this slice writes that row; the sentinel exists in the schema and is read, not written) and appends a guardian_incidents row plus an audit event. reEnable({repositories, tenantId, actor, recovery}) REQUIRES an explicit human actor, and separately permits a re-enable only when the deterministic recovery predicate HOLDS; spell both directions out in the doc comment, because v3's 'unless the deterministic recovery predicate holds' reads backwards when the tests treat the predicate as a refusal case. The incident row is append-only and never updated: its current state is the join with the kill switch, and the banner's <kind> reads the newest incident by (frozen_at, incident_id) — a documented tiebreak, since two incidents can share a frozen_at. Exports the shared detector fixtures so the trigger route, the tests and the page all read the same predicates.",
+        "why": "project.md Modules puts guardian loops under src/strategy/ ('Director, analysts, hypothesis generator, guardian loops and portfolio optimizer'). v2 and v3's src/policy/ placement was wrong against the approved list."
+      },
+      {
+        "path": "src/executor/executor.js",
+        "action": "create",
+        "change": "createExecutor({repositories, provider, kernel, auditClock}). The only module that calls a provider WRITE_METHOD. execute(capability, {actor}) runs its checks in THIS order, and the order is the contract: (1) NONCE DEDUPE FIRST — if action_records already holds this nonce, return {executed:false, receipt_id, reconciliation} immediately, without validating through the kernel and without calling the provider; a duplicate delivery performs no mutation, so it returns its receipt even while a kill switch is active, and this is stated in the doc comment so no one 'fixes' it into a 409; (2) kernel validateCapability, which is where KILL_SWITCH_ACTIVE and the signature/expiry/scope rejections happen; (3) resolve the write method from the capability action and call it on the injected provider; (4) re-read provider state through the read interface and classify drift (reported differs from applied; source 'manual'|'platform'|'third-party' as the provider reports it, 'none' when they agree); (5) append the action_records receipt and an audit event carrying actor and capability id; return {executed:true, receipt_id, requested, reported, reconciliation, drift}. A provider refusal (ok:false) returns {executed:false, error, reconciliation:'unknown'}, writes NO action_records row, and claims no nonce, so the caller's approval stays pending and a retry is a genuine retry. Inject the provider per request; the executor never constructs one.",
+        "why": "Durable nonce state lives in the repository the executor already writes, not in the per-request fake (src/api/routes.js:85 builds a new one per request, so a fake-side dedupe could not survive the two deliveries AC-2 describes). Stating the order is what makes AC-2, AC-3 and the duplicate-under-freeze case all hold at once."
+      },
+      {
+        "path": "src/index.js",
+        "action": "edit",
+        "change": "Add signingSecret to configFromEnv (env.POLICY_SIGNING_SECRET, falling back to a named dev-only default constant) and pass it through boot as buildApp({repositories, policyConfig:{secret, policyVersion, ttlMs}}). Log a single startup warning naming the dev default whenever the fallback is in use, so the state is never silent. This is the only place the variable name is read from env; it does not import anything from src/policy or src/executor.",
+        "why": "v3's assumption said the secret was composed at the entrypoint, but src/index.js was absent from files[] and src/index.js:19 calls buildApp({repositories}) with no policyConfig — so the secret was either never supplied or hardcoded in routes.js, contradicting the kernel's own 'the secret arrives as an argument' contract. A hardcoded default is a live key in every environment that exists; the fix is that it is visible and overridable, not that it is removed (no deployment sets it in v1)."
+      },
+      {
+        "path": "src/data/db.js",
+        "action": "edit",
+        "change": "Append migration 005_safety_tables to the existing MIGRATIONS array, additive and idempotent — every statement CREATE ... IF NOT EXISTS, matching the shape migration 004 documents, so an existing database re-runs it identically. capabilities (tenant_id, capability_id PK, nonce UNIQUE, action_class, resource, action, constraints, policy_version, envelope, issued_at, expires_at, consumed_at, receipt_id); approvals (tenant_id, approval_id PK, action_class, resource, action, intent, impact, downside, evidence_refs, expires_at, status pending|approved|rejected|lapsed|executed, reason, actor, receipt_id, created_at, updated_at); action_records (tenant_id, receipt_id PK, capability_id, nonce UNIQUE, requested, reported, reconciliation, drift, executed_at) with the same append-only UPDATE/DELETE triggers raw_events and decisions carry; kill_switches (tenant_id, scope global|tenant|provider|campaign, scope_id, active, actor, reason, frozen_at, re_enabled_at, PK(tenant_id,scope,scope_id)) with NO '' sentinel column — the global scope is a row written with a real tenant_id at scope='global', so every query stays tenant-bound and repositories.js:4 keeps holding; trust_ledger (tenant_id, action_class PK, evaluated, correct, needless, downside_penalties, score, posture, pinned, updated_at); guardian_incidents (tenant_id, incident_id PK, kind, details, frozen_at) append-only, re-enable recorded on kill_switches and audit_events and never by updating an incident. Index approvals on (tenant_id, status, created_at) and action_records on (tenant_id, nonce).",
+        "why": "Six tables, one additive migration, zero changes to the four that exist. Dropping the '' sentinel is the cheap fix for the global kill switch: a real tenant_id at scope='global' is cross-tenant-read by the same isActive union without ever violating the tenant-binding contract."
+      },
+      {
+        "path": "src/data/repositories.js",
+        "action": "edit",
+        "change": "Add six tenant-bound repositories and register them in createRepositories. approvals: create (INSERT OR IGNORE on approval_id), get, listPending(tenantId, {nowIso}) which filters expires_at > now, listLapsed(tenantId, {nowIso}) which returns rows that are status='lapsed' OR (status='pending' AND expires_at <= now) so an aged item can never appear in both the queue and the lapsed region — this is a READ-TIME predicate, no sweeper, no status transition on read — and settle(approvalId, {status, actor, reason, receiptId}) as the only writer of status, refusing to move a row out of the TERMINAL set {executed, rejected, lapsed}, which is enumerated here rather than left implicit. Also add resetSeededFixtures(tenantId, approvalIds) documented as a demo-fixture affordance used only by scripts/seed.js --reset-approvals, which re-asserts the seeded rows in place; it is an UPDATE, allowed because approvals is a mutable table by design. capabilities: create, get, getByNonce, seen(nonce) (read-only). actionRecords: append only, getByNonce. killSwitches: upsert per scope, isActive(tenantId, {scope, scopeId}) which unions the resolved tenant's rows with the global-scope rows in ONE prepared statement (tenant_id = ? AND scope = ? AND active = 1) OR (scope = 'global' AND active = 1), listActive, reEnable(scope, scopeId, {actor, at}). trustLedger: upsert per action class, list, get. guardianIncidents: append, listByTenant, latestOpen ordered by (frozen_at, incident_id). Every query binds tenant_id; no repository exposes update or delete on action_records or guardian_incidents.",
+        "why": "v3 specified a '' tenant_id sentinel for the global switch while also promising every query binds tenant_id — those cannot both be true, and a single-tenant isActive would never have seen the row. It also specified neither a pending/lapsed predicate nor the terminal status set, so a 409-capable card could render in the live queue."
+      },
+      {
+        "path": "src/integrations/meta_ads/index.js",
+        "action": "edit",
+        "change": "Add the typed write contract beside the read contract: WRITE_METHODS = ['updateBudget','setCampaignStatus','createDraft'], writeOk/writeError envelopes reusing the existing META_ERROR_CODES (no new code, no redefinition of GRAPH_API_VERSION or READ_METHODS), and validators validateBudgetUpdate (id non-empty string, daily_budget_micros a safe non-negative integer) and validateStatusUpdate (id, status in ACTIVE|PAUSED) mirroring the read-side validators. Writes resolve to {ok:true,data} / {ok:false,error} like reads, so no caller ever sees a thrown provider error.",
+        "why": "One contract module owns both interfaces; the fake and the executor both bind to WRITE_METHODS, so an unlisted write is impossible to call by accident."
+      },
+      {
+        "path": "src/integrations/meta_ads/fake.js",
+        "action": "edit",
+        "change": "Implement the three write methods against per-instance state: the constructor gains no new options (it stays { failureMode = 'ok' }, and any stateStore-shaped caller is a bug to be caught here, not silently absorbed) and each instance clones FIXTURES into this.state and snapshots a pristine clone for lastGood(), so a write is visible to later reads on THAT instance and to no other — the property .sdlc/memory/qa/environment.md records. Every write appends to this.writes (the applied record list tests assert on). Extend the existing failure injection to the write path so failureMode quota/revoked refuses every WRITE_METHOD with the same META_QUOTA_EXHAUSTED / META_PERMISSION_REVOKED envelope the reads return and appends nothing to this.writes. Add simulateDrift(id, {field, value, source}) as a documented test-only affordance, and implementsWriteInterface(provider) beside implementsReadInterface. READ_METHODS, lastGood(), the fixture rows and FIXTURE_SYNCED_AT are untouched, so every existing read assertion holds byte for byte.",
+        "why": "AC-5's forced-failure path and AC-2's exactly-once proof both need a write that fails like a read and a way to count what was applied. The constructor's existing arity is why v3's routes.js stateStore option was a silent no-op — a leak vector by accident."
+      },
+      {
+        "path": "src/api/routes.js",
+        "action": "edit",
+        "change": "buildApp({repositories, policyConfig}) with policyConfig OPTIONAL and a documented dev default, so all EIGHT existing test call sites across SIX files keep working unchanged — test/api/health.test.js:13, test/api/events.test.js:17, test/api/decisions.test.js:18, test/api/learnings.test.js:19, test/web/drawer.test.js:22, and test/web/pages.test.js:147/195/313 (v3 omitted pages.test.js entirely, which is the file holding the /approvals assertion its no-changes claim rests on). Register, above the existing /v1 404 handler at :319 and below the express.json mount: GET /v1/approvals (tenant via the existing resolveTenantId at :48-54; returns pending, executed and lapsed rows plus the posture table); POST /v1/approvals/:approvalId/approve and /reject (reason required, 400 REASON_REQUIRED; approve builds the ActionIntent from the stored row, issues a capability clamped to the row's expires_at, and hands it to the executor with a per-request new FakeMetaAdsProvider({failureMode}) built from ?meta_error exactly as the page route at :82-85 does — NO stateStore option, the constructor does not take one; a successful write settles the approval executed with its receipt and returns 200 {receipt_id, executed:true, reconciliation}; a provider refusal returns 502 with the provider's own code in the existing {code,message,details} envelope and leaves the row pending with reconciliation:'unknown'; an expired or non-pending row is 409); POST /v1/capabilities (issues a signed capability for a posted ActionIntent after validateIntent — issues only, never executes); POST /v1/actions/execute (capability envelope, idempotent on nonce in the executor's stated order, same ?meta_error handling, 409 KILL_SWITCH_ACTIVE only when no prior receipt exists for that nonce, 200 {receipt_id, executed:false} on a duplicate); GET /v1/guardian; POST /v1/guardian/trigger?kind=spend-spike|tracking-loss (writes the switch and the incident through src/strategy/guardian.js, re-armable after every re-enable with no reseed); POST /v1/guardian/re-enable (explicit actor required). Pass the active-freeze state into renderPage for every page route. Keep the existing 404/500 envelope behaviour untouched — every new route must land above :319 or the NOT_FOUND envelope silently changes.",
+        "why": "The write routes are the only place the page's ?meta_error simulation reaches the write path; building the provider per request is what keeps one tab's simulated failure out of another tab's approval."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "renderPage reads the active freeze from repositories.killSwitches and hands it to layout(), which renders a persistent banner above <main> on every route and every state ([data-testid=guardian-banner], role=status, copy 'Automation is frozen — <kind> guard tripped. Writes are refused until a human re-enables.'); no new renderPage parameter, so the 30 renderPage call sites in test/web/pages.test.js and the route loop are unchanged (v3 said ~40). Rewrite approvals() to read repositories.approvals instead of eventsOf(repositories, tenant, 'approval.requested') at :757: pending cards carrying data-approval-id, impact, downside, evidence refs and expiry; an approve/reject pair with a labelled reason input; an explicit two-step typing-free confirm on the approve path (button arms, then confirms) as docs/ui.md:35 requires, with the downside estimate beside the button; a receipts section from executed rows; a lapsed section fed by listLapsed so an aged row appears there and NOT in the queue; and the autonomy-posture table built from the kernel's ACTION_CLASSES joined to the trust ledger (a class with no row reads 'no evidence — approval required', a policy-only class is labelled as such), replacing the hardcoded AUTONOMY_POSTURE constant at :734-739. PRESERVE VERBATIM: the loading early-return (:742), the error early-return (:746) with its data-action=retry and 'What is still true' copy, and the partial branch (:775-780) including the banner copy 'Expired approvals are shown as lapsed instead of vanishing.' — test/web/pages.test.js:55-63 asserts the partial shell matches /stale|await|Expired|provisional/i and the error shell carries retry plus 'What is still true', on an empty database where a purely data-driven partial region would have nothing to match. Each card ships a hidden, server-authored reconciliation line ([data-testid=approval-reconciliation]) and a hidden toast node ([data-testid=approval-toast]) the client fills. Delete AUTONOMY_POSTURE and the approval.requested read. On a fresh database the pending list is empty and the posture table still renders every roster row, so test/web/pages.test.js:45 keeps passing.",
+        "why": "The five-state shells are the one thing in this rewrite a passing test would silently break, and docs/ui.md:106/:107 pin both the partial and error copy."
+      },
+      {
+        "path": "src/web/client.js",
+        "action": "edit",
+        "change": "Extend the single IIFE, same vanilla style and no build step. Wire [data-action=approve] and [data-action=reject] to read the sibling reason input and fetch POST /v1/approvals/:id/(approve|reject) with {reason}, appending the page's own ?meta_error value to the POST URL when present so /approvals?meta_error=quota drives the forced-failure path. An IN-FLIGHT GUARD: the button disables and the pair refuses a second submit while a POST is open, so a double click cannot send two POSTs whose second 409 renders as a reconciliation failure for an action that succeeded. On success: remove the card, decrement the server-rendered 'Pending approvals · N' heading (src/web/pages.js:796 renders that count; leaving it stale reads one too high), fill the toast node with 'Approved — receipt <id>' via textContent and announce it. On failure: keep the card in place and un-hide the reconciliation panel ONLY for a provider-write failure (5xx carrying a provider code) — a 400 REASON_REQUIRED or a 409 on a non-pending row must not show the 'nothing was executed' copy, because nothing was attempted. The reason input is never cleared on failure. Only textContent and createTextNode touch stored data, matching the drawer regression fix in test/web/drawer.test.js. Also correct the file's header comment, which claims '<100 lines' and is already 130: state the real constraint (no build step, single IIFE, vanilla only) instead of a line budget the file has already broken.",
+        "why": "Carrying ?meta_error onto the POST is what makes the failure path reachable from a browser at all; the guard and the narrowed failure path stop the client from reporting a success as a failure."
+      },
+      {
+        "path": "scripts/seed.js",
+        "action": "edit",
+        "change": "Extend the seed through the repository layer only, idempotent on fixed ids. TWO pending fixtures with distinct fixed approval_ids and two distinct action classes: apr_seed_budget_1 (budget-change, resource adset_001, impact/downside/evidence/expiry, expires_at now + 7 days so it never reads as lapsed) and apr_seed_campaign_1 (campaign-status, resource campaign_003). Plus one executed pair (apr_seed_executed_1 with receipt rcp_seed_executed_1) and one lapsed fixture (apr_seed_lapsed_1, expires_at in the past, written directly with status='lapsed'). Plus three trust-ledger rows: campaign-status autonomous-under-micro-limits (6/6/0/0), budget-change approval-required (3 evaluated, 2 correct, 1 needless), new-geography pinned shadow (0 evaluated, pinned). Never writes an active kill switch, a capability, a nonce or an incident. Report the approvals count in the returned summary AND in the console line, and include it in the alreadySeeded predicate (scripts/seed.js:342-348 returns and :354-358 prints without it today), so a seed that wrote no pending fixtures says so on stdout — AC-5 and the QA listing step both hinge on exactly two pending rows. Add a --reset-approvals flag that calls repositories.approvals.resetSeededFixtures for the four seeded ids and clears any seeded kill-switch row, so a QA re-run is one command against the SAME ./data/app.db the running server already has open: no unlink, no restart, no EADDRINUSE.",
+        "why": "The count of two is the direct answer to the recorded rejection and it is correct. The reset is the answer to the critique's step-2 finding: an rm -f against a file the server holds open cannot work, and this slice must be re-runnable without a harness restart."
+      },
+      {
+        "path": "test/integrations/meta_ads.test.js",
+        "action": "edit",
+        "change": "Add a write-contract block beside the read contract and leave the read runner untouched: WRITE_METHODS is exactly ['updateBudget','setCampaignStatus','createDraft']; implementsWriteInterface holds for the fake; the live provider has none of them (assert each is undefined — the boundary TR-2 wants is that this slice adds no real mutation path); the fake refuses every write under failureMode quota and revoked with the same typed envelope keys ['code','details','message','retryable'] the read leg already asserts, and appends nothing to provider.writes; a write on one instance is visible to THAT instance's later reads and to no other instance, asserted across two instances so the cross-request statelessness environment.md:14 records cannot regress."
+      },
+      {
+        "path": ".sdlc/memory/qa/selectors.md",
+        "action": "edit",
+        "change": "Register the new stable selectors this slice introduces, in the existing data-testid / data-* house style: [data-testid=\"guardian-banner\"] (present on all five routes whenever any kill switch is active, absent otherwise), [data-testid=\"approval-reconciliation\"] (hidden until a write failure), [data-testid=\"approval-toast\"] (populated with 'Approved — receipt <id>'), and [data-approval-id] on each approval card, whose value is the approval_id QA can click. Note that the pending heading count is server-rendered and the client decrements it, so assert the card list rather than the count after an approve. Mention that approve is two-step: click to arm, click again to confirm."
+      },
+      {
+        "path": ".sdlc/memory/qa/environment.md",
+        "action": "edit",
+        "change": "Correct and extend. The ?meta_error=quota|revoked line currently scopes the parameter to '/' and says the provider is constructed per request; that is no longer the whole truth — the parameter now also drives the POST /v1/approvals/:id/approve, POST /v1/actions/execute and POST /v1/capabilities routes, and src/web/client.js carries a page's ?meta_error onto its POST. Add the new /v1 routes (GET /v1/approvals, POST /v1/approvals/:id/approve and /reject, POST /v1/capabilities, POST /v1/actions/execute, GET /v1/guardian, POST /v1/guardian/trigger, POST /v1/guardian/re-enable) with their stable codes, and record the re-run contract: 'npm run sdlc:seed -- --reset-approvals' restores the seeded approval fixtures and clears seeded kill switches in place, and it is the supported way to re-run any approval step — the server holds its SQLite handle open for the process lifetime, so the database file must never be unlinked under it, and the harness owns the boot (env.boot)."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/policy/kernel.test.js",
+        "action": "create",
+        "cases": [
+          "expired capability rejects with EXPIRED_CAPABILITY and executes nothing",
+          "a nonce the injected {seen(nonce)} port reports is rejected with REPLAYED_NONCE, and the port is never called with a mutating claim",
+          "over-scope action rejects with OVER_SCOPE and details naming the violated constraint",
+          "a capability under an active kill switch rejects with KILL_SWITCH_ACTIVE for each of global, tenant, provider and campaign",
+          "a valid intent issues an envelope carrying exactly tenant, resource, action, constraints, expiry, nonce and policy_version; a tampered signature rejects with BAD_SIGNATURE, a capability signed with a different secret rejects with BAD_SIGNATURE, and the configured secret overrides the dev default when POLICY_SIGNING_SECRET is set",
+          "an intent above the action class micro-limit or below its required maturity band rejects with MICRO_LIMIT_EXCEEDED or MATURITY_BAND_BLOCKED",
+          "every kernel action class is either a member of DECISION_CLASSES or explicitly listed as policy-only, and the two rosters are asserted consistent"
+        ]
+      },
+      {
+        "path": "test/policy/trust.test.js",
+        "action": "create",
+        "cases": [
+          "repeated safe outcomes raise one class to autonomous under micro-limits",
+          "one bad outcome collapses only that class; the others are untouched",
+          "new-geography stays shadow while pinned, and a class with no ledger row reads no-evidence approval-required",
+          "scoreFor and postureFor are pure: the same row always yields the same posture"
+        ]
+      },
+      {
+        "path": "test/executor/executor.test.js",
+        "action": "create",
+        "cases": [
+          "duplicate delivery of the same nonce executes exactly once — the second call returns the original receipt id with executed:false and provider.writes stays length 1",
+          "a duplicate delivery made while a kill switch is active still returns the original receipt and never reaches the provider, because idempotency precedes the freeze check",
+          "a first delivery under an active kill switch is refused with KILL_SWITCH_ACTIVE and the provider is never called",
+          "the receipt carries reconciliation against the provider-reported state re-read after the write",
+          "a drift between the applied and reported value is detected and classified; simulateDrift drives the manual, platform and third-party cases",
+          "a write under failureMode quota refuses with META_QUOTA_EXHAUSTED, writes no action_records row, claims no nonce, and mutates nothing",
+          "a capability issued from an approval is refused after that approval's expires_at has passed"
+        ]
+      },
+      {
+        "path": "test/executor/credential-isolation.test.js",
+        "action": "create",
+        "cases": [
+          "TR-2 static import-boundary check: no file under src/ except src/index.js and src/api/routes.js mentions POLICY_SIGNING_SECRET, and no file outside src/executor/ calls a provider WRITE_METHOD",
+          "the kernel module imports neither node:sqlite, a provider module nor process.env",
+          "the live Meta provider still implements no write method after this slice",
+          "the executor is the only module that receives a provider, and no repository module imports one"
+        ]
+      },
+      {
+        "path": "test/strategy/guardian.test.js",
+        "action": "create",
+        "cases": [
+          "the spend-spike fixture freezes automation, writes the kill switch under the resolved tenant_id and appends an incident",
+          "the tracking-loss fixture does the same under its own kind",
+          "re-enable is refused with no explicit human actor, and is separately refused when a supplied recovery predicate does not hold",
+          "a read-only path still serves while frozen (TR-24: writes fail closed, reads stay open)",
+          "the trigger path re-arms the freeze after a re-enable with no reseed, and a re-enable never updates the incident row",
+          "two incidents sharing a frozen_at resolve to one deterministic newest incident by (frozen_at, incident_id)"
+        ]
+      },
+      {
+        "path": "test/api/approvals.test.js",
+        "action": "create",
+        "cases": [
+          "approve transitions pending to executed and returns the receipt id",
+          "reject requires a reason (400 REASON_REQUIRED), and a successful reject moves pending to rejected, records the actor, and the row refuses any further settle",
+          "approve under ?meta_error=quota returns 502 with META_QUOTA_EXHAUSTED, keeps the item pending and writes no receipt",
+          "an expired approval surfaces as lapsed and can never be approved (409)",
+          "a row with a past expires_at still stored as pending appears in the lapsed listing and NOT in listPending — exactly one card, asserted once",
+          "GET /v1/approvals on the seed returns exactly two pending rows and the posture table"
+        ]
+      },
+      {
+        "path": "test/api/actions.test.js",
+        "action": "create",
+        "cases": [
+          "POST /v1/capabilities issues a signed envelope for a valid intent and refuses one over the micro-limit",
+          "posting the same capability twice to /v1/actions/execute performs one write; the second returns the original receipt id with executed:false",
+          "an execute under an active kill switch returns 409 KILL_SWITCH_ACTIVE and the provider is never called, while a replay of an already-executed nonce still returns its receipt",
+          "the write routes accept ?meta_error=quota|revoked per request and an unknown value is ignored like an unknown ?state="
+        ]
+      },
+      {
+        "path": "test/web/approvals.test.js",
+        "action": "create",
+        "cases": [
+          "the seeded /approvals page renders both pending fixtures by data-approval-id with impact, downside, evidence refs and expiry, plus the receipts and lapsed regions",
+          "the posture table reads autonomous under micro-limits for campaign-status, approval required for budget-change and shadow for new-geography, shows a fail-closed row for a roster class with no ledger entry, and labels a policy-only class as such",
+          "an active kill switch renders [data-testid=guardian-banner] on all five routes (/, /journal, /opportunities, /experiments, /approvals) and clearing it removes the banner from all five",
+          "every card ships the hidden reconciliation panel and toast nodes, and all stored copy is escaped (stored markup renders as text)",
+          "the card is keyboard operable: labelled reason input, real buttons, the two-step typing-free confirm, and a live region present",
+          "/approvals rendered with override 'partial' on an empty database still matches /stale|await|Expired|provisional/i and the error override still carries data-action=retry and 'What is still true' — the five-state contract survives the rewrite"
+        ]
+      },
+      {
+        "path": "test/data/tenant-isolation.test.js",
+        "action": "edit",
+        "cases": [
+          "a global-scope kill switch written for one tenant refuses an execute for a different tenant through the isActive union",
+          "a tenant-scoped kill switch for one tenant does not leak into a second tenant's isActive or listActive"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "source": "IAC-1",
+        "check": "Policy regression suite rejects expired, replayed, over-scope, kill-switched and bad-signature capabilities with stable error codes and no mutation executed",
+        "how_to_verify": "Run node --test test/policy/kernel.test.js; the EXPIRED_CAPABILITY, REPLAYED_NONCE, OVER_SCOPE, BAD_SIGNATURE and four KILL_SWITCH_ACTIVE cases pass, the injected fake provider records zero writes in every one, and the injected nonce port is exercised read-only ({seen}) — a mutating claim would fail the boundary assertion.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-2",
+        "source": "IAC-2",
+        "check": "Posting the same capability nonce to the execute endpoint twice performs the provider mutation once and the receipt shows reconciled provider state",
+        "how_to_verify": "Run node --test test/executor/executor.test.js (duplicate-delivery case: provider.writes stays length 1 and the second call returns {executed:false, receipt_id} equal to the first), then live per qa_script step 6, which runs before the guardian step precisely so no kill switch is active.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-3",
+        "source": "IAC-3",
+        "check": "With a spend-spike or tracking-loss condition triggered live, every page shows a persistent guardian freeze banner, writes refuse, and the banner clears only after explicit re-enable and re-arms on re-trigger without reseeding",
+        "how_to_verify": "curl -X POST 'http://localhost:3000/v1/guardian/trigger?kind=spend-spike'; load /, /journal, /opportunities, /experiments and /approvals and confirm [data-testid=guardian-banner] on each of the five; POST a capability to /v1/actions/execute and confirm 409 KILL_SWITCH_ACTIVE; POST /v1/guardian/re-enable with no actor and confirm it is refused, then with an explicit actor and confirm the banner clears from all five; POST the trigger again and confirm the banner returns with no reseed. Repeat the trigger and banner check once with ?kind=tracking-loss. Note the script ends frozen; qa_script step 2's --reset-approvals clears it before any re-run.",
+        "verify": "api"
+      },
+      {
+        "id": "AC-4",
+        "source": "IAC-4",
+        "check": "The approvals page shows autonomy posture per action class with a calibrated low-risk class marked autonomous under micro-limits and new-geography marked shadow or approval-required",
+        "how_to_verify": "Load /approvals on seed data and read the posture table: campaign-status reads autonomous under micro-limits, budget-change reads approval required, new-geography reads shadow and is labelled policy-only, and the roster classes with no evidence read no-evidence approval required.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-5",
+        "source": "IAC-5",
+        "check": "A failed approval action leaves the item in the pending queue with a reconciliation panel, and a successful approval confirms via a toast naming the receipt id",
+        "how_to_verify": "Run qa_script step 2 first: npm run sdlc:seed -- --reset-approvals restores the fixtures in the database the running server already has open (never unlink data/app.db under a live server — src/index.js holds the handle for the process lifetime). /approvals then lists exactly two pending items, apr_seed_budget_1 and apr_seed_campaign_1, each with impact, downside, evidence and expiry. Load /approvals?meta_error=quota, arm then confirm the approve on apr_seed_campaign_1 with a reason, and confirm it stays pending with [data-testid=approval-reconciliation] visible and no receipt toast; then load /approvals with no query param, approve apr_seed_budget_1 the same way and confirm the toast reads 'Approved — receipt rcp_…'. qa_script steps 4-5 run the same two approvals in the opposite order (success first, forced failure second), which is exactly why the seed carries two distinct pending fixtures — either ordering consumes exactly one item.",
+        "verify": "browser"
+      }
+    ],
+    "qa_script": [
+      "npm run sdlc:verify",
+      "Reset to seeded state: npm run sdlc:seed -- --reset-approvals, then npm run sdlc:ready returns 200. Do NOT boot the server here — the harness already owns it (config.yml env.boot = npm run sdlc:serve) and npm run sdlc:serve is a foreground process that never returns. Do NOT rm data/app.db: the running server holds that file's handle open for the process lifetime, so unlinking it would leave QA talking to a server reading a deleted inode. The --reset-approvals re-asserts the four seeded approval fixtures and clears seeded kill switches in place, so every step below is re-runnable.",
+      "GET /v1/approvals: exactly two pending rows, apr_seed_budget_1 (budget-change) and apr_seed_campaign_1 (campaign-status), plus one executed receipt and one lapsed row. On /approvals, each pending card shows impact, downside, evidence refs and expiry, exposes data-approval-id, and its approve button requires arm-then-confirm.",
+      "Load /approvals (no query param): arm then confirm the approve on apr_seed_budget_1 with a reason, confirm the toast reads 'Approved — receipt rcp_…' naming the receipt id, the card leaves the pending list, the heading count drops to 1, and GET /v1/approvals still lists apr_seed_campaign_1 as pending.",
+      "Load /approvals?meta_error=quota: apr_seed_campaign_1 is the pending card. Approve it with a reason and confirm it stays pending, [data-testid=approval-reconciliation] is visible with the copy 'Approval action failed (check: reconciliation). The item stays pending and nothing was executed.', no toast appears, and GET /v1/approvals shows no new receipt. Then reject apr_seed_campaign_1 with a reason and confirm it leaves the pending list with status rejected.",
+      "POST /v1/capabilities once, save the JSON envelope, then POST that same envelope to /v1/actions/execute twice: the first returns executed:true with a receipt id, the second returns the same receipt id with executed:false and the provider recorded one write. This step runs BEFORE the guardian step on purpose — under a freeze the same duplicate still returns its receipt, but a first delivery would be refused.",
+      "curl -X POST 'http://localhost:3000/v1/guardian/trigger?kind=spend-spike', then load all five pages (/, /journal, /opportunities, /experiments, /approvals): [data-testid=guardian-banner] is present on every one and POST /v1/actions/execute returns 409 KILL_SWITCH_ACTIVE. POST /v1/guardian/re-enable with no actor and confirm it is refused; POST it with an explicit actor and confirm the banner is gone from all five; POST the trigger again and confirm the banner returns with no reseed. Repeat the trigger once with ?kind=tracking-loss to cover the second detector. The script ends with the freeze active; step 2 clears it on the next run."
+    ],
+    "risks": [
+      "Highest-risk slice in the project: money movement, auth-equivalent capabilities, credential isolation and kill switches. test/executor/credential-isolation.test.js is the static import-boundary check TR-2 asks for and is a required part of this work order, not a nice-to-have.",
+      "This slice adds no real mutation path: live.js gains no write method and the process holds no ad credentials, so the only provider that can mutate is the in-memory fake. That is deliberate, and it means an approved budget change is NOT visible on a later dashboard load — the receipt's reconciliation record is the evidence, not the campaign table. QA should not expect / to change after an approval.",
+      "The capability signing secret defaults to a dev-only value in every environment that exists, because project.md records no deployment. The mitigation is that the default is named, warned about once at startup, and overridable via POLICY_SIGNING_SECRET — not that it is removed, which would leave CI and browser QA unable to verify a signature deterministically.",
+      "Migration 005 must stay additive and idempotent: every statement is CREATE ... IF NOT EXISTS and the existing four migrations are untouched, because a runner may already hold a database from #19 through #21.",
+      "Approvals rows are mutable by design while action_records and guardian_incidents are append-only with storage triggers; a re-enable therefore records on kill_switches and audit_events and never updates an incident. An implementer who reaches for UPDATE on an incident breaks TR-20. resetSeededFixtures is a deliberate, documented exception on the mutable approvals table and touches only the four seeded ids.",
+      "src/web/client.js grows past the '<100 lines' its own header comment already exceeded at 130. There is no build step to split it, so the cost is accepted and the false comment is corrected rather than left standing.",
+      "The two seed approval fixtures are consumed by qa_script steps 4-5; a stale ./data/app.db makes those steps fail with an empty queue. Mitigated by the in-place --reset-approvals step 2, not by making the seed destructive.",
+      ".sdlc/memory/qa/selectors.md and environment.md are edited here, and the librarian stage also owns those files. If both run in one window, the QA-memory edits win — they describe selectors this change introduces and the other file is unaffected."
+    ],
+    "out_of_scope": [
+      "Autonomous strategic actions beyond micro-limits",
+      "Cross-channel allocation",
+      "Self-modifying strategy code",
+      "Google Ads adapter (a later epic reuses this kernel per the binding decision in the brief and the issue body)",
+      "A real Meta write path: live.js gains no write method and no credential is configured anywhere in v1",
+      "POST /v1/approvals (create an approval over HTTP): nothing in this slice proposes an action, so the only approval writers are the seed and the tests, both through the repository layer as every other fixture already is",
+      "Automatic guardian re-enable from measured recovery on the live route: the deterministic recovery predicate is implemented and tested, but the live route accepts an explicit human actor only",
+      "A visible banner when a page is loaded with ?meta_error active. Bookmarked /approvals?meta_error=quota keeps failing every approval silently, but that is the pre-existing behaviour of the simulation affordance on / today and fixing it belongs to the Meta read slice, not here; it is recorded in residual_risks instead"
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "JWT library (jose) for capability signing",
+        "rejected_because": "A new runtime dependency for what node:crypto's createHmac with timingSafeEqual does in a few lines; conventions require stdlib first with a one-line justification and there is none to give"
+      },
+      {
+        "approach": "A single combined src/policy/safety.js holding kernel, trust, guardian and executor",
+        "rejected_because": "It would put the provider write call in the same file as the policy rules and the HMAC secret's reach, which is precisely the boundary TR-2 requires be provable with a static import check"
+      },
+      {
+        "approach": "Keep v3's single pending approval fixture and rewrite AC-5 plus the script to approve the same still-pending item twice",
+        "rejected_because": "The reviewer offered it as the alternative and it is worse: it makes a browser criterion depend on a subtle two-step order on one item, and a QA run that succeeds on the first click leaves nothing to fail on the second. Two distinct fixtures satisfy both orderings and give AC-4 a second calibrated posture row for free."
+      },
+      {
+        "approach": "Nonce idempotency held in the fake provider, as v2 had it",
+        "rejected_because": "The provider is constructed per request (src/api/routes.js:85), so it holds no state across the two deliveries AC-2 describes; durable dedupe on action_records.nonce in the executor is the only place it can hold"
+      },
+      {
+        "approach": "Give the kernel a mutating {claim(nonce)} port and let the kernel reject a replay with REPLAYED_NONCE before the executor's action_records lookup",
+        "rejected_because": "This is what v3 described and it contradicts AC-2: the second delivery would get an error envelope instead of the original receipt, and the kernel has no way to produce a receipt_id. The executor dedupes first, the kernel's port is a read-only {seen}, and both criteria hold."
+      },
+      {
+        "approach": "Store a derived trust score per class only, computed live from the decisions repository as the journal computes calibration",
+        "rejected_because": "It reads well against the one-calibration-source precedent, but the seeded journal holds two matured decisions and cannot calibrate any class to autonomous, so AC-4 would have no browser-verifiable low-risk row. The stored ledger is seeded prior evidence and postureFor remains the single pure function that reads it."
+      },
+      {
+        "approach": "Keep the '' sentinel tenant_id for the global kill switch and give isActive a special two-scope read",
+        "rejected_because": "It works, but it needs a deliberate exception to the module contract at src/data/repositories.js:4 ('Every query binds tenant_id, so isolation holds on every path'), and a reader who misses the exception silently loses the global freeze. A global-scope row carrying a real tenant_id is read by the same union query with no exception at all."
+      }
+    ],
+    "assumptions": [
+      "The QA harness owns the server boot (config.yml env.boot = npm run sdlc:serve) and QA can run npm run sdlc:seed -- --reset-approvals against the same ./data/app.db the running server has open. If the harness cannot pass extra argv to a script, the same reset is reachable as a direct node scripts/seed.js --reset-approvals; either way it must not require unlinking the database file or restarting the server.",
+      "The HMAC secret is composed in src/index.js from POLICY_SIGNING_SECRET with a named dev-only default, warned about once at startup, so CI and browser QA verify signatures deterministically; project.md records no deployment to set it.",
+      "An approval is created by strategy code in a later slice; this slice only decides, executes and records, so the seed and the tests are the only approval writers.",
+      "Maturity for the demo is ~0.06 (seed decisions are six hours old), so MATURITY_BAND_BLOCKED fires for any class requiring >0.35. The kernel's rejection cases use explicit fixtures with their own band inputs rather than the seeded clock, and the approvals path uses classes whose required band is the emergency-only band so a seeded approve is not blocked by an unrelated TR-7 gate."
+    ],
+    "unknowns": [
+      "Whether POST /v1/capabilities is acceptable surface at all: capabilities could be issued only inside the approve path, which would make AC-2's live half test-only. Kept because QA needs a capability to post twice; if review objects, drop the route and let AC-2 verify by test only.",
+      "The exact Graph mutation endpoints and field names a live write would use. Deliberately untouched: live.js gains no write method, so no write contract beyond the typed shapes is committed to here.",
+      "How the drift source is reported by a real provider. The fake reports it from simulateDrift and the executor classifies whatever the provider names; against a live provider this needs a platform-side signal this slice does not have.",
+      "Whether the QA harness runs each qa_script step against the same server process. Every step is written to be safe either way — the reset is in-place and no step boots or kills the server — but if steps are split across processes, the last step's freeze will outlive the process and the next run's reset still clears it."
+    ],
+    "residual_risks": [
+      "The ?meta_error simulation is a URL-level switch with no on-page indication: a bookmarked /approvals?meta_error=quota makes every approval fail silently and there is no way to clear it from the page. Pre-existing on /, unchanged here, and called out in out_of_scope so it is filed rather than forgotten.",
+      "The signing secret's dev default is live wherever POLICY_SIGNING_SECRET is unset, which today is everywhere. A capability forged with the known default is equivalent to authorizing a money-mutating write; the blast radius is bounded only by the fact that the only writable provider is the in-memory fake.",
+      "A tenant with no kill-switch rows of any scope renders no banner, which is correct (no freeze, nothing to show) but is asserted only by the positive tests — a regression that made an active switch render no banner would be caught, while a regression that made an inactive tenant render one is covered by the same 'clearing it removes the banner from all five' case.",
+      "The five-state shells, the 404 envelope for unknown /v1 paths and the fake provider's cross-request statelessness are all contracts this change edits or extends. test/web/approvals.test.js, test/api/*.test.js and test/integrations/meta_ads.test.js now cover them explicitly, but a reviewer should read those assertions as the regression net rather than trusting the change description.",
+      "Maturity bands mean no action class requiring above 0.35 maturity is autonomous in the seeded demo; the kernel tests therefore assert band rejection with explicit fixtures rather than with the live clock, so a change to the band thresholds would not be caught by this suite."
+    ],
+    "confidence": 76,
+    "confidence_rationale": "The root cause is verified independently and is not in doubt — I confirmed there is no src/policy/, no src/executor/, no guardian, and that the approvals page is exactly the empty static shell the proposal describes, so the design rests on patterns I read in full rather than on a guess. All five split criteria (IAC-1..IAC-5) are carried, and the one recorded rejection is answered at the level it was raised, with the fixture-count arithmetic re-derived in both directions. What holds it in the seventies rather than the eighties is that v3's executable surface had four real blocking defects — a nonce-ownership contradiction that made AC-1 and AC-2 mutually unsatisfiable, a qa_script whose last guardian step made its own final step impossible, a fresh-database step that could not work against a running server, and three unrenumbered step pointers — and a plan that can be wrong in that many mutually reinforcing ways on the part QA depends on deserves humility even after the corrections. The other drag: I could not read the live Meta mutation surface at all (out of scope by design), the drift-source classification is asserted against a fake that reports whatever simulateDrift is told, and the spec's own five-state and explicit-confirm requirements for the approvals screen are enforced here from docs/ui.md prose rather than from an existing implementation. What would move this up: implementing the kernel and executor tests first and seeing the nonce-order contract hold, or a reviewer confirming the capability-issuance route belongs on the surface at all. What would move it down: QA finding it cannot run --reset-approvals against the live server's open handle, since every browser criterion depends on that one command.",
+    "debate_summary": "The critique was right about the diagnosis (it independently confirmed the root cause and I confirmed it again) and right about four blocking mechanics, which I folded in rather than patched around. Nonce ownership is the substantive one: v3 gave the kernel a mutating {claim(nonce)} port, left REPLAYED_NONCE out of the kernel's own code list while AC-1 required it, and ordered the executor to validate before its own action_records lookup — so AC-1 and AC-2 could not both be true. I resolved it by giving each check one owner rather than by picking a side: the executor dedupes first and returns the receipt (even under a freeze, since a replay mutates nothing), the kernel's port becomes read-only {seen}. That also settled an edge case neither document had an answer for. The qa_script ordering fault and the three unrenumbered 'steps 3-4' pointers were plain errors and are fixed. The fresh-database step was the finding I most wanted to be wrong about and could not be: v3's step 2 unlinked data/app.db under a running server, re-seeded a file the server never opens, and would have blocked forever on a foreground npm run sdlc:serve on a bound port. I replaced it with an in-place --reset-approvals rather than accepting the critique's vaguer 'some harness action', because the repo's own env.boot says the pipeline owns the server and no restart hook exists. I took the major findings on the kill-switch read path, pending-vs-lapsed, the duplicated action-class roster, the missing src/index.js, the five-state partial shell and the seed's stdout — each verified against the file and line the critique cited, and each cheap enough to specify outright. I dismissed less than I expected. The critique overstated the global kill switch: it says the freeze AC-3 depends on 'may be invisible', but files[2] has the guardian writing a provider-scope row under the resolved tenant, which a single-query isActive would see, so the criterion is reachable; the real gap is only that the '' sentinel had no specified read and no test, and I fixed it by dropping the sentinel entirely. I also declined the critique's demand for a startup warning as anything more than a one-liner, and its suggestion that a dev-default secret be removed — with no deployment recorded, removal would leave CI and browser QA unable to verify a signature at all. Two further calls are mine alone: the approve path is now a two-step typing-free confirm, because docs/ui.md:35 requires it and the plan had a bare button; and the client's reconciliation panel un-hides only on a write failure, not on every non-2xx, so a 400 or a 409 can no longer display 'nothing was executed' for something never attempted. The proposal's unknowns list stays honest — I did not resolve the capability-issuance route question, and I say in the work order that dropping it makes AC-2 test-only."
+  }
 }
