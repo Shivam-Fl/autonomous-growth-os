@@ -455,7 +455,8 @@
         "detail": "The PR adds qualifiedCplValue() as a helper and then leaves three verbatim inline copies of the same two lines in the same file, so the extraction buys nothing. qualifiedCplValue() is a character-for-character lift of the idiom already sitting at lines 374-375, 412-413 and 1076-1077 — the same lazy kpi-card-to-Qualified-CPL match followed by the same kpi-value capture. Four copies of one idiom now exist where three did. The same is true of opportunityRowMoney() at line 92, which lifts the first-opportunity-row match while eight other copies of that exact match remain in the file. This is a smaller cousin of the ticket's own finding 2, in the file the ticket exists to de-duplicate.\n\n`test/web/pages.test.js:99`\n\nEvidence: Read on PR head. test/web/pages.test.js:374-375 and 412-413 and 1076-1077 each declare a local cplCard/cplTile from a lazy `kpi-card` .. `Qualified CPL` .. closing-div match and then capture `kpi-value\">([^<]+)<`. The new helper at 99-100 is the same two statements. Separately, `grep -n 'class=\"opportunity-row\"' test/web/pages.test.js` returns the match at lines 92 (the new helper), 635, 650, 687, 712, 739, 762, 794, 984, 1062, 1099.\n\nFix: Convert the three inline Qualified CPL extractions to qualifiedCplValue(html) and, if the point of the ticket is a genuinely smaller file, convert the opportunity-row matches to a rowHtml(html, id) helper the way line 635 already does it with a RegExp. Neither conversion touches an assertion, so AC-7 stays green and AC-6's greps are unaffected. If the intent was only to give the new tests a readable name, say so in the helper's doc comment and drop the claim that the file was de-duplicated."
       }
     ],
-    "pr": "63"
+    "pr": "63",
+    "filed": 64
   },
   "qa": {
     "verdict": "pass",
