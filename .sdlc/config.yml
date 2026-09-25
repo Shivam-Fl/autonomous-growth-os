@@ -32,31 +32,31 @@ runtime:
   # Spend where a mistake is hardest to recover from: the diagnosis every later stage
   # inherits, and the last read before code is trusted.
   model:
-    plan:               muse-spark-1.3-contributor
-    plan_proposer:      muse-spark-1.3-contributor
-    plan_critic:        minimax-m3
-    plan_arbiter:       muse-spark-1.3-contributor
-    plan_reviewer:      glm-5.3-flash
-    debug:              minimax-m3
-    implement:          glm-5.3-flash
-    review:             muse-spark-1.3-contributor
-    review_correctness: muse-spark-1.3-contributor
-    review_design:      muse-spark-1.3-contributor
-    qa:                 minimax-m3
-    root_cause:         muse-spark-1.3-contributor
+    plan:               space-bunny-free
+    plan_proposer:      space-bunny-free
+    plan_critic:        space-bunny-free
+    plan_arbiter:       space-bunny-free
+    plan_reviewer:      space-bunny-free
+    debug:              space-bunny-free
+    implement:          space-bunny-free
+    review:             space-bunny-free
+    review_correctness: space-bunny-free
+    review_design:      space-bunny-free
+    qa:                 space-bunny-free
+    root_cause:         space-bunny-free
     # Reads a whole failed run's log and decides what the failure MEANS — the one step whose
     # wrong answer spends another agent's entire run.
-    triage:             muse-spark-1.3-contributor
-    librarian:          muse-spark-1.3-contributor
-    release:            muse-spark-1.3-contributor
-    maintainer:         muse-spark-1.3-contributor
+    triage:             space-bunny-free
+    librarian:          space-bunny-free
+    release:            space-bunny-free
+    maintainer:         space-bunny-free
     # Decides the stack once, for the life of the repo. The one place to spend the most
     # capable model you have.
-    project:            muse-spark-1.3-contributor
+    project:            space-bunny-free
     # Decides WHICH STAGES a ticket needs, and only when the free rules decline. It runs on
     # every issue they miss, so this is the one step where model cost is a tax on the whole
     # backlog. Never Opus: classifying a ticket is not the hard part of this pipeline.
-    router:             muse-spark-1.3-contributor
+    router:             space-bunny-free
 
   # Turn limits. EMPTY MEANS NO LIMIT, which is the default and usually right: the action
   # validates the count after the run, so exceeding a cap discards completed work instead of
@@ -67,8 +67,8 @@ runtime:
 # A council costs roughly 3x the turns. Start single; switch the stage that actually
 # produces bad output.
 councils:
-  plan:   single           # single | council
-  review: single           # single | council
+  plan:   council          # single | council
+  review: council          # single | council
 
 # Where agent PRs are opened against, and what QA diffs them from. Empty = the repo's
 # default branch. Set this when the team integrates somewhere else — many repos keep
