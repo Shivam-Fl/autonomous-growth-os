@@ -517,5 +517,22 @@
       "run": "36150204775",
       "at": "2026-09-25T14:58:14.552Z"
     }
-  }
+  },
+  "qa": {
+    "verdict": "pass",
+    "introduced_bugs": 0,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6"
+    ],
+    "sha": "cee87bafbe4a658529e0315cc11c3ea142093b0b",
+    "run_id": "36151393064",
+    "work_order_version": 1,
+    "at": "2026-09-25T15:08:45.441Z"
+  },
+  "qa_open_bugs": []
 }
