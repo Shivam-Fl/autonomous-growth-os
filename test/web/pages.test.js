@@ -14,6 +14,12 @@ import { FakeMetaAdsProvider } from '../../src/integrations/meta_ads/fake.js';
 
 const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals'];
 
+// The h1 hook, without the styling class: a CSS rename must not fail a
+// behavioural test, per .sdlc/memory/qa/selectors.md. The class may appear
+// anywhere, or not at all; the testid must be on an <h1> whose content is
+// plain text.
+const H1_HOOK = /<h1[^>]*\bdata-testid="page-title"[^>]*>[^<]*<\/h1>/;
+
 function freshRepos() {
   const dir = mkdtempSync(join(tmpdir(), 'pages-'));
   const db = openDatabase(join(dir, 'app.db'));
@@ -118,16 +124,31 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
       assert.equal(levels.filter((level) => level === 1).length, 1, `${where}: exactly one h1`);
       assert.equal(levelsOf(mainOf(html))[0], 1, `${where}: the first heading inside main is the h1`);
       assert.ok(levels.every((level) => level <= 3), `${where}: no heading below h3, got [${levels}]`);
-      // Reduce from 0, so the first heading has to be the h1 too, and no step
+      // Start from 0, so the first heading has to be the h1 too, and no step
       // may rise by more than one: h1 -> h3 would fail here.
-      levels.reduce((previous, level) => {
+      let previous = 0;
+      for (const level of levels) {
         assert.ok(level <= previous + 1, `${where}: h${previous} is not followed by h${level}`);
-        return level;
-      }, 0);
-      assert.match(html, /<h1 class="page-title" data-testid="page-title">[^<]*<\/h1>/, `${where}: the h1 carries the page-title hook`);
+        previous = level;
+      }
+      assert.match(html, H1_HOOK, `${where}: the h1 carries the page-title hook`);
       assert.equal(h1TextOf(html), EXPECTED[route], `${where}: the h1 names its screen`);
     }
   }
+});
+
+// The matcher above was relaxed on purpose (issue #46), so it is pinned here
+// against both what it must accept and what it must still reject: a relaxation
+// that quietly stopped matching anything would pass the 25 shells for the
+// wrong reason, and one that stopped rejecting would protect nothing.
+test('the h1 hook matcher depends on the testid, not the styling class', () => {
+  assert.match('<h1 class="page-title" data-testid="page-title">Command dashboard</h1>', H1_HOOK, 'the shipped markup matches');
+  assert.match('<h1 data-testid="page-title">Command dashboard</h1>', H1_HOOK, 'the class may be absent entirely');
+  assert.match('<h1 data-testid="page-title" class="page-title">Command dashboard</h1>', H1_HOOK, 'attribute order is not pinned');
+
+  assert.doesNotMatch('<h1 class="page-title">Command dashboard</h1>', H1_HOOK, 'an h1 without the testid is not the hook');
+  assert.doesNotMatch('<h1 data-testid="page-title"><span>x</span></h1>', H1_HOOK, 'nested markup is not a plain-text heading');
+  assert.doesNotMatch('<h2 data-testid="page-title">Command dashboard</h2>', H1_HOOK, 'the hook only holds on the h1');
 });
 
 test('the page h1 never replaces the error panel heading on the two store-sharing screens', async () => {

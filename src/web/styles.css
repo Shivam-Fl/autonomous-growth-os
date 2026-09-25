@@ -136,7 +136,6 @@ a {
    default h1 margin would add a second unsized gap above it. */
 .page-title {
   margin: 0;
-  color: var(--color-ink);
   font-size: 1.4rem;
   line-height: 1.25;
 }
