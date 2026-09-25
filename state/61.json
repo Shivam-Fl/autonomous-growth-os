@@ -1,7 +1,7 @@
 {
   "issue": 61,
   "pr": 62,
-  "state": "qa-fail",
+  "state": "planning",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -182,7 +182,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-09-25T22:08:27.736Z",
-  "updated_at": "2026-09-25T22:54:37.567Z",
+  "updated_at": "2026-09-25T22:54:41.500Z",
   "history": [
     {
       "at": "2026-09-25T22:08:46.306Z",
@@ -258,6 +258,11 @@
       "at": "2026-09-25T22:54:37.567Z",
       "agent": "qa",
       "action": "-> qa-fail"
+    },
+    {
+      "at": "2026-09-25T22:54:41.500Z",
+      "agent": "qa",
+      "action": "-> planning"
     }
   ],
   "resume_at": null,
