@@ -72,5 +72,171 @@
     "decided_at": "2026-09-25T13:18:19.100Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "On /opportunities with the seeded fixtures, the ranked list shows the highest-score opportunity first with all eight stored components (value, success probability, fit, information value, reversibility, cost, downside, delay) visible per row",
+        "how_to_verify": "Seed, boot, open /opportunities in a browser",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "An underpowered experiment (total conversions below min_sample) renders its card state as Inconclusive, never Win or Loss",
+        "how_to_verify": "Seed, boot, open /experiments in a browser",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "The cheap low-quality vs expensive high-quality contribution scenario ranks the expensive campaign first (contribution 1700M micros vs 300M micros)",
+        "how_to_verify": "Run the named tests[] case in CI (node --test test/domain/opportunities.test.js)",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "Each experiment card shows spend cap, stop rules, state and a data-through timestamp",
+        "how_to_verify": "Seed, boot, open /experiments in a browser",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "check": "On the experiments error shell (?state=error), text typed into the hypothesis composer is preserved (restored from localStorage) and the error names the failed source",
+        "how_to_verify": "Type a draft on /experiments, reload with ?state=error, confirm the draft text is still in the form",
+        "id": "AC-5",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "check": "On a fresh database, /opportunities shows the empty-queue research prompt naming what the strategist investigates first (lead-quality drop by campaign, growing search demand for converting intent, channels below qualified CPL)",
+        "how_to_verify": "Boot against an empty DB_PATH and open /opportunities in a browser",
+        "id": "AC-6",
+        "source": "IAC-5",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Bayesian conjugate posterior for the evaluator instead of a normal-approx z-test",
+        "rejected_because": "L2 Bayesian machinery is heavier than the ticket needs; the z-test with a min-sample gate deterministically produces the required first-class inconclusive, and L3/L4 methods are explicitly out of scope"
+      },
+      {
+        "approach": "Storing only the final score instead of all eight components",
+        "rejected_because": "TR-18 requires stored score components so the ranker's own calibration can be evaluated later; a bare score is undebuggable"
+      }
+    ],
+    "approach": "Add two pure domain modules (no IO, {code,message,details} errors): src/domain/opportunities.js implements the spec section 26 formula Score = value x pSuccess x fit x infoValue x reversibility / cost / downside / delay with divisor floors (cost_micros, downside_micros, delay_days each floored at 1 so a zero cost can never divide by zero or score infinite), integer-micros expectedContribution = trunc(value_micros x pSuccess) - cost_micros, and deterministic ranking (score desc, id asc tiebreak); src/domain/experiments.js implements L1 native A/B evaluation as a min-sample gate plus a two-proportion z-test at |z| >= 1.96, returning win/loss/inconclusive where any gate failure yields inconclusive and never a forced binary. Persist both behind tenant-bound tables (migration 005) and repositories, expose POST/GET /v1/opportunities plus POST/GET /v1/experiments and POST /v1/experiments/:id/evaluate with the standard error envelope and idempotent re-posts, render the ranked list with all eight components and experiment cards with caps/stop/state/data-through from the repositories (replacing the dead opportunity.scored/experiment.started raw-event reads nothing ever writes), keep the composer draft in localStorage so fetch failures preserve it, and seed three ranked opportunities plus one running experiment. Meta-first per the recorded answer: no Google experiment adapter; native A/B plus Bayesian levels only.",
+    "assumptions": [
+      "Issues #19 (journal/decisions) and #21 (research/learnings) are merged, so the decision record, research-observations panel and memory retrieval gate exist to consume",
+      "Seed data is acceptable as the QA fixture source for ranking order (no external ad account needed)"
+    ],
+    "confidence": 82,
+    "confidence_rationale": "Root cause is confirmed in code (pages read placeholder events nothing writes; no scoring or evaluator module exists), the formula and gates come verbatim from spec sections 26/27, and both dependency slices are merged. Main uncertainty is exact card markup, which the work order pins down.",
+    "files": [
+      {
+        "action": "create",
+        "change": "Pure module: validateOpportunity (opp_ id prefix, tenant_id, all eight components with types; cost/downside as integer micros, delay as days number, probabilities/fit/reversibility/info in [0,1+] ranges), scoreOpportunity (spec section 26 formula with divisor floors of 1), rankOpportunities (score desc, id asc), expectedContribution (integer micros: trunc(value_micros * pSuccess) - cost_micros). Computed example pinned: value=1000 p=0.5 fit=0.8 info=1.2 rev=0.9 cost=100 downside=2 delay=1 yields 2.16. Invariant: shares rank by expected contribution descending; scores are finite positive numbers. Errors as {code,message,details} with codes OPP_BAD_ID, OPP_BAD_COMPONENT, OPP_BAD_MONEY. Never imports node:sqlite.",
+        "path": "src/domain/opportunities.js"
+      },
+      {
+        "action": "create",
+        "change": "Pure module: validateExperiment (exp_ id prefix, tenant_id, arms [{id, name}], caps {max_spend_micros integer > 0, max_downside_micros integer > 0}, stopRules {min_runtime_hours, min_sample integer > 0, success_threshold, harm_threshold}, state draft|running|matured|stopped, data_through UTC ISO-8601), evaluateExperiment ({control_conversions, control_exposures, treatment_conversions, treatment_exposures, min_sample, threshold z=1.96}: total conversions < min_sample yields {state: inconclusive, reason: underpowered}; else two-proportion z-test, |z| < 1.96 yields inconclusive, sign yields win/loss; never forced), stopRuleTriggered (harm threshold or cap breach). Computed example: 10/1000 vs 12/1000 with min_sample 100 yields inconclusive (22 total < 100). Codes EXP_BAD_ID, EXP_BAD_ARMS, EXP_BAD_CAPS, EXP_BAD_STOP_RULES. No IO imports.",
+        "path": "src/domain/experiments.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add migration 005_opportunity_experiment_tables creating opportunities (tenant_id, opportunity_id PK, record JSON, created_at) and experiments (tenant_id, experiment_id PK, record JSON, state, data_through, created_at) with append-only/immutable triggers matching the decisions pattern plus tenant-ordered indexes.",
+        "path": "src/data/db.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add opportunities and experiments repositories: create (idempotent INSERT OR IGNORE on the fixed id, returns {created, row}), get, list (opportunities ordered by stored score desc then id; experiments ordered by created_at then id), all queries binding tenant_id. Shape parses the stored record JSON back to the domain object.",
+        "path": "src/data/repositories.js"
+      },
+      {
+        "action": "edit",
+        "change": "Add POST /v1/opportunities (validateOpportunity, 400 on invalid with stable code; stores record including computed score and all eight components; idempotent re-post returns existing), GET /v1/opportunities (ranked list with components), POST /v1/experiments (validateExperiment, same idempotency), GET /v1/experiments (cards payload: id, name, state, caps, stopRules, data_through), POST /v1/experiments/:id/evaluate (422 UNKNOWN_EXPERIMENT when missing; runs evaluateExperiment over the posted counts and persists the evaluation plus matured state). All failures use the {code,message} envelope, never stacks.",
+        "path": "src/api/routes.js"
+      },
+      {
+        "action": "edit",
+        "change": "Rewrite opportunities() and experiments() sections to read repositories.opportunities.list / repositories.experiments.list instead of the placeholder opportunity.scored/experiment.started raw events. Ranked rows render name plus all eight components with data-testid opportunity-row/score-components. Experiment cards render name, caps (max spend formatted via formatMoney, max downside), stop rules text, state badge and data-through timestamp with data-testid experiment-card/caps/stop-rules/exp-state/data-through. Add the hypothesis composer form (title, thesis, suggested cap inputs with labels) on /experiments. Keep the five states and existing empty/error copy; partial banner keeps provisional-scores wording.",
+        "path": "src/web/pages.js"
+      },
+      {
+        "action": "edit",
+        "change": "Persist the hypothesis composer fields to localStorage on input and restore them on load, so the error shell (which keeps the form mounted beside the error panel) never loses a draft; keep the existing retry/drawer behaviour unchanged. Keys namespaced opp_exp_draft_.",
+        "path": "src/web/client.js"
+      },
+      {
+        "action": "edit",
+        "change": "Seed three opportunities with fixed opp_ ids whose computed scores order deterministically (high/mid/low with all eight components stored) and one running experiment with fixed exp_ id carrying caps, stop rules and a data-through timestamp; all writes through the new repositories so re-seeding is a no-op.",
+        "path": "scripts/seed.js"
+      }
+    ],
+    "issue": 22,
+    "kind": "feature",
+    "out_of_scope": [
+      "IAC-none deferred: all five IACs are covered above",
+      "New research sources (per ticket out of scope)",
+      "Guarded execution beyond experiment caps",
+      "L3/L4 causal methods and bandits",
+      "Google Ads experiment adapter (owner decision: Meta first, Google later; spec section 37 Google-first argument is stale)"
+    ],
+    "qa_script": [
+      "DB_PATH=$(mktemp -u).db PORT=3000 npm run sdlc:seed && PORT=3000 npm run sdlc:serve & sleep 2; curl -fsS http://localhost:3000/health",
+      "Open /opportunities: confirm ranked order with all eight components per row; append ?state=error and confirm drafts/scores preserved message",
+      "Open /experiments: confirm cards show caps, stop rules, state, data-through; open ?state=error after typing a composer draft and confirm the draft survives",
+      "Open /opportunities on an empty DB_PATH: confirm the research-prompt empty state"
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "ranks known-value fixtures highest-score-first with deterministic id tiebreak",
+          "stores all eight score components on the record",
+          "cheap low-quality vs expensive high-quality scenario selects the expensive campaign (contribution 1700M vs 300M micros)",
+          "zero cost is floored, never infinite or throwing"
+        ],
+        "path": "test/domain/opportunities.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "underpowered counts (22 total vs min_sample 100) evaluate to inconclusive, never win/loss",
+          "clear winner and clear loser evaluate to win and loss respectively",
+          "harm-threshold breach triggers the stop rule",
+          "caps with zero/negative spend reject with EXP_BAD_CAPS"
+        ],
+        "path": "test/domain/experiments.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "POST then GET opportunities returns the ranked list with components",
+          "re-posting the same opp_/exp_ id is idempotent (created:false, same row)",
+          "invalid body returns 400 with a stable code; evaluating an unknown experiment returns 422",
+          "tenant B cannot read tenant A rows"
+        ],
+        "path": "test/api/opportunities.test.js"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "empty queue renders the research-prompt copy on a fresh database",
+          "experiment cards render caps, stop rules, state and data-through testids",
+          "ranked rows render all eight score components"
+        ],
+        "path": "test/web/pages.test.js"
+      }
+    ],
+    "understanding": "Issue #22 is the strategist slice of epic #14: rank competing bets with stored score components (spec section 26 opportunity economy: value x pSuccess x fit x infoValue x reversibility / cost / downside / delay) and settle them with L1/L2 experiments (native A/B plus Bayesian levels) that carry caps, stop rules and a first-class inconclusive state, reusing the quality funnel (qualified CPL over downstream events) so a cheap low-quality campaign loses to an expensive high-quality one on expected contribution. The codebase today has no scoring or evaluation code: src/web/pages.js renders opportunities/experiments from placeholder raw events (opportunity.scored, experiment.started) that nothing ever writes, and there is no src/domain/opportunities.js, src/domain/experiments.js, no tables, and no API for either. Dependencies #19 (decision journal) and #21 (research mesh plus learnings) are merged, so the decision record, research-observations panel and retrieval gate exist to consume. The recorded human answer (Meta Ads first, Google after) means no Google experiment adapter in this slice.",
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-09-25T13:23:04.004Z",
+  "validated_ac_changes": []
 }
