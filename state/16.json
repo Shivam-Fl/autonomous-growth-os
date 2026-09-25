@@ -732,31 +732,27 @@
   "failure_packet": {
     "issue": 16,
     "pr": 27,
-    "head": "4c1b8cc56611caf3995045d2f4b20e84a61264da",
+    "head": "8500986d05fef7780d474865283431b42a99d086",
     "stage": "qa",
     "attempt": 1,
     "occurrences": 1,
     "error_type": "unknown",
-    "error_signature": "1cb3813330792f30",
-    "raw_excerpt": "sdlc: app never became ready: sdlc:ready (curl -fsS http://localhost:3000/health) kept failing for 420s (last: curl: (7) Failed to connect to localhost port 3000 after 0 ms: Couldn't connect to server).\nThis is an environment failure, not a product defect — QA is blocked, not failed.",
+    "error_signature": "edb6676b869cad00",
+    "raw_excerpt": "sdlc: the QA report's evidence does not hold up:\n  - T-14, T-28, T-9, T-10, T-11, T-12, T-29, T-30, T-31, T-32, T-33, T-34, T-35, T-17, T-18, T-19, T-20, T-23, T-24, T-26 prove a passing criterion and cite no evidence file\n  - no HAR under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence — nothing shows where the page sent data\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.\nsdlc: report is internally inconsistent: T-15 references BUG-1, which is not in bugs[]; T-17 references BUG-1, which is not in bugs[]; T-18 references BUG-1, which is not in bugs[]; T-19 references BUG-1, which is not in bugs[]; T-22 references BUG-2, which is not in bugs[]; T-23 references BUG-2, which is not in bugs[]; T-24 references BUG-2, which is not in bugs[]; T-25 references BUG-3, which is not in bugs[]; T-26 references BUG-3, which is not in bugs[]\nsdlc: the rejected qa-report is kept on issue #16's ledger as rejected_artifacts[\"qa-report\"]",
     "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
     "decision": "triage",
     "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
     "context": {
-      "work_order_version": 1,
-      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36082089833",
+      "work_order_version": 3,
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36100122514",
       "prior_signatures": [
         "implement:unknown:3ed18acf24906ff0",
         "implement:unknown:e03083d351cc8121",
         "implement:agent-runtime:6d9400ca9ea09242",
         "implement:agent-runtime:a4b7d12ca6b21274",
-        "ci:unknown:01495bc7d1165a48"
+        "ci:unknown:01495bc7d1165a48",
+        "qa:unknown:1cb3813330792f30"
       ]
-    },
-    "triage": {
-      "verdict": "repair",
-      "diagnosis": "QA boot crashed deterministically in the app, not the environment: src/data/db.js openDatabase() calls new DatabaseSync('./data/app.db') without creating the parent directory, and /data/ is gitignored so a clean QA checkout has no data/ dir, yielding SQLITE_CANTOPEN errcode 14 on every boot. Tests passed because they open temp files inside mkdtempSync-created dirs, which is why CI was green on the same SHA. Branch sdlc/issue-16 at 4c1b8cc and open PR #27 survive; the fix belongs in project code (mkdir -p the db parent before DatabaseSync), inside work-order AC-1 which requires sdlc:serve to boot on a clean runner.",
-      "evidence": "/tmp/app.log: file:///.../_pr/src/data/db.js:110 const db = new DatabaseSync(dbPath) -> Error: unable to open database file, code ERR_SQLITE_ERROR errcode 14; wait-ready then failed 420s curl (7) to localhost:3000/health; reproduced locally with node:sqlite on a missing parent dir returning identical ERR_SQLITE_ERROR 14"
     }
   },
   "triage_history": [
