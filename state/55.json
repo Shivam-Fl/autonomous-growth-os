@@ -696,8 +696,5 @@
       "diagnosis": "The plan stage chose mode=review, and in that mode the workflow never runs the plan reviewer, so publish then fails for want of a verdict. plan-strategy.mjs:126-146 found root-cause's revised work order on the ledger (validated_from=root-cause, validated_at=22:01:16, validated_ac_changes=AC-3/AC-4), restored it as work-order.json and set mode=review. The plan job's condition is `mode == 'single' || mode == 'council'` (.github/workflows/sdlc-plan.yml:140), so the planner was correctly skipped. Th",
       "run": "36194614924"
     }
-  ],
-  "retry_after": "2026-09-26T02:08:02.366Z",
-  "retry_stage": "plan",
-  "parked_at": "2026-09-25T22:08:02.366Z"
+  ]
 }
