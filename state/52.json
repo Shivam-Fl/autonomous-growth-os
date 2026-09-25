@@ -1,7 +1,7 @@
 {
   "issue": 52,
   "pr": 60,
-  "state": "review",
+  "state": "qa",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -202,7 +202,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-09-25T20:47:36.271Z",
-  "updated_at": "2026-09-25T21:26:51.545Z",
+  "updated_at": "2026-09-25T21:38:38.883Z",
   "history": [
     {
       "at": "2026-09-25T20:47:58.458Z",
@@ -263,6 +263,11 @@
       "at": "2026-09-25T21:26:51.545Z",
       "agent": "review",
       "action": "review attempt 1"
+    },
+    {
+      "at": "2026-09-25T21:38:38.883Z",
+      "agent": "reviewer",
+      "action": "-> qa"
     }
   ],
   "resume_at": null,
