@@ -177,12 +177,8 @@
   "touch_paths": [
     "src/domain/measurement.js",
     "src/api/routes.js",
-    "src/web/pages.js",
-    "src/data/repositories.js",
-    "scripts/seed.js",
     "test/domain/measurement.test.js",
-    "test/api/events.test.js",
-    "test/api/health.test.js"
+    "test/api/events.test.js"
   ],
   "acceptance": [],
   "planned_route": [
