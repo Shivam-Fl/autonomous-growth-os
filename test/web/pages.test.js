@@ -91,6 +91,61 @@ test('each error panel heading names its own screen, so the two store-sharing pa
   assert.match(opportunities, /data-action="retry" data-retry-href="\/opportunities"/);
 });
 
+// Issue #42: every document's heading hierarchy used to begin at panel()'s
+// <h2>, so a screen reader's heading navigation had no top level and no page
+// named itself. The invariant is per-document, so it is locked across the
+// whole route x state matrix rather than on one page.
+test('every route renders exactly one h1 that opens the hierarchy, in every state', async () => {
+  const STATES = ['ideal', 'empty', 'loading', 'partial', 'error'];
+  const EXPECTED = {
+    '/': 'Command dashboard',
+    '/journal': 'Decision journal',
+    '/opportunities': 'Opportunities',
+    '/experiments': 'Experiments',
+    '/approvals': 'Approvals',
+  };
+  // Headings in document order, as levels: h1 .. h6.
+  const levelsOf = (html) => [...html.matchAll(/<h([1-6])\b[^>]*>/g)].map(([, level]) => Number(level));
+  const mainOf = (html) => /<main id="main">([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
+  const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
+
+  for (const route of ROUTES) {
+    for (const state of STATES) {
+      const where = `${route}?state=${state}`;
+      const html = await renderPage(route, { repositories: freshRepos(), override: state });
+      const levels = levelsOf(html);
+
+      assert.equal(levels.filter((level) => level === 1).length, 1, `${where}: exactly one h1`);
+      assert.equal(levelsOf(mainOf(html))[0], 1, `${where}: the first heading inside main is the h1`);
+      assert.ok(levels.every((level) => level <= 3), `${where}: no heading below h3, got [${levels}]`);
+      // Reduce from 0, so the first heading has to be the h1 too, and no step
+      // may rise by more than one: h1 -> h3 would fail here.
+      levels.reduce((previous, level) => {
+        assert.ok(level <= previous + 1, `${where}: h${previous} is not followed by h${level}`);
+        return level;
+      }, 0);
+      assert.match(html, /<h1 class="page-title" data-testid="page-title">[^<]*<\/h1>/, `${where}: the h1 carries the page-title hook`);
+      assert.equal(h1TextOf(html), EXPECTED[route], `${where}: the h1 names its screen`);
+    }
+  }
+});
+
+test('the page h1 never replaces the error panel heading on the two store-sharing screens', async () => {
+  const repos = freshRepos();
+  // Same regex shape as the #38 test above: the h1 is emitted before the panel
+  // rather than inside it, so this still resolves to the panel's own <h2>.
+  const headingOf = (html) => /panel-error[^]*?<h2>([^<]*)<\/h2>/.exec(html)?.[1];
+  const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
+
+  const opportunities = await renderPage('/opportunities', { repositories: repos, override: 'error' });
+  const experiments = await renderPage('/experiments', { repositories: repos, override: 'error' });
+
+  assert.equal(headingOf(opportunities), 'Opportunity fetch failed', 'the page h1 sits before the panel, not inside it');
+  assert.equal(headingOf(experiments), 'Experiment fetch failed', 'the page h1 sits before the panel, not inside it');
+  assert.equal(h1TextOf(opportunities), 'Opportunities', 'the opportunities page still names itself');
+  assert.equal(h1TextOf(experiments), 'Experiments', 'the experiments page still names itself');
+});
+
 test('an unknown ?state= value falls back to the derived state', async () => {
   const repos = freshRepos();
   const html = await renderPage('/', { repositories: repos, override: 'fancy' });

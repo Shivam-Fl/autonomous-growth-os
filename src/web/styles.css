@@ -131,6 +131,16 @@ a {
   border: 0;
 }
 
+/* The one page-level heading, sized with the display size .kpi-value already
+   uses so the type scale stays at three steps. #main is a grid, so the browser
+   default h1 margin would add a second unsized gap above it. */
+.page-title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 1.4rem;
+  line-height: 1.25;
+}
+
 .panel {
   background: var(--color-surface);
   border: 1px solid var(--color-muted);
