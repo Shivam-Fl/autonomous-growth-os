@@ -138,7 +138,11 @@
     "confidence": 93,
     "confidence_rationale": "The defect is a single string literal, located and confirmed unique by grep, with a replacement derived from three independent signals in the same file (the sibling /experiments panel, the other three errorPanel call sites, and the ticket's own expected-vs-actual). The fix is a one-line edit with a test that can assert it exactly. The residual 7 is not about the fix but about the title wording: three phrasings are defensible, and I picked the one that matches the file's convention and said so explicitly so review can overrule it in one word if a maintainer prefers otherwise."
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/web/pages.js",
+    "test/web/pages.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
