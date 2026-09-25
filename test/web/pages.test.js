@@ -113,7 +113,7 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
   };
   // Headings in document order, as levels: h1 .. h6.
   const levelsOf = (html) => [...html.matchAll(/<h([1-6])\b[^>]*>/g)].map(([, level]) => Number(level));
-  const mainOf = (html) => /<main id="main">([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
+  const mainOf = (html) => /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
   const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
 
   for (const route of ROUTES) {
@@ -136,6 +136,76 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
       assert.equal(h1TextOf(html), EXPECTED[route], `${where}: the h1 names its screen`);
     }
   }
+});
+
+// Issue #52: following a same-document fragment link moves focus only if its
+// target is focusable, and <main> is not by default. The landmark therefore
+// carries tabindex="-1" — programmatically focusable, still out of the tab
+// sequence — or activating the skip link scrolls to #main and leaves focus on
+// <body>, putting the keyboard user back in the header it promises to skip.
+const skipLinkFocusesMain = (html) => {
+  const mainAttrs = /<main\b([^>]*)>/.exec(html)?.[1] ?? '';
+  // Find the link by its target rather than by position, so the brand and the
+  // nav are not depended on to sort before it.
+  const skipAttrs = [...html.matchAll(/<a\b([^>]*)>/g)]
+    .map(([, attrs]) => attrs)
+    .find((attrs) => /\bhref="#main"/.test(attrs));
+  return Boolean(
+    /\bid="main"/.test(mainAttrs) &&
+    /\btabindex="-1"/.test(mainAttrs) &&
+    skipAttrs !== undefined &&
+    /\bclass="[^"]*\bskip-link\b[^"]*"/.test(skipAttrs)
+  );
+};
+
+test('the skip link targets a focusable main landmark on every route and state', async () => {
+  const STATES = ['ideal', 'empty', 'loading', 'partial', 'error'];
+
+  for (const route of ROUTES) {
+    for (const state of STATES) {
+      const where = `${route}?state=${state}`;
+      const html = await renderPage(route, { repositories: freshRepos(), override: state });
+      assert.ok(skipLinkFocusesMain(html), `${where}: the skip link points at a focusable main landmark`);
+    }
+  }
+
+  // Both attributes are matched against the tag's captured attribute string, so
+  // the property is asked of markup nobody emits rather than asserted about
+  // once. Asserting <main id="main"[^>]*tabindex="-1"/> instead would read as
+  // order-independent and would fail the same valid page, reordered.
+  assert.ok(
+    skipLinkFocusesMain('<a href="#main" class="skip-link">Skip to content</a><main tabindex="-1" id="main"></main>'),
+    'attribute order is not pinned on either tag'
+  );
+  assert.ok(
+    skipLinkFocusesMain('<a class="skip-link" href="#main" lang="en">Skip to content</a><main id="main" lang="en" tabindex="-1"></main>'),
+    'a third attribute on either tag is tolerated'
+  );
+
+  // What the lock protects, one failure mode at a time.
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main id="main"></main>'),
+    'a main without tabindex is not focusable, so the link only scrolls'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#content">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'the skip link has to target main'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'a link to #main that is not the skip link is not the bypass'
+  );
+});
+
+// The other end of the same link: the one line that stops the skip link's focus
+// from painting the global accent ring around all 1100px of main can be deleted
+// with a green suite unless something here asserts it. Same currency as the
+// .page-title rule test further down, applied to the stylesheet.
+test('the #main focus suppression still carries the declaration the skip target depends on', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const rule = /#main:focus\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, 'src/web/styles.css defines a #main:focus rule');
+  assert.match(rule[1], /outline:\s*none\s*;/, 'the focused landmark paints no ring');
 });
 
 // The matcher above was relaxed on purpose (issue #46), so it is pinned here
