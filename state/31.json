@@ -1,7 +1,7 @@
 {
   "issue": 31,
   "pr": null,
-  "state": "planning",
+  "state": "needs-human",
   "owner": "planner",
   "lock_expires": "2026-09-25T13:52:26.919Z",
   "lock_run": "36115257837",
@@ -124,7 +124,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-09-25T08:49:41.551Z",
-  "updated_at": "2026-09-25T08:52:26.919Z",
+  "updated_at": "2026-09-25T08:56:09.417Z",
   "history": [
     {
       "at": "2026-09-25T08:49:58.636Z",
@@ -145,6 +145,11 @@
       "at": "2026-09-25T08:52:26.919Z",
       "agent": "planner",
       "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-25T08:56:09.417Z",
+      "agent": "planner",
+      "action": "-> needs-human"
     }
   ],
   "resume_at": "implement",
