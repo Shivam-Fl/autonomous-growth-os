@@ -459,7 +459,7 @@
   "work_order_posted_at": "2026-09-25T17:25:45.540Z",
   "work_order_from": "root-cause",
   "work_order_comment": "5836603532",
-  "implemented_version": 1,
+  "implemented_version": 2,
   "qa": {
     "verdict": "fail",
     "introduced_bugs": 0,
