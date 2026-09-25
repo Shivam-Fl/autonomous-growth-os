@@ -289,7 +289,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": null,
+  "resume_at": "root-cause",
   "flow_plan": {
     "kind": "feature",
     "confidence": 85,
@@ -304,7 +304,7 @@
     },
     "decided_at": "2026-09-25T22:10:10.406Z"
   },
-  "stopped_at": null,
+  "stopped_at": "root-cause",
   "dispatched_stage": "root-cause",
   "validated_from": "plan",
   "validated_at": "2026-09-25T22:25:52.630Z",
