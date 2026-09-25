@@ -23,8 +23,8 @@
     "qa_run": null,
     "from": null,
     "pr": null,
-    "work_order_version": 1,
-    "at": "2026-09-25T16:34:23.698Z"
+    "work_order_version": 2,
+    "at": "2026-09-25T17:03:23.161Z"
   },
   "work_order": {
     "issue": 42,
@@ -300,7 +300,7 @@
     "decided_at": "2026-09-25T16:48:09.024Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan",
+  "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-25T17:00:03.717Z",
   "validated_ac_changes": [],
