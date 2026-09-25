@@ -250,7 +250,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": null,
+  "resume_at": "implement",
   "flow_plan": {
     "kind": "bug",
     "confidence": 82,
@@ -262,7 +262,7 @@
     },
     "decided_at": "2026-09-25T16:29:08.895Z"
   },
-  "stopped_at": null,
+  "stopped_at": "implement",
   "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-25T16:32:32.481Z",
