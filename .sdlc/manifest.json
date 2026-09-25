@@ -1,5 +1,5 @@
 {
-  "source_sha": "1f735e49c5d8447fa93d024c8131ce2eb0853dfa",
+  "source_sha": "8d7a61f38a83e167937134c328e1a45ce7ae1bae",
   "files": {
     ".github/workflows/ci-verify.yml": "e70d32c31bc0a09bfa049641664ea88027ffda2703b0058272ce14fa9ea250fd",
     ".github/workflows/sdlc-cooldown.yml": "85dfbcbb6ac40524c9ea9689f98a2f7da404396c94d40adb1ac1c36c0773bf99",
@@ -102,7 +102,7 @@
     ".sdlc/bin/lib/pr-body.js": "81adced1ab9c8def30048607141ba265b26796266a3510d32ff1ffb8795df3d8",
     ".sdlc/bin/lib/project.js": "990c8f4ac97d669b2295f668a5cb6c030d344dde17816ad8a99373b4f6dda347",
     ".sdlc/bin/lib/prompt.js": "7cfcdf1b631c59bfc8291a6b3428f1da6ac842b4b8fdaaf1e15245c7bde0f2be",
-    ".sdlc/bin/lib/qa-consistency.js": "a70dcece59c9ec245232eb0ebed45fc65fbe9909386c822dd4b9ae147a19ca99",
+    ".sdlc/bin/lib/qa-consistency.js": "fa46b288ffc2993a83cf498769106f51cf9dc31334dbbba84ae2d75a8d9c7b51",
     ".sdlc/bin/lib/render-docs.js": "68c43d409f1b3c085067b362e45b0a3a8002ac9a3ec08e097bc2d0cb564b1b71",
     ".sdlc/bin/lib/repair.js": "1abbee29370311ddef55f617a601b9f44b480f221fc3fa7838f557e166699cd1",
     ".sdlc/bin/lib/route-io.js": "4a87a1c680d9981295de96b4ca0d1d274f6eae3c617b261d6fdbc9ddb0e8a5d3",

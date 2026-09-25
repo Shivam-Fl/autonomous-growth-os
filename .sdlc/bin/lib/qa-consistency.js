@@ -31,9 +31,17 @@ export function checkQaConsistency(r, { openBugs = [] } = {}) {
     bugIds.add(b.id);
   }
 
-  // Dangling references in either direction.
+  // Dangling references in either direction. Except the retest case: a PASSING test may cite a
+  // bug from the previous round that retest[] accounts for — it is the case that proves the fix,
+  // and the bug is gone from bugs[] precisely because it is fixed. growth-os #16's QA passed with
+  // all three earlier bugs retested fixed, cited them on their retest cases, and was rejected as
+  // "references BUG-1, which is not in bugs[]" — an honest pass thrown away. A failing test
+  // still has to cite a bug filed in this report.
+  const retested = new Set((r.retest ?? []).map((x) => norm(x.bug_id)));
   for (const t of r.tests ?? []) {
-    if (t.bug_id && !bugIds.has(t.bug_id)) bad(`${t.id} references ${t.bug_id}, which is not in bugs[]`);
+    if (t.bug_id && !bugIds.has(t.bug_id) && !(t.status === 'pass' && retested.has(norm(t.bug_id)))) {
+      bad(`${t.id} references ${t.bug_id}, which is not in bugs[]`);
+    }
     if (t.status === 'blocked' && !t.blocked_reason) bad(`${t.id} is blocked but gives no blocked_reason`);
     if (t.status === 'fail' && !t.actual) bad(`${t.id} failed but does not say what actually happened`);
   }
@@ -125,7 +133,6 @@ export function checkQaConsistency(r, { openBugs = [] } = {}) {
   // and the implementer had "fixed", was simply never mentioned again — which reads as fixed. The
   // open list comes off the ledger (post-qa-report writes it), not from the agent, and each
   // entry needs a retest row saying what happened to it.
-  const retested = new Set((r.retest ?? []).map((x) => norm(x.bug_id)));
   const unchecked = (openBugs ?? []).filter((b) => !retested.has(norm(b.id)));
   if (unchecked.length) {
     bad(`${unchecked.map((b) => b.id).join(', ')} ${unchecked.length === 1 ? 'was' : 'were'} filed as introduced by ` +
