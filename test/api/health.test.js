@@ -37,7 +37,8 @@ test('unknown API path returns the {code,message} envelope, never a stack trace'
 });
 
 test('the 404 envelope names the full path the client called, including the /v1 prefix', async () => {
-  const response = await fetch(url('/v1/events'), { method: 'POST' });
+  // POST /v1/events is a real route since #17; the /v1/events GET is not.
+  const response = await fetch(url('/v1/events'));
   assert.equal(response.status, 404);
   const body = await response.json();
   assert.equal(body.code, 'NOT_FOUND');
@@ -49,6 +50,10 @@ test('the 404 envelope names the full path the client called, including the /v1 
   assert.ok(getBody.message.includes('/v1/foo'), `message must carry the client path, got: ${getBody.message}`);
   assert.ok(!('stack' in getBody));
   assert.ok(!JSON.stringify(getBody).includes('at '), 'error body must not carry a stack');
+
+  const postResponse = await fetch(url('/v1/foo'), { method: 'POST' });
+  assert.equal(postResponse.status, 404, 'unknown POST paths still 404 with the envelope');
+  assert.ok((await postResponse.json()).message.includes('/v1/foo'));
 });
 
 test('the five pages are served as HTML', async () => {
