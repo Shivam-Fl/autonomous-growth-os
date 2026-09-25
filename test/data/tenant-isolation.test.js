@@ -39,6 +39,11 @@ test('two tenants write rows and every query path returns only its own rows', ()
   replayRawToDerived(db, A);
   replayRawToDerived(db, B);
 
+  // A running saga under each tenant, so listRunning's scoping has rows to
+  // prove itself against — an empty table scopes nothing.
+  repos.sagas.create({ tenant_id: A, run_id: 'run_a_1', name: 'solo', payload: {} });
+  repos.sagas.create({ tenant_id: B, run_id: 'run_b_1', name: 'solo', payload: {} });
+
   for (const tenant of [A, B]) {
     const other = tenant === A ? B : A;
     const ownId = tenant === A ? 'evt_a_1' : 'evt_b_1';
@@ -54,8 +59,17 @@ test('two tenants write rows and every query path returns only its own rows', ()
     assert.deepEqual(derived.map((row) => row.tenant_id), [tenant],
       'derived_metrics list returns only the tenant’s rows');
     assert.equal(derived.find((row) => row.metric === 'spend_micros').value_micros, ownAmount);
-    assert.equal(repos.sagas.listRunning().filter((run) => run.tenant_id === other).length, 0,
+    // Real saga runs exist under both tenants here, so the scoping below is
+    // meaningful: an unscoped listing would leak the other tenant's run.
+    const running = repos.sagas.listRunning(tenant);
+    assert.deepEqual(running.map((run) => run.tenant_id), [tenant],
+      'sagas.listRunning returns only the given tenant’s running runs');
+    assert.equal(running.some((run) => run.tenant_id === other), false,
       'saga listing is tenant-scoped');
+    assert.equal(repos.sagas.listRunning(other).some((run) => run.tenant_id === tenant), false,
+      'each tenant’s listing holds only its own runs');
+    assert.deepEqual(repos.sagas.listRunningTenantIds(), [A, B],
+      'operator-level enumeration returns tenant ids only, no run rows');
   }
 });
 
@@ -84,9 +98,15 @@ test('cross-tenant event_id reuse does not leak effects across tenants', async (
 
 test('saga runs are isolated per tenant', async () => {
   const { repos, scheduler } = boot();
+  repos.tenants.create({ id: A, name: 'Tenant A', currency: 'INR' });
+  repos.tenants.create({ id: B, name: 'Tenant B', currency: 'INR' });
   scheduler.registerSaga('solo', [{ name: 'only', run: () => {} }]);
   const runA = await scheduler.startSaga('solo', { tenantId: A, payload: {} });
   assert.equal(runA.status, 'completed');
   assert.equal(scheduler.getRun(B, runA.runId), null, 'tenant B cannot read tenant A’s saga run');
   assert.equal(scheduler.getRun(A, runA.runId).tenant_id, A);
+  // A completed run is not in the running listing, and tenant B's listing
+  // stays empty even though tenant A has saga history.
+  assert.equal(repos.sagas.listRunning(A).length, 0);
+  assert.equal(repos.sagas.listRunning(B).length, 0);
 });

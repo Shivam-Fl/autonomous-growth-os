@@ -190,7 +190,12 @@ function createSagaRepository(db) {
     'SELECT tenant_id, run_id, name, payload, status, step, created_at, updated_at FROM saga_runs WHERE tenant_id = ? AND run_id = ?',
   );
   const selectRunning = db.prepare(
-    "SELECT tenant_id, run_id, name, payload, status, step, created_at, updated_at FROM saga_runs WHERE status IN ('running', 'compensating') ORDER BY created_at, run_id",
+    "SELECT tenant_id, run_id, name, payload, status, step, created_at, updated_at FROM saga_runs WHERE tenant_id = ? AND status IN ('running', 'compensating') ORDER BY created_at, run_id",
+  );
+  // Operator-level enumeration for resume-all: returns tenant ids only, never
+  // another tenant's rows. The per-tenant rows come from listRunning(tenantId).
+  const selectRunningTenantIds = db.prepare(
+    "SELECT DISTINCT tenant_id FROM saga_runs WHERE status IN ('running', 'compensating') ORDER BY tenant_id",
   );
 
   function shape(row) {
@@ -215,8 +220,14 @@ function createSagaRepository(db) {
       return shape(selectOne.get(tenantId, runId));
     },
 
-    listRunning() {
-      return selectRunning.all().map(shape);
+    /** Tenant-scoped: lists only the given tenant's running saga runs. */
+    listRunning(tenantId) {
+      return selectRunning.all(tenantId).map(shape);
+    },
+
+    /** Operator-level: tenant ids that currently have running sagas. */
+    listRunningTenantIds() {
+      return selectRunningTenantIds.all().map((row) => row.tenant_id);
     },
   };
 }

@@ -95,13 +95,17 @@ export function createScheduler({ repos }) {
     /** Resume sagas left running or compensating by an interrupted process. */
     async resumeSagas() {
       const results = [];
-      for (const run of repos.sagas.listRunning()) {
-        const definition = sagaDefinitions.get(run.name);
-        if (!definition) {
-          console.error(`cannot resume saga ${run.run_id}: no saga registered as ${run.name}`);
-          continue;
+      // Enumerate tenant ids first, then list each tenant's runs through the
+      // tenant-scoped query, so resume-all never reads another tenant's rows.
+      for (const tenantId of repos.sagas.listRunningTenantIds()) {
+        for (const run of repos.sagas.listRunning(tenantId)) {
+          const definition = sagaDefinitions.get(run.name);
+          if (!definition) {
+            console.error(`cannot resume saga ${run.run_id}: no saga registered as ${run.name}`);
+            continue;
+          }
+          results.push({ runId: run.run_id, ...(await this.execute(run, definition)) });
         }
-        results.push({ runId: run.run_id, ...(await this.execute(run, definition)) });
       }
       return { resumed: results.length, runs: results };
     },
