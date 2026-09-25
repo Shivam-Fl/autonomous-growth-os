@@ -337,5 +337,20 @@
       "diagnosis": "The qa stage did not fail on the code, the plan, or the environment — it failed on the shape of the path strings in its own report, and the browser work it had already paid for is sitting in an artifact. QA finished successfully (the agent returned is_error:false after 60 turns / 6m18s / $3.01) and wrote a schema-valid qa-report.json: verdict pass, 0 bugs, 12 tests, all four ACs rolled up. The judge job's `validate` step printed `valid`. The very next step, .sdlc/bin/check-evidence.mjs, died for",
       "run": "36170701585"
     }
-  ]
+  ],
+  "qa": {
+    "verdict": "pass",
+    "introduced_bugs": 0,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4"
+    ],
+    "sha": "bd8edd29a7cb44c5efee20e63cd9e9a42569a22a",
+    "run_id": "36175139871",
+    "work_order_version": 1,
+    "at": "2026-09-25T18:52:36.687Z"
+  },
+  "qa_open_bugs": []
 }
