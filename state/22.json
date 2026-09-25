@@ -232,6 +232,12 @@
         "src/web/pages.js"
       ],
       "head": "c4a706ae746e5bfd26c73e3eb6e52b507542901e"
+    },
+    {
+      "criteria": [
+        "ac-2"
+      ],
+      "head": "21bcc98a0e9847f1f744ddbb790f6593532895b3"
     }
   ],
   "review_root_caused": [],
