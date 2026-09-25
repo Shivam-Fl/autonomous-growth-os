@@ -402,7 +402,7 @@
     "decided_at": "2026-09-25T21:51:21.110Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "review",
+  "dispatched_stage": "qa",
   "validated_from": "plan",
   "validated_at": "2026-09-25T22:39:45.339Z",
   "validated_ac_changes": [],
