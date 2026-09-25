@@ -209,7 +209,16 @@
       "The evaluate appended/duplicate addition was checked by the critique and is sound on every path (evaluateExperiment always returns a truthy outcome on the non-error path, so the append always runs before the 200 and the two new fields are always present); there is no falsy-outcome case to handle."
     ]
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/domain/opportunities.js",
+    "src/data/repositories.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "scripts/seed.js",
+    "test/domain/opportunities.test.js",
+    "test/api/opportunities.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
