@@ -216,7 +216,15 @@
   "on_complete": "merge",
   "artifacts": {},
   "failure_history": [],
-  "review_history": [],
+  "review_history": [
+    {
+      "criteria": [
+        "scripts/seed.js",
+        "src/web/pages.js"
+      ],
+      "head": "c4a706ae746e5bfd26c73e3eb6e52b507542901e"
+    }
+  ],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:54.176Z",
   "updated_at": "2026-09-25T13:51:30.056Z",
