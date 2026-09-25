@@ -145,7 +145,15 @@
     "understanding": "Issue #18 is the first Meta Ads slice of epic #14: a read-only Meta adapter (campaigns, ad sets, ads, insights) behind src/integrations/meta_ads with a fake provider for tests/simulation and a credential-gated live path, plus dashboard campaign regions with ideal/empty/loading/error states. Binding owner decision (plan/brief.md): Meta end to end first, Google Ads later, which overrides the Google-first argument in spec section 37. Depends on #16 (done): boot, SQLite repositories, five-state pages, and sdlc verbs all exist to build on. Rejection fix: pin GRAPH_API_VERSION to v26.0 per ADR-0004 (v24.0 in the prior plan was an unreasoned downgrade of the recorded pin) and assert the value, not just presence, in AC-4 and the contract suite.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/integrations/meta_ads/index.js",
+    "src/integrations/meta_ads/fake.js",
+    "src/integrations/meta_ads/live.js",
+    "src/web/pages.js",
+    "src/api/routes.js",
+    "test/integrations/meta_ads.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
