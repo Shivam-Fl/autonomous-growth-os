@@ -9,7 +9,7 @@
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
-import { formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
+import { canonicalCurrency, formatMoney, fromMicros } from '../domain/money.js';
 import { isReadableComponent } from '../domain/opportunities.js';
 import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 
@@ -194,20 +194,38 @@ const META_CELLS = {
 };
 
 /**
+ * The one place in this file that reads a tenant row's currency. A stored code
+ * is an arbitrary string — tenants.create takes any string, and nothing the
+ * app writes produces a non-canonical one — so it is resolved through the
+ * domain's read-time boundary here rather than at each of the eight call
+ * sites. A code naming no ISO currency at all falls back to INR, as before.
+ */
+function tenantCurrency(tenant) {
+  return canonicalCurrency(tenant?.currency) ?? 'INR';
+}
+
+/**
  * The one money renderer in this file, over the repo's currency-aware
  * formatter, so every amount on every screen agrees with the dashboard's
  * Qualified CPL. Two guards keep a page strictly safer than the hand-rolled
  * rupee version it replaces: a value the domain's readability rule rejects
- * degrades to the em-dash (today's ₹NaN), and a currency outside
- * ISO_CURRENCIES falls back to INR rather than throwing — tenants.create
- * accepts any string, so an unknown code is bad data, and a page render must
- * not 500 on it. That fallback is a relabelling, not a pass-through: a currency
- * this build cannot render is drawn as INR, so a tenant whose stored currency
- * is bad data reads its amounts in rupees rather than in its own code. That is
- * a deliberate choice — the alternative, printing the bare code ('ZZZ 1,000.00'),
- * puts a mislabelled-but-honest amount in front of a reader; this puts a
+ * degrades to the em-dash (today's ₹NaN), and a currency naming no ISO
+ * 4217 code at all falls back to INR rather than throwing — a page render
+ * must not 500 on bad data. That fallback is a relabelling, not a
+ * pass-through: a currency this build cannot render is drawn as INR, so a
+ * tenant whose stored currency is bad data reads its amounts in rupees
+ * rather than in its own code. That is a deliberate choice — the
+ * alternative, printing the bare code ('ZZZ 1,000.00'), puts a
+ * mislabelled-but-honest amount in front of a reader; this puts a
  * correctly-formatted amount whose unit is the repo default. The trade is
  * knowingly wrong-unit over knowingly unformatted.
+ *
+ * The fallback is for a code that names no currency, NOT for a code spelled
+ * differently: 'usd', 'Usd' and ' USD ' are the same unit of account as 'USD'
+ * and render as dollars, because canonicalCurrency resolves a stored code
+ * before the membership test. Mis-casing a currency is not a currency error,
+ * and a renderer that drew a tenant's amounts in the wrong unit over three
+ * letters of case would be the bug, not the fix.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
@@ -219,7 +237,7 @@ function money(micros, currency = 'INR') {
   if (!isReadableComponent('value_micros', micros)) {
     return '—';
   }
-  return formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR'));
+  return formatMoney(fromMicros(micros, canonicalCurrency(currency) ?? 'INR'));
 }
 
 function metaTable(collection, title, headers, rows, currency) {
@@ -323,7 +341,7 @@ ${panel({
     const age = tenant && through ? `${staleAgeHours(nowIso, through)}h ago` : 'unknown';
     return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(through ?? 'unknown')} (${escapeHtml(age)})</div>
 ${kpiStrip(state, { repositories, tenant, stale: true })}
-${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
+${await metaRegions({ metaProvider, metaError, currency: tenantCurrency(tenant) })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
@@ -343,7 +361,7 @@ ${guardianPanel(state)}`;
   }
 
   return `${kpiStrip(state, { repositories, tenant })}
-${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
+${await metaRegions({ metaProvider, metaError, currency: tenantCurrency(tenant) })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state)}`;
@@ -374,7 +392,7 @@ function kpiStrip(state, { repositories, tenant }) {
   const rows = repositories.rawEvents.listByTypes(tenant.id, ['spend.observed', 'lead_qualified']);
   // Same tenant-currency exclusion GET /v1/metrics applies (routes.js): the
   // tenant row's currency leaves foreign-currency legacy spend out of the sum.
-  const funnel = computeFunnel(rows, tenant.currency ?? 'INR');
+  const funnel = computeFunnel(rows, tenantCurrency(tenant));
   const coverage = coverageOf(rows);
   const through = dataThrough(rows);
   const nowIso = new Date().toISOString();
@@ -387,7 +405,7 @@ function kpiStrip(state, { repositories, tenant }) {
     // as every other amount on every other screen: integer micros divided,
     // formatted without floats, em-dash while the volume is zero (money()'
     // safe-integer guard).
-    kpiCard('Qualified CPL', money(cpl, tenant.currency ?? 'INR'), maturity, through),
+    kpiCard('Qualified CPL', money(cpl, tenantCurrency(tenant)), maturity, through),
     kpiCard('Qualified volume', String(funnel.qualified_volume), maturity, through),
     kpiCard('Maturity coverage', coverage.toFixed(2), maturity, through),
   ];
@@ -741,7 +759,7 @@ function opportunities(state, { repositories, tenant }) {
   if (state === 'partial') {
     return `<div class="banner banner-warn" role="status">Some experiment arms await maturity — scores shown are provisional until conversions mature.</div>
 ${researchObservations(repositories, tenant)}
-${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenant?.currency ?? 'INR')}`;
+${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenantCurrency(tenant))}`;
   }
 
   if (state === 'empty' || ranked.length === 0) {
@@ -755,7 +773,7 @@ ${emptyState({
   }
 
   return `${researchObservations(repositories, tenant)}
-${rankedList(ranked, '', tenant?.currency ?? 'INR')}`;
+${rankedList(ranked, '', tenantCurrency(tenant))}`;
 }
 
 const STATE_BADGES = {
@@ -830,7 +848,7 @@ ${panel({
     title: 'Running experiments',
     body: cards.length === 0
       ? `<p class="empty-copy">No experiments running, so no arms await maturity.</p>`
-      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
+      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenantCurrency(tenant))).join('')}</ul>`,
   })}
 ${hypothesisComposer()}`;
   }
@@ -846,7 +864,7 @@ ${hypothesisComposer()}`;
 
   return panel({
     title: `Running experiments · ${cards.length}`,
-    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
+    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenantCurrency(tenant))).join('')}</ul>`,
   }) + hypothesisComposer();
 }
 

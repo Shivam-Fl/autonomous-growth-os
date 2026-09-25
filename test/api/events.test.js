@@ -246,3 +246,91 @@ test('a tenant first created by a non-spend event keeps the INR default and a la
   assert.equal(spend.status, 400);
   assert.equal((await spend.json()).code, 'CURRENCY_MISMATCH');
 });
+
+// A stored currency code is an arbitrary string: the QA repro sets the column
+// with a raw SQL UPDATE, which never reaches tenants.create, so 'usd' and
+// ' USD ' reach these two routes as tenant rows. Both name the same unit of
+// account as 'USD', and the comparison the routes used was exact string
+// equality — so a legitimate USD spend was 400ed against the tenant's own
+// currency, and metrics dropped that spend from the sum and reported a null
+// CPL. The two genuine-mismatch guards below are what keeps the relaxation
+// honest in both directions and keeps the reported string uncorrupted.
+test('a tenant row stored as usd accepts a USD spend instead of rejecting its own unit', async () => {
+  repositories.tenants.create({ id: 'tenant_casing_usd', name: 'Casing Tenant', currency: 'usd' });
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_casing_usd_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_casing_usd', value: 1_000_000_000, currency: 'USD' }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 202, `a usd tenant must accept its own unit, got ${JSON.stringify(body)}`);
+  assert.equal(body.appended, true);
+  assert.equal(body.duplicate, false);
+  // Read-side only: the row stays as it was found, so the next reader of the
+  // table sees the real stored value rather than a silently repaired one.
+  assert.equal(repositories.tenants.get('tenant_casing_usd').currency, 'usd', 'the stored row is not rewritten');
+});
+
+test('a tenant row stored as a padded USD accepts a USD spend too', async () => {
+  repositories.tenants.create({ id: 'tenant_casing_padded', name: 'Padded Tenant', currency: ' USD ' });
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_casing_padded_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_casing_padded', value: 1_000_000_000, currency: 'USD' }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 202, `a padded code names the same unit, got ${JSON.stringify(body)}`);
+  assert.equal(body.appended, true);
+});
+
+test('GET /v1/metrics counts a usd tenant\'s own USD spend and resolves a CPL from it', async () => {
+  repositories.tenants.create({ id: 'tenant_metrics_usd', name: 'Metrics Tenant', currency: 'usd' });
+  for (const event of [
+    { event_id: 'evt_metrics_usd_spend', event_name: 'spend.observed', occurred_at: NOW(), value: 2_000_000_000, currency: 'USD' },
+    { event_id: 'evt_metrics_usd_qualified', event_name: 'lead_qualified', occurred_at: NOW(), lead_id: 'lead_metrics_usd', session_id: 'sess_metrics_usd' },
+  ]) {
+    const response = await fetch(url('/v1/events'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...event, tenant_id: 'tenant_metrics_usd' }),
+    });
+    assert.equal(response.status, 202, `${event.event_id} must ingest`);
+  }
+  const metrics = await (await fetch(url('/v1/metrics?tenant_id=tenant_metrics_usd'))).json();
+  assert.equal(metrics.spend_micros, 2_000_000_000, "the tenant's own spend is no longer read as foreign");
+  assert.equal(metrics.qualified_volume, 1);
+  assert.equal(metrics.qualified_cpl_micros, 2_000_000_000, 'a CPL, not the null the exclusion produced');
+});
+
+test('an unrecognised tenant currency is still a 400 reporting the stored code verbatim', async () => {
+  // Canonicalising the comparison must not reach the message or the details:
+  // a row naming no ISO currency is still bad data, and an operator reading
+  // this 400 needs the code that is actually in the table.
+  repositories.tenants.create({ id: 'tenant_odd_code', name: 'Odd Tenant', currency: 'ZZZ' });
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_odd_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_odd_code', value: 1_000_000_000, currency: 'USD' }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(body.code, 'CURRENCY_MISMATCH');
+  assert.equal(body.message, 'tenant tenant_odd_code keeps ZZZ; spend in USD was rejected');
+  assert.deepEqual(body.details, { tenant_currency: 'ZZZ', received: 'USD' });
+});
+
+test('a canonical tenant still rejects a genuinely different currency', async () => {
+  // The guard in the other direction: canonicalising the tenant side must not
+  // loosen a real mismatch, which is what keeps mixed-currency micros from
+  // summing into a CPL denominated in no real currency.
+  repositories.tenants.create({ id: 'tenant_mismatch', name: 'Mismatch Tenant', currency: 'USD' });
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_mismatch_eur', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_mismatch', value: 1_000_000_000, currency: 'EUR' }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(body.code, 'CURRENCY_MISMATCH');
+  assert.deepEqual(body.details, { tenant_currency: 'USD', received: 'EUR' });
+});
