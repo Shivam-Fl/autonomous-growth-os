@@ -374,5 +374,6 @@
       "kind": "replan",
       "note": "The approved plan edits .sdlc/memory/qa/selectors.md, which no ticket branch may change — the Librarian records selector changes from what merges. Plan the heading fix without touching .sdlc/memory/**."
     }
-  ]
+  ],
+  "implemented_version": 2
 }
