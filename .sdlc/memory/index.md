@@ -11,7 +11,7 @@ whether to open the entry itself.
 - [docs/ui.md](../../docs/ui.md) — theme tokens, patterns and every screen's five states. Read before touching anything a user sees.
 
 ## Situational
-- [qa/environment.md](qa/environment.md) — env quirks and login recipes. Read before browser QA.
-- [qa/selectors.md](qa/selectors.md) — selectors known to be stable.
+- [qa/environment.md](qa/environment.md) — boot recipe (PORT/DB_PATH), ?state= and ?meta_error= preview overrides, failure envelopes. Read before browser QA.
+- [qa/selectors.md](qa/selectors.md) — stable hooks: body[data-page/state], data-testid chrome/empty/meta regions, retry controls. Assert these, not class names.
 - [patterns/](patterns/) — bug shapes this repo has produced before. Grep by symptom.
 - [decisions/](decisions/) — why things are as they are. Read before proposing a rewrite.
