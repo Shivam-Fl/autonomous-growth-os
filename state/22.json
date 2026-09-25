@@ -364,5 +364,27 @@
   "work_order_posted_at": "2026-09-25T13:39:55.585Z",
   "work_order_from": "plan",
   "work_order_comment": "5833366664",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "failure_packet": {
+    "issue": 22,
+    "pr": 36,
+    "head": "66dfd8aef0bf30db3d3d7d8d77ce8678e859b287",
+    "stage": "ci",
+    "attempt": 3,
+    "occurrences": 1,
+    "error_type": "unknown",
+    "error_signature": "8585c515b6416cdc",
+    "raw_excerpt": "verify\tFail if any check failed\t﻿2026-09-25T14:05:51.8705798Z ##[group]Run exit 1\nverify\tFail if any check failed\t2026-09-25T14:05:51.8706091Z ^[[36;1mexit 1^[[0m\nverify\tFail if any check failed\t2026-09-25T14:05:51.8771897Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}\nverify\tFail if any check failed\t2026-09-25T14:05:51.8772280Z ##[endgroup]\nverify\tFail if any check failed\t2026-09-25T14:05:51.8860825Z ##[error]Process completed with exit code 1.",
+    "digest": "The ci stage failed and no known error pattern matched. The raw output is below.",
+    "decision": "triage",
+    "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
+    "context": {
+      "work_order_version": 1,
+      "failed_checks": [
+        "ci-verify"
+      ],
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36145129918",
+      "prior_signatures": []
+    }
+  }
 }
