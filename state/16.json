@@ -1,21 +1,17 @@
 {
   "issue": 16,
   "pr": 27,
-  "state": "needs-human",
+  "state": "qa",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
   "attempts": {
-    "plan": 1,
-    "ci": 1,
-    "review": 1,
-    "qa": 2
+    "plan": 0,
+    "ci": 0,
+    "review": 0,
+    "qa": 0
   },
-  "attempt_run": {
-    "counter": "qa",
-    "n": 2,
-    "run": "36101243475"
-  },
+  "attempt_run": null,
   "pending": {
     "stage": "implement",
     "rework": null,
@@ -314,7 +310,7 @@
   ],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:29.465Z",
-  "updated_at": "2026-09-25T06:21:46.208Z",
+  "updated_at": "2026-09-25T06:24:26.374Z",
   "history": [
     {
       "at": "2026-09-24T18:57:38.071Z",
@@ -725,6 +721,21 @@
       "at": "2026-09-25T06:21:46.208Z",
       "agent": "triage",
       "action": "-> needs-human"
+    },
+    {
+      "at": "2026-09-25T06:24:26.373Z",
+      "agent": "human",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-25T06:24:26.374Z",
+      "agent": "human",
+      "action": "budget reset (was {\"plan\":1,\"ci\":1,\"review\":1,\"qa\":2})"
+    },
+    {
+      "at": "2026-09-25T06:24:26.374Z",
+      "agent": "human",
+      "action": "-> qa"
     }
   ],
   "epic": 14,
