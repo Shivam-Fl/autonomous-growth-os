@@ -259,6 +259,16 @@ export async function parkForCooldown(repo, issue, stage, tries, { maxRetries = 
     `${maxRetries}. ${stage === 'merge' ? 'QA\'s pass stands; the issue stays at `qa-pass`.'
       : 'Nothing is lost; the slot is free for other issues meanwhile.'} ` +
     `${retryHint(stage)} starts it sooner.`]).catch(() => {});
+  // A timed wake-up, because the cron is not one. GitHub delays and drops scheduled runs: a
+  // 20-minute cooldown was resumed after 196 minutes. On a public repository runner minutes are
+  // free, so a dispatched run waits the cooldown out and resumes on time; on a private one that
+  // wait would bill every minute, and the watchdog's cron is left to do it.
+  const isPublic = await gh(['api', `repos/${repo}`, '--jq', '.private'])
+    .then((p) => p.trim() === 'false').catch(() => false);
+  if (isPublic) {
+    await gh(['workflow', 'run', 'sdlc-cooldown.yml', '-f', `issue=${issue}`, '-f', `minutes=${minutes}`])
+      .catch((e) => process.stdout.write(`::warning::issue #${issue}: could not start the timed wake-up (the watchdog's cron still will): ${e.message}\n`));
+  }
   process.stdout.write(`issue #${issue}: parked ${minutes}m before \`${stage}\` runs again\n`);
   return { minutes, at };
 }
