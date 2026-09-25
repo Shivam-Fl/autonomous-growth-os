@@ -1,7 +1,7 @@
 {
   "issue": 22,
   "pr": 36,
-  "state": "implementing",
+  "state": "ci-green",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -219,7 +219,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-09-24T18:56:54.176Z",
-  "updated_at": "2026-09-25T13:49:38.377Z",
+  "updated_at": "2026-09-25T13:50:27.167Z",
   "history": [
     {
       "at": "2026-09-25T13:15:24.364Z",
@@ -285,6 +285,11 @@
       "at": "2026-09-25T13:49:38.377Z",
       "agent": "implementer",
       "action": "lock released"
+    },
+    {
+      "at": "2026-09-25T13:50:27.167Z",
+      "agent": "gate",
+      "action": "-> ci-green"
     }
   ],
   "epic": 14,
