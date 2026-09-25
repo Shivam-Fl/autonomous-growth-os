@@ -59,10 +59,16 @@ function decisionBody(overrides = {}) {
   };
 }
 
-/** A matured decision: decided 120h+ before its evaluation moment. */
+/** A matured, correctly-evaluated decision. decided_at (200h ago) and
+ * evaluation.evaluated_at (72h ago) are both derived from ONE sampled instant
+ * and the evaluation sits 8h past the 120h maturity point, so the maturity
+ * gate in validateDecision holds with real slack — it never depends on where
+ * the millisecond boundary falls between two separate Date.now() samples. */
 function maturedBody(overrides = {}) {
+  const t = Date.now();
   return decisionBody({
-    decided_at: new Date(Date.now() - 200 * 3_600_000).toISOString(),
+    decided_at: new Date(t - 200 * 3_600_000).toISOString(),
+    evaluation: { outcome: 'correct', needless: false, evaluated_at: new Date(t - 72 * 3_600_000).toISOString() },
     ...overrides,
   });
 }
@@ -181,16 +187,14 @@ test('GET /v1/decisions/:id returns the full record: alternatives, downside, evi
 test('GET /v1/calibration returns the LIVE repository aggregate and never a fixture number', async () => {
   // tenant_api holds two matured decisions (one intervention, one do-nothing,
   // both correct) — the same shape the seed writes for the demo tenant.
-  await post('/v1/decisions', maturedBody({
-    decision_id: 'dec_api_matured_1',
-    evaluation: { outcome: 'correct', needless: false, evaluated_at: new Date(Date.now() - 80 * 3_600_000).toISOString() },
-  }));
-  await post('/v1/decisions', maturedBody({
+  const matured1 = await post('/v1/decisions', maturedBody({ decision_id: 'dec_api_matured_1' }));
+  assert.equal(matured1.status, 201, 'the matured intervention was accepted, not silently rejected');
+  const matured2 = await post('/v1/decisions', maturedBody({
     decision_id: 'dec_api_matured_2',
     action_class: 'campaign-status',
     selected_action: 'do_nothing',
-    evaluation: { outcome: 'correct', needless: false, evaluated_at: new Date(Date.now() - 80 * 3_600_000).toISOString() },
   }));
+  assert.equal(matured2.status, 201, 'the matured do-nothing was accepted, not silently rejected');
 
   const response = await fetch(url('/v1/calibration?tenant_id=tenant_api'));
   const body = await response.json();
