@@ -629,6 +629,10 @@ jobs:
           QA_EVIDENCE_DIR: ${{ github.workspace }}/qa-evidence
           REPORT: qa-report.json
           QA_PREDATES: ${{ needs.test.outputs.predates }}
+          # A report refused here is kept on the ledger for the next QA run, with why.
+          KEEP_REJECTED: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ needs.prepare.outputs.issue }}
         run: node .sdlc/bin/check-evidence.mjs
 
       - name: Post the report and route
