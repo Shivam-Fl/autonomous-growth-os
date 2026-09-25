@@ -97,169 +97,117 @@
         "id": "AC-10",
         "source": "TR-22",
         "verify": "test"
+      },
+      {
+        "check": "On a seeded database, visiting any page with ?state=empty shows that page's empty body AND the header reads 'No connected account' (header and body never disagree about whether the account exists)",
+        "how_to_verify": "run npm run sdlc:seed, then open http://localhost:3000/journal?state=empty and each other page with ?state=empty in a browser",
+        "id": "AC-11",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "Calling an unknown versioned route such as POST /v1/events returns 404 with a {code,message} envelope whose message names the full called path including the /v1 prefix, and never leaks a stack trace",
+        "how_to_verify": "curl -i -X POST http://localhost:3000/v1/events and read the JSON body",
+        "id": "AC-12",
+        "source": "IAC-1",
+        "verify": "api"
+      },
+      {
+        "check": "With the server booted on a non-default port (e.g. PORT=4000), `npm run sdlc:ready` succeeds against that port instead of failing against :3000",
+        "how_to_verify": "stop the :3000 server, run PORT=4000 node src/index.js, then PORT=4000 npm run sdlc:ready",
+        "id": "AC-13",
+        "source": "IAC-1",
+        "verify": "api"
       }
     ],
     "alternatives_considered": [
       {
-        "approach": "Build POST /v1/events HTTP ingest now so the event envelope is exercised over the wire",
-        "rejected_because": "the ticket explicitly puts event ingest and funnels out of scope; the envelope plus idempotency helper ships now, the HTTP route ships with the measurement slice"
+        "approach": "Treat ?state=empty as switching the whole request to a null-tenant repository snapshot",
+        "rejected_because": "that would change which data the page functions read and risks masking real tenant bugs; the override is a render-time preview, so only the chrome derived from state (tenantName) should follow it"
       },
       {
-        "approach": "Client-rendered pages fetching JSON status endpoints for each UI state",
-        "rejected_because": "the approved stack is server-rendered HTML with no build step; SSR variant rendering plus a deterministic ?state= preview override covers all five shells with no extra API surface"
+        "approach": "Fix BUG-3 by hardcoding a different port or adding a second ready script per port",
+        "rejected_because": "ports are deployment configuration; the script must read the same $PORT the server reads, with the same 3000 default, or they will drift again"
       }
     ],
-    "approach": "Scaffold the smallest vertical slice that satisfies all five IACs on a greenfield repo. (1) package.json: replace the four stub sdlc:* scripts with the real commands from project.md targets (verify: npm ci --no-audit --no-fund && node --test test/; serve: node src/index.js; seed: node scripts/seed.js; ready: curl -fsS http://localhost:3000/health) and add express@5 as the only runtime dependency, which the approved stack already names. (2) Contract face: src/domain/money.js integer-micros helpers that throw {code:'INVALID_MONEY'} on any float input; src/domain/events.js event-envelope validator (event_id, event_type, occurred_at UTC ISO-8601, tenant_id, schema_version, payload) plus dedupe on event_id; src/data/db.js node:sqlite DatabaseSync bootstrap with a migrations table and tables tenants, raw_events, audit_events, idempotency_keys, derived_metrics where every row carries tenant_id and UTC timestamps; src/data/repositories.js interfaces plus SQLite implementations with tenant_id on every query, no update/delete exports for raw_events and audit_events, and a replay(raw)->derived rebuild function; src/workflows/scheduler.js in-process workflow abstraction (register, schedule/delay, idempotent handler wrapper on event_id, saga runner with compensating actions). (3) Interface face: src/web/pages.js server-rendered layout plus the five pages (/, /journal, /opportunities, /experiments, /approvals) each with ideal, empty, loading, partial and error variants selected from store state, with a documented ?state= preview override so QA can drive non-empty shells on a fresh DB; src/web/styles.css theme tokens verbatim from docs/ui.md; src/web/client.js tiny vanilla JS for aria-live state announcements and error-panel retry; src/index.js entrypoint wiring Express, static assets, pages, GET /health and $PORT default 3000. (4) scripts/seed.js writes one demo tenant with sample spend/decision rows through the repository layer only. Follow the owner decision in plan/brief.md: Meta Ads is the first platform slice, so spec section 37 (Google-first wedge) and the Google-first ordering in section 36 are stale for sequencing; this slice builds no platform code either way.",
+    "approach": "Fix forward with three surgical corrections on the sdlc/issue-16 branch, one per QA bug, each with a regression test. (1) src/web/pages.js renderPage: derive tenantName from the effective (post-override) state instead of only from the store — when the resolved state is 'empty' the header reads 'No connected account', otherwise it names the first tenant or falls back to 'No connected account'. The page bodies already branch on the effective state and are untouched. (2) src/api/routes.js /v1 catch-all: report request.baseUrl + request.path (the path the client actually called, without query string) instead of mount-relative request.path, so the envelope names /v1/events rather than /events. (3) package.json sdlc:ready: curl http://localhost:${PORT:-3000}/health so the readiness probe follows the same $PORT the server honours, keeping the 3000 default. Add regression coverage: a seeded-DB ?state=empty header/body agreement case in test/web/pages.test.js, a POST /v1/events full-path envelope case in test/api/health.test.js, and a new test/ops/ready-script.test.js asserting the ready script honours $PORT. Then run npm run sdlc:verify green.",
     "assumptions": [
       "A clean CI runner provides Node.js 22 with the built-in node:sqlite module and npm registry access for the one-time express install",
       "No login is required anywhere in v1, so QA drives all pages unauthenticated per TR-21",
       "SQLite file defaults to ./data/app.db with DB_PATH override for tests"
     ],
-    "confidence": 78,
-    "confidence_rationale": "Greenfield scaffold on a fully specified stack with verbatim targets in project.md and exact UI tokens in docs/ui.md; risk is concentrated in the money/audit/migration invariants, which get dedicated unit coverage and review attention rather than novel design.",
+    "confidence": 85,
+    "confidence_rationale": "All three defects are confirmed against the PR code (BUG-1 reproduced live via renderPage on a seeded temp DB; BUG-2/BUG-3 confirmed by inspection plus QA evidence), each fix is a one-line, behaviour-pinned change with a dedicated regression test, and all ten original criteria already pass so no surrounding code needs to move.",
     "files": [
       {
         "action": "edit",
-        "change": "replace the four stub sdlc:* scripts with the real commands from .sdlc/memory/project.md targets and add express@5 (the approved stack's only runtime dependency)",
+        "change": "in renderPage, compute tenantName from the effective post-override state: state 'empty' forces 'No connected account', otherwise tenant?.name ?? 'No connected account'; page bodies already branch on effective state and stay untouched",
+        "path": "src/web/pages.js",
+        "why": "header tenant-name was computed from the store while the body was computed from the override, so ?state=empty on a seeded DB showed an empty body under a 'Demo Tenant' header"
+      },
+      {
+        "action": "edit",
+        "change": "in the app.use('/v1') catch-all, build the reported path from request.baseUrl + request.path instead of mount-relative request.path",
+        "path": "src/api/routes.js",
+        "why": "Express strips the mount prefix from request.path, so the 404 envelope reported '/events' for a call the client made to '/v1/events'"
+      },
+      {
+        "action": "edit",
+        "change": "change sdlc:ready to curl http://localhost:${PORT:-3000}/health so the probe honours $PORT with the same 3000 default the server uses",
         "path": "package.json",
-        "why": "stubs must become real the moment a branch carries code, or ci-verify passes without running anything"
-      },
-      {
-        "action": "create",
-        "change": "process entrypoint: load config ($PORT default 3000, DB_PATH), open the database, run migrations, mount static assets, page routes and GET /health, listen",
-        "path": "src/index.js"
-      },
-      {
-        "action": "create",
-        "change": "integer-micros money module: fromMicros/toMicros/add/subtract/allocate-remainder-one-paise-at-a-time; throws {code:'INVALID_MONEY'} on any float, NaN or non-integer input; ISO currency validated",
-        "path": "src/domain/money.js"
-      },
-      {
-        "action": "create",
-        "change": "event-envelope validator for {event_id, event_type, occurred_at UTC ISO-8601, tenant_id, schema_version, payload} returning {code,message} errors, plus an idempotency-key helper that dedupes on event_id",
-        "path": "src/domain/events.js"
-      },
-      {
-        "action": "create",
-        "change": "node:sqlite DatabaseSync bootstrap with migrations table; creates tenants, raw_events, audit_events, idempotency_keys, derived_metrics tables, all rows carrying tenant_id and UTC ISO-8601 timestamps",
-        "path": "src/data/db.js"
-      },
-      {
-        "action": "create",
-        "change": "repository interfaces plus SQLite implementations with tenant_id bound on every query; exposes no update/delete for raw_events and audit_events; exports replayRawToDerived() that rebuilds derived_metrics from raw_events",
-        "path": "src/data/repositories.js"
-      },
-      {
-        "action": "create",
-        "change": "in-process workflow abstraction: register(name, handler), schedule/run with timers, idempotent consumer wrapper keyed on event_id via idempotency_keys, saga runner executing steps with compensating actions on failure",
-        "path": "src/workflows/scheduler.js"
-      },
-      {
-        "action": "create",
-        "change": "Express routes: GET /health returning 200 {status:'ok', version} plus mounting for the five pages and static assets; unknown API paths return the {code,message} error envelope",
-        "path": "src/api/routes.js"
-      },
-      {
-        "action": "create",
-        "change": "server-rendered layout plus dashboard, journal, opportunities, experiments and approvals pages, each with ideal/empty/loading/partial/error variants, exact copy strings, deterministic ?state= preview override, keyboard-operable controls and aria-live regions",
-        "path": "src/web/pages.js"
-      },
-      {
-        "action": "create",
-        "change": "theme tokens verbatim from docs/ui.md (--color-bg #F7F5F0 through --font-body), 8px spacing scale, skeleton pulse respecting prefers-reduced-motion, single-column layout under 900px",
-        "path": "src/web/styles.css"
-      },
-      {
-        "action": "create",
-        "change": "vanilla JS under 100 lines: announces async state changes via aria-live, wires error-panel retry buttons, no framework and no build step",
-        "path": "src/web/client.js"
-      },
-      {
-        "action": "create",
-        "change": "writes one demo tenant (tenant_demo) with sample spend, decision and learning rows through the repository layer only; idempotent on repeat runs via fixed ids",
-        "path": "scripts/seed.js"
+        "why": "the ready script hardcoded :3000 while src/index.js honours $PORT, so a server booted on any other port failed its own readiness check"
       }
     ],
     "issue": 16,
-    "kind": "feature",
+    "kind": "bug",
     "out_of_scope": [
       "Meta or Google platform calls or adapters (later epics; Meta first per owner decision)",
       "Event ingest HTTP endpoint and funnels (the measurement slice builds POST /v1/events on this envelope)",
       "Decisions, shadow mode, execution, approvals logic beyond the page shells",
-      "Temporal Cloud, Postgres/pgvector, auth, dark mode"
+      "Temporal Cloud, Postgres/pgvector, auth, dark mode",
+      "Concurrent-seed locking and dark-mode inversion, logged by QA as coverage gaps rather than bugs"
     ],
     "qa_script": [
       "npm run sdlc:verify — full node:test suite green",
       "npm run sdlc:serve, then curl -fsS http://localhost:3000/health — 200 within seconds, zero external services",
-      "open / on a fresh DB — empty state with connect-Meta plus install-pixel checklist and theme tokens",
-      "open /journal /opportunities /experiments /approvals — each shows its specified empty copy",
-      "reopen each page with ?state=loading, ?state=partial, ?state=error — skeleton, stale banner, named-error-plus-retry shells",
-      "npm run sdlc:seed, reload / — header names the demo tenant"
+      "npm run sdlc:seed, then open /journal?state=empty — empty journal body AND header reads 'No connected account' (AC-11)",
+      "curl -i -X POST -d 'x' http://localhost:3000/v1/events — 404 envelope naming POST /v1/events with no stack (AC-12)",
+      "PORT=4000 node src/index.js, then PORT=4000 npm run sdlc:ready — readiness succeeds on 4000 (AC-13)"
     ],
+    "reproduced": true,
     "risks": [
-      "Touches migrations, money representation and audit immutability: a mistake here corrupts every later slice, so the append-only and micros invariants carry dedicated tests plus review focus",
-      "First code on the repo means sdlc:verify must stop being a stub in the same change or ci-verify fails the branch by design",
-      "The ?state= preview override is a visual aid for shells, not a data path; it must never alter stored state"
+      "The ?state= preview override remains a render-time aid only; the fix keeps it read-only (no store writes) exactly as QA verified in T-6",
+      "?state=ideal on a truly empty DB still shows the 'No connected account' header with ideal-shaped body content — consistent with AC-11's rule that chrome follows effective state, and covered by the new regression case"
     ],
+    "root_cause": "The page chrome and the page body answered two different definitions of 'empty'. renderPage resolved the body from the effective (post-override) state but computed the header tenantName solely from the store's first tenant, so ?state=empty on a seeded DB rendered an empty body under a 'Demo Tenant' header (BUG-1, user-visible). The same class of underspecification produced the other two: the /v1 catch-all reported Express's mount-relative request.path instead of the client-called path (BUG-2), and sdlc:ready hardcoded :3000 while the server honours $PORT (BUG-3). None of these touched the ticket's core invariants — all ten acceptance criteria and all 33 unit tests pass — which is why the slice looked done while three operator- and user-facing inconsistencies shipped with it.",
     "tests": [
       {
-        "action": "create",
+        "action": "edit",
         "cases": [
-          "integer construction and add/subtract stay exact in micros",
-          "float, NaN and non-integer inputs throw INVALID_MONEY at the boundary",
-          "10000 paise across 3 members yields 3334/3333/3333 and sums to the input exactly",
-          "unknown or malformed ISO currency codes are rejected"
+          "seeded DB plus override 'empty' on every route: body shows the empty variant AND header tenant-name reads 'No connected account' (fails before the fix with 'Demo Tenant')",
+          "fresh DB without override still renders data-state empty with 'No connected account'; seeded DB without override still renders ideal with 'Demo Tenant' (no behaviour change off-override)"
         ],
-        "path": "test/domain/money.test.js"
+        "path": "test/web/pages.test.js"
       },
       {
-        "action": "create",
+        "action": "edit",
         "cases": [
-          "raw_events and audit_events expose no update or delete function",
-          "attempted direct UPDATE/DELETE against those tables fails",
-          "replayRawToDerived rebuilds derived values identically after derived_metrics is wiped"
-        ],
-        "path": "test/data/append-only.test.js"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "two tenants write rows and each query path returns only its own rows",
-          "cross-tenant event_id reuse does not leak effects across tenants"
-        ],
-        "path": "test/data/tenant-isolation.test.js"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "valid envelope passes; missing event_id, bad timestamp or missing tenant_id returns stable codes",
-          "duplicate event_id delivery applies the effect exactly once"
-        ],
-        "path": "test/domain/events.test.js"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "duplicate delivery of the same event_id to a consumer applies once",
-          "a saga failing mid-run executes compensating actions in reverse",
-          "a saga interrupted mid-run resumes to exactly-once effects"
-        ],
-        "path": "test/workflows/scheduler.test.js"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "booted against a temp SQLite file, GET /health returns 200 with status ok",
-          "unknown API path returns the {code,message} envelope, never a stack trace"
+          "POST /v1/events returns 404 with code NOT_FOUND and a message containing the full path '/v1/events' (fails before the fix, which reports '/events')",
+          "GET /v1/foo likewise names '/v1/foo'; response carries no stack property and no 'at ' frames"
         ],
         "path": "test/api/health.test.js"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "package.json scripts['sdlc:ready'] references $PORT (or ${PORT}) with a 3000 default, so the probe follows the same port the server boots on",
+          "the ready command still targets the /health path"
+        ],
+        "path": "test/ops/ready-script.test.js"
       }
     ],
-    "understanding": "The repo is greenfield: no src/, test/ or scripts/ exist and all four sdlc:* verbs in package.json are stubs. Issue #16 is the foundation slice everything later builds on, covering TR-1 (integer micros money), TR-20 (append-only audit, raw/normalized/derived separation, UTC), TR-21 (five server-rendered pages plus GET /health on :3000, no login), TR-22 (event_id idempotency, saga-capable in-process scheduler) and TR-26 (tenant_id on every record). The authenticated owner decision in plan/brief.md makes Meta Ads the first platform slice, which supersedes the Google-first wedge argued in spec section 37 (and the Google-first ordering in section 36) for all sequencing. There is no prior plan rejection to answer.",
-    "unknowns": [
-      "Whether QA prefers the five pages at /journal style paths or another routing scheme — any consistent scheme satisfies the ticket"
-    ],
-    "version": 1
+    "understanding": "The v1 plan's foundation diagnosis was directionally right, not wrong: the repo needed the full greenfield scaffold, and that scaffold works — all ten acceptance criteria pass in the browser and all 33 node:test cases are green. What the previous attempt got wrong was three underspecified details that the implementation then filled in inconsistently, each confirmed against the PR code: (1) it described ?state= as rendering 'that shell' without saying the page chrome must follow the effective state, so src/web/pages.js renderPage computed the body from the override but tenantName from the store — on /journal?state=empty against a seeded DB the body says 'Shadow mode has not started' while the header says 'Demo Tenant' (BUG-1, minor, user-visible; I reproduced this live by seeding a temp DB and calling renderPage with override 'empty'). (2) It required the {code,message} envelope on unknown API paths without saying the message must name the path the client called, so the /v1-mounted handler used Express's mount-relative request.path and POST /v1/events is reported as 'POST /events' (BUG-2, trivial). (3) It specified sdlc:ready as curling /health without tying it to $PORT, so package.json hardcodes :3000 while src/index.js honours $PORT and a PORT=4000 boot fails its own readiness check (BUG-3, minor). This is the first QA failure on the issue (no failure-packet.json, no repeated mechanical signature), the failure is in code rather than environment or config, and the fix touches no forbidden paths — so a revised fix-forward work order, not stop.json. No criterion is wrong and none changes: AC-1..AC-10 are carried forward verbatim, and AC-11/AC-12/AC-13 are appended as permanent contract checks for the three introduced bugs.",
+    "version": 2
   },
   "touch_paths": [
     "package.json",
@@ -684,10 +632,10 @@
   "validated_at": "2026-09-24T19:03:21.257Z",
   "validated_ac_changes": [],
   "approved_too_high": false,
-  "work_order_version": 1,
-  "work_order_posted_at": "2026-09-24T19:07:36.767Z",
-  "work_order_from": "plan",
-  "work_order_comment": "5820455180",
+  "work_order_version": 2,
+  "work_order_posted_at": "2026-09-25T02:26:57.105Z",
+  "work_order_from": "root-cause",
+  "work_order_comment": "5825674814",
   "failure_packet": {
     "issue": 16,
     "pr": 27,
