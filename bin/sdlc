@@ -648,14 +648,16 @@ async function liveProbe(cfg) {
   if (gateway && !process.argv.includes('--bridge') && !models) {
     return fail('--gateway needs --models or --bridge', 'the configured map is for the configured gateway; name the models to probe on this one');
   }
-  const trial = process.argv.includes('--trial');
+  // `--trial` alone is the short task; `--trial adtrack` names one (agent-trial.mjs TASKS).
+  const t = process.argv.indexOf('--trial');
+  const trial = t < 0 ? '' : process.argv[t + 1] && !process.argv[t + 1].startsWith('--') ? process.argv[t + 1] : 'ledger';
   for (const r of runs) await probeRun({ gateway, ...r, agent: process.argv.includes('--agent'), trial });
 }
 
-async function probeRun({ models = '', bridge = '', api = '', direct = '', gateway = '', agent = false, trial = false }) {
+async function probeRun({ models = '', bridge = '', api = '', direct = '', gateway = '', agent = false, trial = '' }) {
   const since = Date.now() - 60_000;   // our clock and the runner's disagree by seconds
   const inputs = [['models', models], ['bridge', bridge], ['bridge_api', api], ['direct', direct], ['gateway', gateway],
-    ['agent_check', bridge && agent ? 'true' : ''], ['trial', trial && (bridge || models) ? 'true' : '']].filter(([, v]) => v).flatMap(([k, v]) => ['-f', `${k}=${v}`]);
+    ['agent_check', bridge && agent ? 'true' : ''], ['trial', trial && (bridge || models) ? trial : '']].filter(([, v]) => v).flatMap(([k, v]) => ['-f', `${k}=${v}`]);
   try { await gh(['workflow', 'run', 'sdlc-probe.yml', ...inputs]); } catch (e) {
     return fail('could not start sdlc-probe.yml', `${e.message.split('\n')[0]} — is it on the default branch?`);
   }
@@ -685,9 +687,10 @@ async function probeRun({ models = '', bridge = '', api = '', direct = '', gatew
     }
     for (const t of read('trial.json')) {
       const ok = t.hidden.total && t.hidden.pass === t.hidden.total && t.visible_untouched;
-      (ok ? pass : warn)(`${t.model} on a real task: ${t.hidden.pass}/${t.hidden.total} hidden tests`,
+      const flags = Object.entries(t.signals ?? {}).filter(([, v]) => !v).map(([k]) => k.replaceAll('_', ' '));
+      (ok ? pass : warn)(`${t.model} on the ${t.task ?? 'ledger'} task: ${t.hidden.pass}/${t.hidden.total} hidden tests`,
         `visible ${t.visible.pass}/${t.visible.total}, its own tests ${t.own_tests.files.length} file(s) ${t.own_tests.pass}/${t.own_tests.total}, ` +
-        `${t.secs}s, ${t.turns ?? '?'} turns${t.visible_untouched ? '' : ', CHANGED THE VISIBLE TESTS'}${t.float_free ? '' : ', still parses money as a float'}` +
+        `${t.secs}s, ${t.turns ?? '?'} turns${t.visible_untouched ? '' : ', CHANGED THE VISIBLE TESTS'}${flags.length ? `, not: ${flags.join(', ')}` : ''}` +
         `${t.hidden.failed.length ? `\n      failed: ${t.hidden.failed.join('; ')}` : ''}${t.error ? `\n      ${t.error}` : ''}`);
     }
     if (existsSync(join(dir, 'trial-work'))) {
@@ -990,7 +993,7 @@ if (!run) {
     '  install --target <repo>   copy the framework into another repository\n' +
     '  init                      labels and state branch (run inside the repo)\n' +
     '  doctor [--live [--models a,b] [--bridge a,b] [--gateway url] [--trial]]  verify every token, secret and integration\n' +
-    '                            (--trial: a real coding task per model, graded on hidden tests)\n' +
+    '                            (--trial [ledger|adtrack]: a real coding task per model, graded on hidden tests)\n' +
     '                            (--live: one real request per model, from the runner)\n' +
     '  status                    show every issue in flight\n' +
     '  halt                      disable every pipeline workflow and cancel its runs\n' +
