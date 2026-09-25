@@ -1,7 +1,7 @@
 {
   "issue": 31,
   "pr": 33,
-  "state": "qa-pass",
+  "state": "merged",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -132,7 +132,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-09-25T08:49:41.551Z",
-  "updated_at": "2026-09-25T09:52:33.939Z",
+  "updated_at": "2026-09-25T09:52:44.196Z",
   "history": [
     {
       "at": "2026-09-25T08:49:58.636Z",
@@ -213,6 +213,11 @@
       "at": "2026-09-25T09:52:33.939Z",
       "agent": "qa",
       "action": "-> qa-pass"
+    },
+    {
+      "at": "2026-09-25T09:52:44.196Z",
+      "agent": "release",
+      "action": "-> merged"
     }
   ],
   "resume_at": null,
