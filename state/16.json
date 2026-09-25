@@ -604,6 +604,11 @@
         "implement:agent-runtime:a4b7d12ca6b21274",
         "ci:unknown:01495bc7d1165a48"
       ]
+    },
+    "triage": {
+      "verdict": "repair",
+      "diagnosis": "QA boot crashed deterministically in the app, not the environment: src/data/db.js openDatabase() calls new DatabaseSync('./data/app.db') without creating the parent directory, and /data/ is gitignored so a clean QA checkout has no data/ dir, yielding SQLITE_CANTOPEN errcode 14 on every boot. Tests passed because they open temp files inside mkdtempSync-created dirs, which is why CI was green on the same SHA. Branch sdlc/issue-16 at 4c1b8cc and open PR #27 survive; the fix belongs in project code (mkdir -p the db parent before DatabaseSync), inside work-order AC-1 which requires sdlc:serve to boot on a clean runner.",
+      "evidence": "/tmp/app.log: file:///.../_pr/src/data/db.js:110 const db = new DatabaseSync(dbPath) -> Error: unable to open database file, code ERR_SQLITE_ERROR errcode 14; wait-ready then failed 420s curl (7) to localhost:3000/health; reproduced locally with node:sqlite on a missing parent dir returning identical ERR_SQLITE_ERROR 14"
     }
   },
   "triage_history": [
@@ -630,6 +635,14 @@
       "confidence": 95,
       "diagnosis": "The implementer shipped tests that import a data layer it never created. test/api/health.test.js, test/web/pages.test.js and test/workflows/scheduler.test.js (plus scripts/seed.js) all import openDatabase from src/data/db.js and createRepositories from src/data/repositories.js, but branch sdlc/issue-16 contains no src/data/ directory at all — those two work-order files (the node:sqlite bootstrap and the tenant-scoped repositories with replay) are missing, along with the planned test/data/append-",
       "run": "36080854491"
+    },
+    {
+      "at": "2026-09-25T01:39:20.482Z",
+      "stage": "qa",
+      "verdict": "repair",
+      "confidence": 92,
+      "diagnosis": "QA boot crashed deterministically in the app, not the environment: src/data/db.js openDatabase() calls new DatabaseSync('./data/app.db') without creating the parent directory, and /data/ is gitignored so a clean QA checkout has no data/ dir, yielding SQLITE_CANTOPEN errcode 14 on every boot. Tests passed because they open temp files inside mkdtempSync-created dirs, which is why CI was green on the same SHA. Branch sdlc/issue-16 at 4c1b8cc and open PR #27 survive; the fix belongs in project code ",
+      "run": "36082089833"
     }
   ],
   "implemented_version": 1
