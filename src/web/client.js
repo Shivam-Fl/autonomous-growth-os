@@ -58,28 +58,40 @@
     announce('Decision detail closed');
   }
 
+  // Drawer lines are built with DOM nodes and textContent, never HTML
+  // strings: every field the drawer shows (alternative actions and reasons,
+  // risk wording, refs, critic result, policy id) comes from POSTed stored
+  // decision data and must never parse as markup, however it is written.
   function drawerLine(label, value) {
-    return '<p><strong>' + label + '</strong> ' + value + '</p>';
+    var line = document.createElement('p');
+    var term = document.createElement('strong');
+    term.textContent = label;
+    line.appendChild(term);
+    line.appendChild(document.createTextNode(' ' + value));
+    return line;
   }
 
   function renderDrawer(decision) {
-    var parts = [];
+    drawerBody.replaceChildren();
     (decision.alternatives || []).forEach(function (entry) {
-      parts.push(drawerLine(
-        'Alternative ' + entry.action,
+      var outcomes = entry.expected_outcomes || {};
+      drawerBody.appendChild(drawerLine(
+        'Alternative ' + String(entry.action),
         (entry.action === 'do_nothing' && entry.reason ? 'reason: ' + entry.reason + ' — ' : '')
-        + 'expected mean ' + entry.expected_outcomes.mean
-        + ' (p10 ' + entry.expected_outcomes.p10 + ', p90 ' + entry.expected_outcomes.p90 + ')'
+        + 'expected mean ' + String(outcomes.mean)
+        + ' (p10 ' + String(outcomes.p10) + ', p90 ' + String(outcomes.p90) + ')'
       ));
     });
     if (decision.risk) {
-      parts.push(drawerLine('Downside estimate', decision.risk.expected_downside_micros + ' micros — worst reasonable case: ' + decision.risk.worst_reasonable_case));
+      drawerBody.appendChild(drawerLine(
+        'Downside estimate',
+        String(decision.risk.expected_downside_micros) + ' micros — worst reasonable case: ' + decision.risk.worst_reasonable_case
+      ));
     }
-    parts.push(drawerLine('Evidence refs', (decision.evidence_refs || []).join(', ') || '—'));
-    parts.push(drawerLine('Memory refs', (decision.memory_refs || []).join(', ') || '—'));
-    parts.push(drawerLine('Critic result', decision.critic_result || '—'));
-    parts.push(drawerLine('Policy decision', decision.policy_decision_id || '—'));
-    drawerBody.innerHTML = parts.join('');
+    drawerBody.appendChild(drawerLine('Evidence refs', (decision.evidence_refs || []).join(', ') || '—'));
+    drawerBody.appendChild(drawerLine('Memory refs', (decision.memory_refs || []).join(', ') || '—'));
+    drawerBody.appendChild(drawerLine('Critic result', decision.critic_result || '—'));
+    drawerBody.appendChild(drawerLine('Policy decision', decision.policy_decision_id || '—'));
   }
 
   if (drawer && drawerBody) {
