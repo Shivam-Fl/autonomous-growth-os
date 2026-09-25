@@ -66,6 +66,31 @@ test('every page exposes the loading, partial and error preview shells without t
   }
 });
 
+test('each error panel heading names its own screen, so the two store-sharing pages cannot be copy-pasted into each other', async () => {
+  const repos = freshRepos();
+  // Only the panel's own <h2>: /opportunities' detail legitimately names both stores,
+  // so asserting on the whole document would fail a correct fix.
+  const headingOf = (html) => /panel-error[^]*?<h2>([^<]*)<\/h2>/.exec(html)?.[1];
+
+  const opportunities = await renderPage('/opportunities', { repositories: repos, override: 'error' });
+  const experiments = await renderPage('/experiments', { repositories: repos, override: 'error' });
+
+  const opportunityTitle = headingOf(opportunities);
+  const experimentTitle = headingOf(experiments);
+
+  assert.equal(opportunityTitle, 'Opportunity fetch failed');
+  assert.equal(experimentTitle, 'Experiment fetch failed', 'the sibling panel is unchanged by this fix');
+  assert.doesNotMatch(opportunityTitle, /experiment/i, 'the opportunities heading does not name the experiments screen');
+  assert.doesNotMatch(experimentTitle, /opportunit/i, 'the experiments heading does not name the opportunities screen');
+  assert.ok(!opportunities.includes('Failed to fetch experiments'), 'the old title appears nowhere in the document');
+
+  // The retitle is copy-only; the rest of the panel is what a reader relies on.
+  assert.match(opportunities, /<p>The opportunity and experiment store did not respond \(source: opportunity store\)\. Drafts and scores are preserved\.<\/p>/);
+  assert.match(experiments, /<p>The experiment store could not be read \(source: experiment store\)\. In-progress drafts are preserved\.<\/p>/);
+  assert.match(opportunities, /What is still true: drafted hypotheses and their score components are preserved\./);
+  assert.match(opportunities, /data-action="retry" data-retry-href="\/opportunities"/);
+});
+
 test('an unknown ?state= value falls back to the derived state', async () => {
   const repos = freshRepos();
   const html = await renderPage('/', { repositories: repos, override: 'fancy' });
