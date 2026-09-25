@@ -745,32 +745,28 @@
   "failure_packet": {
     "issue": 16,
     "pr": 27,
-    "head": "8500986d05fef7780d474865283431b42a99d086",
+    "head": "8623fa44a1f893369b1955ad19719ad739dcb2d6",
     "stage": "qa",
-    "attempt": 1,
+    "attempt": 2,
     "occurrences": 1,
     "error_type": "unknown",
-    "error_signature": "edb6676b869cad00",
-    "raw_excerpt": "sdlc: the QA report's evidence does not hold up:\n  - T-14, T-28, T-9, T-10, T-11, T-12, T-29, T-30, T-31, T-32, T-33, T-34, T-35, T-17, T-18, T-19, T-20, T-23, T-24, T-26 prove a passing criterion and cite no evidence file\n  - no HAR under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence — nothing shows where the page sent data\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.\nsdlc: report is internally inconsistent: T-15 references BUG-1, which is not in bugs[]; T-17 references BUG-1, which is not in bugs[]; T-18 references BUG-1, which is not in bugs[]; T-19 references BUG-1, which is not in bugs[]; T-22 references BUG-2, which is not in bugs[]; T-23 references BUG-2, which is not in bugs[]; T-24 references BUG-2, which is not in bugs[]; T-25 references BUG-3, which is not in bugs[]; T-26 references BUG-3, which is not in bugs[]\nsdlc: the rejected qa-report is kept on issue #16's ledger as rejected_artifacts[\"qa-report\"]",
+    "error_signature": "7f8dd17bb94cb7d9",
+    "raw_excerpt": "sdlc: the QA report's evidence does not hold up:\n  - T-2, T-40, T-17, T-41, T-11, T-12, T-13, T-14, T-15, T-16, T-43, T-31, T-35, T-39 prove a passing criterion and cite no evidence file\n  - no HAR under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence — nothing shows where the page sent data\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.\nsdlc: the QA report's evidence does not hold up:\n  - T-2, T-40, T-17, T-41, T-11, T-12, T-13, T-14, T-15, T-16, T-43, T-31, T-35, T-39 prove a passing criterion and cite no evidence file\n  - no HAR under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence — nothing shows where the page sent data\nEverything QA keeps must be written under /home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence (QA_EVIDENCE_DIR), be what its name says, and a pass needs a HAR of the run — a pass is what merges.",
     "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
     "decision": "triage",
     "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
     "context": {
       "work_order_version": 3,
-      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36100122514",
+      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36101243475",
       "prior_signatures": [
         "implement:unknown:3ed18acf24906ff0",
         "implement:unknown:e03083d351cc8121",
         "implement:agent-runtime:6d9400ca9ea09242",
         "implement:agent-runtime:a4b7d12ca6b21274",
         "ci:unknown:01495bc7d1165a48",
-        "qa:unknown:1cb3813330792f30"
+        "qa:unknown:1cb3813330792f30",
+        "qa:unknown:edb6676b869cad00"
       ]
-    },
-    "triage": {
-      "verdict": "resume",
-      "diagnosis": "The QA agent returned verdict pass / next_action merge for PR #27 @ 8500986 with 20 passing tests citing no evidence file, no HAR under qa-evidence, and 6 tests referencing BUG-1..3 while bugs[] is empty -- a report-shape failure, not a product failure. The work survived: branch sdlc/issue-16 @ 8500986 is pushed, PR #27 is open and mergeable with CI green (ci-verify), and the rejected report with reasons is kept on issue #16's ledger as rejected_artifacts[\"qa-report\"] for the next QA attempt to correct by retesting the same commit.",
-      "evidence": "failed-run.log test job check-evidence: 'T-14, T-28, T-9, T-10, T-11, T-12, T-29, T-30, T-31, T-32, T-33, T-34, T-35, T-17, T-18, T-19, T-20, T-23, T-24, T-26 prove a passing criterion and cite no evidence file' + 'no HAR under .../qa-evidence' (exit 1); judge validate: 'T-15 references BUG-1, which is not in bugs[]' (+8 more across BUG-1/2/3); ledger state/16.json rejected_artifacts[\"qa-report\"]: verdict pass, next_action merge, 35 tests, 0 bugs, 20 passing tests without evidence; check-evidence.mjs lines 71/75/118-119 (these gates fire only on a pass verdict, ci-cited tests exempt); gh pr view 27: OPEN, MERGEABLE, head 8500986d05fef7780d474865283431b42a99d086."
     }
   },
   "triage_history": [
