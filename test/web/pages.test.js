@@ -1302,16 +1302,59 @@ test('the .page-title rule still carries the declarations the page title depends
 // these two declarations are pinned here for the same reason the #main:focus
 // and .page-title rules above are. Delete either one and every page overflows
 // sideways again below ~1100px, with a green browser run to prove it.
+//
+// Every matching rule, not the first. The first-match form could not see a
+// later rule re-declaring either property to something else, which is exactly
+// how this fix gets silently undone: append `#main > * { min-width: auto }` or
+// `.table-scroll { overflow-x: visible }` to the end of the stylesheet and the
+// old assertion still passed, with the declarations it names both overridden.
 test('the narrow layout still carries the two declarations it depends on', () => {
   const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
 
-  const itemRule = /#main\s*>\s*\*\s*\{([^}]*)\}/.exec(css);
-  assert.ok(itemRule, 'src/web/styles.css lifts the floor on the #main grid items');
-  assert.match(itemRule[1], /min-width:\s*0\s*;/, 'a grid item may shrink below its min-content width');
+  const itemRules = [...css.matchAll(/#main\s*>\s*\*\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(itemRules.length > 0, 'src/web/styles.css lifts the floor on the #main grid items');
+  itemRules.forEach((body, i) => {
+    const values = [...body.matchAll(/min-width\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['0'],
+      `#main > * rule ${i + 1} must declare min-width: 0 and nothing else, or a later rule re-breaks the layout; it declared ${JSON.stringify(values)}`);
+  });
 
-  const regionRule = /\.table-scroll\s*\{([^}]*)\}/.exec(css);
-  assert.ok(regionRule, 'src/web/styles.css defines a .table-scroll rule');
-  assert.match(regionRule[1], /overflow-x:\s*auto\s*;/, 'a table wider than its column scrolls in its own region');
+  const regionRules = [...css.matchAll(/\.table-scroll\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(regionRules.length > 0, 'src/web/styles.css defines a .table-scroll rule');
+  regionRules.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-x\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['auto'],
+      `.table-scroll rule ${i + 1} must declare overflow-x: auto and nothing else, or a later rule re-breaks the layout; it declared ${JSON.stringify(values)}`);
+  });
+});
+
+// Issue #67: the other half of the same constraint, pinned in the same
+// deliberate style and for the same reason — a stylesheet is not observable
+// from a rendered page, and the browser check that would catch this is not in
+// CI. `overflow-wrap: anywhere` on the three card lists is what keeps a long
+// unbreakable name inside its own card instead of scrolling the page sideways.
+//
+// Written in the every-match form from the start, so it does not carry the
+// blind spot it is being added next to: every rule in the file is collected and
+// checked, which is what catches a second rule declaring overflow-wrap and
+// quietly overriding the first.
+test('the card lists still carry the wrap that keeps an unbreakable name inside its own card', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+
+  const wrapping = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(([, , body]) => /overflow-wrap\s*:/.test(body));
+  assert.equal(wrapping.length, 1,
+    'exactly one rule in src/web/styles.css declares overflow-wrap, so a second one cannot override it');
+
+  for (const cls of ['experiment-card', 'opportunity-row', 'approval-card']) {
+    assert.ok(wrapping.some(([, selector]) => selector.includes(`.${cls}`)),
+      `the overflow-wrap rule covers .${cls}, the card lists that render free-text names outside a .table-scroll region`);
+  }
+
+  const [, , body] = wrapping[0];
+  const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+  assert.deepEqual(values, ['anywhere'],
+    'the wrap is anywhere and not break-word: break-word creates the break opportunity but leaves the intrinsic min-content width alone, so a grid track floored at min-content still sizes to the whole string');
 });
 
 // The other half of the same fix. Lifting the floor stops one wide table from
@@ -1343,10 +1386,21 @@ test('every table the five routes render is wrapped in a keyboard-reachable, nam
     const html = await renderPage(route, { repositories: repos, ...options });
     const tables = html.match(/<table[\s>]/g) ?? [];
     const wrappers = html.match(/<div class="table-scroll"[^>]*>/g) ?? [];
+    // Cardinality is not the claim. An equal count is satisfied just as well by
+    // an empty region sitting beside a bare table — and a bare table that
+    // nothing can scroll to is exactly what the keyboard contract below is
+    // about — so containment is asserted directly.
+    const wrapped = html.match(/<div class="table-scroll"[^>]*>\s*<table[\s>]/g) ?? [];
     assert.equal(wrappers.length, tables.length, `${where}: every table has a region, and nothing else does`);
+    assert.equal(wrapped.length, tables.length,
+      `${where}: every table opens inside a region — an equal count of the two is satisfied just as well by an empty region beside a bare table, and a bare table is exactly what the keyboard contract below is about`);
 
-    labels[where] = wrappers.map((tag) => /\baria-label="([^"]*)"/.exec(tag)[1]);
-    for (const [tag, label] of wrappers.map((w, i) => [w, labels[where][i]])) {
+    labels[where] = [];
+    for (const [i, tag] of wrappers.entries()) {
+      const named = /\baria-label="([^"]*)"/.exec(tag);
+      assert.ok(named, `${where}: region ${i + 1} of ${wrappers.length} carries an aria-label, so it has an accessible name`);
+      const label = named[1];
+      labels[where].push(label);
       assert.match(tag, /\btabindex="0"/, `${where}: ${label} takes focus, or its last columns are unreachable by keyboard`);
       assert.match(tag, /\brole="region"/, `${where}: ${label} is announced as a region`);
       assert.notEqual(label, '', `${where}: the region has a non-empty accessible name`);
