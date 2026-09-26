@@ -311,6 +311,9 @@
   },
   "touch_paths": [
     "test/web/pages.test.js",
+    "src/web/pages.js",
+    "src/api/routes.js",
+    "src/web/favicon.svg",
     "test/web/pages.test.js"
   ],
   "acceptance": [],
