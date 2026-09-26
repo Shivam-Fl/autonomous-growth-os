@@ -334,6 +334,14 @@ be true when it is done and why. **Be ruthless about what is not** — a maintai
 twelve issues a week trains everyone to ignore the label, and then the one that mattered is
 ignored too. Two good issues beat ten plausible ones, and an empty list is a fine answer.
 
+**Never file an issue whose deliverable is a change to `.sdlc/memory/`** — a stale QA note, a
+pattern that belongs in `patterns/`, a convention nobody wrote down. No ticket branch may write
+there, whatever `forbidden_paths` says: the guard reserves all of `.sdlc/memory/**` on every ticket
+branch, because the Librarian keeps it, nightly, from what merged. Such a ticket can only stop at
+its plan for a person (growth-os #49 and #74 did). Put what memory should say in your roadmap
+instead, where the Librarian and every planner read it — and if it points at a real defect in the
+code, file that, naming the code, not the note.
+
 ## Consulted on a fix to the pipeline itself
 
 The pipeline fixes its own plumbing, and you are the one it asks first. A stage failed on a

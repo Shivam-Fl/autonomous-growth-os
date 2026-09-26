@@ -235,6 +235,7 @@ jobs:
         run: node .sdlc/bin/claude-args.mjs root_cause
 
       - name: Diagnose
+        id: diagnose_agent
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
         # cleanup step trades the work for the bookkeeping.
@@ -321,7 +322,16 @@ jobs:
       # output checks out its own copy. This is here so an agent that edited the framework it
       # was told to leave alone is a failed run someone reads about, not something nobody sees.
       - name: The framework is untouched — Diagnose
+        id: fw_diagnose
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # What root-cause did, reduced to a summary that travels with the revision (see sdlc-plan's
+      # "What the planner did"): growth-os #61's agent ran 53 turns, reported success and wrote
+      # neither file, and the hidden output left nothing to say why. jq, not node: the agent's job.
+      - name: What root-cause did
+        if: always() && steps.fw_diagnose.outcome == 'success'
+        env: { EXEC: "${{ steps.diagnose_agent.outputs.execution_file }}" }
+        run: if [ -f "$EXEC" ]; then jq -s -f .sdlc/bin/transcript-summary.jq "$EXEC" > root-cause-transcript.json || true; fi
 
       # What this run made, kept past the runner — also when the agent failed: a half-finished
       # revision is still a diagnosis a person can read.
@@ -333,6 +343,7 @@ jobs:
           path: |
             work-order.json
             stop.json
+            root-cause-transcript.json
           retention-days: 30
           if-no-files-found: ignore
           overwrite: true
@@ -374,9 +385,14 @@ jobs:
         with: { name: root-cause-output, path: _agent }
       - name: Take only what the agent was asked to write
         run: |
-          for f in work-order.json stop.json; do
+          for f in work-order.json stop.json root-cause-transcript.json; do
             if [ -f "_agent/$f" ]; then cp "_agent/$f" "$f"; fi
           done
+
+      # What root-cause did, and a revision (or stop) it left in its reply instead of a file —
+      # recovered here and validated below like any other.
+      - name: What root-cause did, and a revision left in its reply
+        run: node .sdlc/bin/agent-transcript.mjs root-cause-transcript.json --recover work-order.json,stop.json
 
       # A diagnosis that finds nothing a code change fixes — environmental, undecidable, not
       # reproducible — is written as stop.json, never as a work order carrying an `escalate` field.

@@ -152,6 +152,13 @@ jobs:
     permissions:
       contents: read
       issues: read            # `gh issue view`
+    # For the gate, when this job ends red: whether the framework was left alone, and whether the
+    # agent wrote its plan before whatever killed the job. growth-os #72: a complete work order
+    # was written, the agent step then hung on an unanswered request until its hang detector
+    # killed it, and the gate — admitting output only from a green plan job — threw the plan away.
+    outputs:
+      untouched: ${{ steps.fw_single.outcome == 'success' || steps.fw_arbiter.outcome == 'success' }}
+      wrote: ${{ steps.produced.outputs.wrote }}
     env:
       ISSUE: ${{ github.event.issue.number || inputs.issue }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -342,7 +349,8 @@ jobs:
       # be followed by it. So the tree is compared to the commit it started from after each one.
       - name: The framework is untouched — Plan (single agent)
         id: fw_single
-        if: needs.prepare.outputs.mode == 'single'
+        # Also after the agent step failed or timed out: a check, and the gate reads its result.
+        if: always() && needs.prepare.outputs.mode == 'single'
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
 
       # What the planner did, reduced to a summary that travels with the plan: tool calls, each
@@ -490,7 +498,8 @@ jobs:
       # The same framework check, after this agent too.
       - name: The framework is untouched — Council 3/3 — arbitrate
         id: fw_arbiter
-        if: needs.prepare.outputs.mode == 'council'
+        # Also after the agent step failed or timed out: a check, and the gate reads its result.
+        if: always() && needs.prepare.outputs.mode == 'council'
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
 
       # growth-os #20: the arbiter reported success and wrote no file, and the hidden output left
@@ -503,6 +512,12 @@ jobs:
       # What this run wrote, kept past the runner — also when an agent failed. A rerun, a person
       # or root-cause reading why a plan failed had only a log: the council's proposal and
       # critique, the work order and a stop all died with the machine.
+      # A shell test, not a script: this is the agent's job, after it had a shell.
+      - name: What the plan job produced
+        id: produced
+        if: always()
+        run: if [ -f work-order.json ] || [ -f stop.json ]; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi
+
       - name: Hand over the plan
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
@@ -530,7 +545,8 @@ jobs:
     # validation, the gate and the reviewer are left to run.
     if: >-
       always() && needs.prepare.result == 'success' && needs.prepare.outputs.mode != 'skip'
-      && (needs.plan.result == 'success' || needs.plan.result == 'skipped')
+      && (needs.plan.result == 'success' || needs.plan.result == 'skipped'
+          || (needs.plan.result == 'failure' && needs.plan.outputs.untouched == 'true' && needs.plan.outputs.wrote == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -564,11 +580,11 @@ jobs:
       # `continue-on-error`: an agent that wrote nothing uploads nothing, and validation says so
       # by name rather than a download failing on a missing artifact.
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16   # v4
-        if: needs.plan.result == 'success'
+        if: needs.plan.result == 'success' || (needs.plan.outputs.untouched == 'true' && needs.plan.outputs.wrote == 'true')
         continue-on-error: true
         with: { name: plan-output, path: _agent }
       - name: Take only what the agent was asked to write
-        if: needs.plan.result == 'success'
+        if: needs.plan.result == 'success' || (needs.plan.outputs.untouched == 'true' && needs.plan.outputs.wrote == 'true')
         run: |
           for f in work-order.json stop.json; do
             if [ -f "_agent/$f" ]; then cp "_agent/$f" "$f"; fi
@@ -577,7 +593,7 @@ jobs:
       # What the planner did, from the summary its job handed over — and a work order (or stop) it
       # left in its reply instead of a file, recovered here and validated below like any other.
       - name: What the planner did, and a plan left in its reply
-        if: needs.plan.result == 'success'
+        if: needs.plan.result == 'success' || (needs.plan.outputs.untouched == 'true' && needs.plan.outputs.wrote == 'true')
         run: node .sdlc/bin/agent-transcript.mjs _agent/plan/transcript-summary.json --recover work-order.json,stop.json
 
       # An agent that cannot honestly plan says so in stop.json instead of a work order. That is
@@ -647,8 +663,14 @@ jobs:
           overwrite: true
 
   reviewer:
-    needs: gate
-    if: needs.gate.outputs.gate == 'agent' && needs.gate.outputs.stopped != 'true'
+    needs: [prepare, gate]
+    # always() and the gate's own result, stated: the implicit success() looks at every job
+    # upstream, so on mode=review — a stashed plan re-reviewed, the plan job skipped on purpose —
+    # this was skipped too, although the gate had run and said "agent", and publish died on a
+    # verdict nobody was scheduled to write (growth-os #20, #55, #71).
+    if: >-
+      always() && needs.prepare.outputs.mode != 'skip' && needs.gate.result == 'success'
+      && needs.gate.outputs.gate == 'agent' && needs.gate.outputs.stopped != 'true'
     runs-on: ubuntu-latest
     # Above its one agent cap and setup, for the same reason as the plan job's.
     timeout-minutes: 70
@@ -794,9 +816,19 @@ jobs:
         run: |
           if [ -f _agent/plan-review.json ]; then cp _agent/plan-review.json plan-review.json; fi
 
+      # The gate sent this plan to the agent reviewer, and no verdict came back: said by name, not
+      # found twenty seconds later as a missing file. Never posted unreviewed — that is the hole
+      # the reviewer exists to close.
+      - name: The review the gate required did not run
+        if: needs.gate.outputs.gate == 'agent' && needs.reviewer.result != 'success'
+        env: { RESULT: "${{ needs.reviewer.result }}" }
+        run: |
+          echo "::error::the gate sent this plan to the plan reviewer and the reviewer job did not succeed (result: $RESULT) — nothing is posted unreviewed"
+          exit 1
+
       - name: Apply the plan review
         id: review
-        if: needs.gate.outputs.gate == 'agent'
+        if: needs.gate.outputs.gate == 'agent' && needs.reviewer.result == 'success'
         run: node .sdlc/bin/apply-plan-review.mjs
 
       # NOT for a rejected plan. This step posts the work order and starts the implementer, and
