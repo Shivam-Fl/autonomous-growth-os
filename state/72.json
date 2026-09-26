@@ -177,6 +177,14 @@
       "attempt": 1,
       "at": "2026-09-26T02:46:38.252Z",
       "digest": "The plan stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "qa",
+      "error_signature": "a4e5722de209d6eb",
+      "error_type": "unknown",
+      "attempt": 1,
+      "at": "2026-09-26T07:55:17.411Z",
+      "digest": "The qa stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [],
