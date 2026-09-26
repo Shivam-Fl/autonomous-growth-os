@@ -351,10 +351,21 @@ test('BUG-12: every served page declares an icon that the asset route answers', 
     for (const state of STATES) {
       const where = `${route}?state=${state}`;
       const html = await renderPage(route, { repositories: freshRepos(), override: state });
+      // Two attributes, each matched on its own rather than as one literal
+      // start tag: attribute order in a tag is not significant, so pinning the
+      // whole tag would go red on a reorder that breaks nothing — the same
+      // shape this ticket exists to close, in its own new test. The PATH is
+      // still pinned, because a renamed asset is a real change and a
+      // declaration that does not resolve is the defect.
       assert.match(
         html,
-        /<link rel="icon" href="\/assets\/favicon\.svg" type="image\/svg\+xml">/,
+        /<link\b[^>]*\brel="icon"/,
         `${where}: the head declares the icon, or the browser asks for /favicon.ico and logs the 404`,
+      );
+      assert.match(
+        html,
+        /<link\b[^>]*\bhref="\/assets\/favicon\.svg"/,
+        `${where}: ...and it points at the asset the route below serves`,
       );
     }
   }
@@ -3518,27 +3529,61 @@ function probeVerdictOf(sheetText) {
 // guard is now held to the row's expected value as well as the probe, which it
 // never was: a row may no longer carry an expected value only one of the two
 // can produce.
-function disagreementsIn({ extra, expected, guard, probe }) {
-  const against = (side, actual) => (JSON.stringify(actual) === JSON.stringify(expected)
+//
+// A side's held value is the row's own `expected` unless the row names a
+// different one for that side, which is how the ONE case the two
+// implementations are built to answer differently is carried as an expectation
+// rather than reported as drift — see the !important row below.
+function disagreementsIn({ extra, expected, guard, probe, guardExpected = expected, probeExpected = expected }) {
+  const against = (side, actual, held) => (JSON.stringify(actual) === JSON.stringify(held)
     ? null
-    : `${side} disagrees about '${extra}' — it returns ${JSON.stringify(actual)} where the row is held at ${JSON.stringify(expected)}`);
-  return [against('the guard', guard), against('the probe', probe)].filter((one) => one !== null);
+    : { side, extra, actual, expected: held });
+  return [
+    against('the guard', guard, guardExpected),
+    against('the probe', probe, probeExpected),
+  ].filter((one) => one !== null);
 }
+
+// Data rather than a sentence, because two assertion sites below both have to
+// read this and one of them has to COMPARE it: a message carrying the row's own
+// text makes the BUG-11 test a second copy of the table, and respacing a row
+// then turns it red for a reason that has nothing to do with the probe. The
+// sentence is formatted here instead, at the two sites that want to read it.
+const asSentence = (one) => `${one.side} disagrees about '${one.extra}' — it returns ${JSON.stringify(one.actual)} where it is held at ${JSON.stringify(one.expected)}`;
+
+// What one side of a row is held at — the row's `expected`, or the verdict that
+// row names for that side.
+const heldAt = (row, side) => row[3]?.[side] ?? row[1];
 
 // BUG-10, the half a green case cannot buy on its own. Every case below that
 // went green with the fix was a case the PROBE went red on, and a fix that
 // answered it by deleting the probe would have gone green identically — the
 // probe's whole claim is exhaustive, so nothing in the guard's verdict would
-// have said anything was missing. So the two are held to each other, on the
-// shipped sheet, for the same appended rule: the verdict the guard must return
-// AND the verdict the probe must return, and the two have to agree — silent
-// together or reporting together.
+// have said anything was missing. So the two are held to each other, for the
+// same appended rule: the verdict the guard must return AND the verdict the
+// probe must return, and the two have to agree — silent together or reporting
+// together.
 //
-// The thirteen no-op spellings are the ones the report names, and each of them
-// is a rule the browser leaves the heading at 22.4px / 28px / 0px on. The last
-// two are real overrides, which is what stops the table from being satisfied by
-// a probe that had stopped asking about the h1 at all: agreeing on nothing is
-// agreement too, and only the two red rows distinguish it from agreement.
+// ON THE FIXTURE, not on the shipped sheet, and the reason is the same one every
+// other case in this file that asserts what the guard REPORTS is asserted on
+// (see the `sheetWith` comment in the hook above): what a row's verdict is
+// depends on the row's rule and nothing else. Pinned to src/web/styles.css it
+// also depended on the REST of that file, and AC-21's own how_to_verify — append
+// '#main h1 { font-size: 1.4rem !important; }' and the suite must stay green —
+// then turned two rows red. The !important is a real competitor for the sibling
+// red row: the guard correctly stops reporting the plain override that loses to
+// it, the probe has no importance term and still reports, and the old union hid
+// it because the probe alone satisfied the row. The shipped stylesheet is held
+// clean by the test above, which is the one place that reads the live file, and
+// a row cannot go stale when a file nobody here edits changes.
+//
+// The fourteen no-op spellings are the ones the report names, and each of them
+// is a rule the browser leaves the heading at 22.4px / 28px / 0px on. Between
+// them and the two real overrides sits the one row the two sides are MEANT to
+// differ on. The last two are real overrides, which is what stops the table
+// from being satisfied by a probe that had stopped asking about the h1 at all:
+// agreeing on nothing is agreement too, and only the rows a silent probe cannot
+// satisfy distinguish it from agreement.
 const BUG_10_ROWS = [
   // The no-op spellings. A restatement of a value the h1 is already held at
   // moves nothing, in one of the spellings the group is written in, and the
@@ -3550,8 +3595,26 @@ const BUG_10_ROWS = [
   ['#main h1 { margin: 0; }', [], 'the margin spelling, where the group is held at a list rather than one value'],
   ['#main h1 { margin-top: 0; }', [], 'a longhand of the same property, so the same no-op'],
   ['#main h1 { margin-block-start: 0; }', [], 'and the logical spelling of it, which is the same property and was reported as though it were not'],
-  ['#main h1 { font-size: 1.4rem !important; }', [], 'importance is the one thing the comparison ignores, because the value settles the same either way'],
-  ['#main h1 { line-height: 1.25 !important; }', [], 'and the same for the group where the cascade keeps the !important declaration itself'],
+  // The two rows importance does NOT decide, and their silence is the point
+  // they need to be read for. The guard ranks !important above every normal
+  // declaration, so the declaration it keeps here is the one appended; the probe
+  // has no importance term at all. Both are silent, but for different reasons —
+  // the guard's is the cascade, the probe's is the value — and the reason the
+  // row is green is that the value settles the same either way, not that the
+  // comparison ignores importance. It does not, and the next row says so.
+  ['#main h1 { font-size: 1.4rem !important; }', [], 'importance decides which declaration the guard keeps, and neither side reports — because the one it keeps restates the value the h1 is already held at'],
+  ['#main h1 { line-height: 1.25 !important; }', [], 'and the same in the other group, the second of the two rows where importance changes nothing'],
+  // ...and the row where it changes everything, which is the one case the two
+  // implementations answer differently ON PURPOSE and no single `expected` can
+  // hold. `beats()` compares layer, specificity and index and never reads
+  // importance, so a probe cannot know that the !important below wins; the
+  // guard ranks it and correctly stops reporting an override the browser does
+  // not apply (measured: the h1 still reads 22.4px on this sheet). So the row
+  // carries each side's own verdict and the divergence is an expectation. It
+  // is here because the shape could not express it, which is the same gap: a
+  // table that reports a known, intended difference as drift teaches the next
+  // person to "fix" one of the two implementations.
+  ['#main h1 { font-size: 1.4rem !important; }\n#main h1 { font-size: 2.4rem; }', ['#main h1 font-size'], 'an !important restatement outranks a real override, so the guard is silent and the probe reports — held as the divergence it is, not as drift', { guard: [] }],
   // The removals on the root, in every property they can be written in and
   // every shape they can be wrapped in. A removal cannot set the root's
   // font-size, and the shipped root is already at the user-agent default the
@@ -3567,47 +3630,82 @@ const BUG_10_ROWS = [
 ];
 
 test('BUG-10: the guard and the shipped-sheet probe answer the same question about the same rule', () => {
-  for (const [extra, expected, claim] of BUG_10_ROWS) {
-    const sheetText = `${css}\n${extra}\n`;
+  for (const row of BUG_10_ROWS) {
+    const [extra, expected, claim] = row;
+    const sheetText = sheetWith(extra);
+    const disagreements = disagreementsIn({
+      extra,
+      expected,
+      guardExpected: heldAt(row, 'guard'),
+      probeExpected: heldAt(row, 'probe'),
+      guard: guardVerdictOf(sheetText),
+      probe: probeVerdictOf(sheetText),
+    });
     assert.deepEqual(
-      disagreementsIn({ extra, expected, guard: guardVerdictOf(sheetText), probe: probeVerdictOf(sheetText) }),
+      disagreements,
       [],
       `the guard and the probe EACH return this row's own verdict for '${extra}' — ${claim}. `
-      + 'A disagreement here is the drift this table exists to catch, whichever of the two is wrong, and it names the side: '
+      + (disagreements.length ? disagreements.map(asSentence).join('; ') : 'No side disagreed.')
+      + ' A disagreement here is the drift this table exists to catch, whichever of the two is wrong, and it names the side: '
       + 'a merged list would be satisfied whenever either one is right, so a probe that had stopped asking about the h1 at all '
       + 'would be absorbed into the guard\'s correct answer rather than named',
     );
   }
 });
 
-// BUG-11. The thirteen green rows above are green because both sides are silent
-// on them, and nothing in them can tell a silent probe from an honest one. The
-// rows were already the rows that catch it; what did not exist was a comparison
-// required to FAIL, so the fix here is not more cases in the list — the list is
-// not what failed — it is handing the comparison a broken input and watching it
-// notice. It is the same instinct as the pinning test above, which reads this
+// BUG-11. The green rows above are green because both sides are silent on them,
+// and nothing in them can tell a silent probe from an honest one. The rows were
+// already the rows that catch it; what did not exist was a comparison required
+// to FAIL, so the fix here is not more cases in the list — the list is not what
+// failed — it is handing the comparison a broken input and watching it notice.
+// It is the same instinct as the pinning test above, which reads this
 // file's own source to catch a deleted call site, applied to a predicate rather
 // than to a string: a neutered predicate is a failing assertion here, where a
 // deleted call site is an absence nobody notices.
 //
-// The EXPECTED side below is written out rather than derived from the probe, so
-// a stub updated carelessly shows up as a changed expectation instead of as
-// silence.
+// The EXPECTED side below is read out of the table rather than derived from the
+// probe and rather than written down again, so a stub updated carelessly shows
+// up as a changed expectation instead of as silence — and so respacing a row's
+// text does not turn this test red for a reason that has nothing to do with the
+// probe. It is the rows the table holds the probe at reporting something for,
+// which is three now that the table carries the importance divergence, and each
+// one is named with the side that failed to say it.
+//
+// The COUNT is pinned alongside, and it is the half that keeps the third door
+// shut. An expectation read out of the table moves with the table, so deleting a
+// row would otherwise delete the demand along with it and leave this green — the
+// neutered probe and the missing red rows together are the wrong fix AC-21
+// forbids, and each of them alone is caught. Only a number stated here is
+// independent of the table, and it is three because the two real overrides and
+// the divergence are the rows a silent probe cannot satisfy.
 test('BUG-11: the agreement table is a comparison that can fail', () => {
+  const mustReport = BUG_10_ROWS.filter((row) => heldAt(row, 'probe').length > 0);
+  const named = BUG_10_ROWS.flatMap((row) => disagreementsIn({
+    extra: row[0],
+    expected: row[1],
+    guardExpected: heldAt(row, 'guard'),
+    probeExpected: heldAt(row, 'probe'),
+    guard: guardVerdictOf(sheetWith(row[0])),
+    probe: [], // a probe that reports nothing, ever — the mutation AC-23 names
+  }));
+
+  assert.equal(
+    mustReport.length,
+    3,
+    'the table still holds the probe at reporting something for exactly three rows — the two real overrides and the importance '
+    + 'divergence. Delete one and the assertion below it is satisfied by a table with no red half left, which is the wrong fix '
+    + 'AC-21 forbids; add one legitimately and this number is what moves',
+  );
   assert.deepEqual(
-    BUG_10_ROWS.flatMap(([extra, expected]) => disagreementsIn({
-      extra,
-      expected,
-      guard: guardVerdictOf(`${css}\n${extra}\n`),
-      probe: [], // a probe that reports nothing, ever — the mutation AC-23 names
-    })),
-    [
-      `the probe disagrees about '#main h1 { font-size: 2.4rem; }' — it returns [] where the row is held at ${JSON.stringify(['#main h1 font-size'])}`,
-      `the probe disagrees about '#main h1 { line-height: 2; }' — it returns [] where the row is held at ${JSON.stringify(['#main h1 line-height'])}`,
-    ],
-    'a probe that reports nothing is named on exactly the two real-override rows and no other — so the thirteen green rows are '
-    + 'green because BOTH sides are silent rather than because one side is, and the green half cannot be bought by deleting the '
-    + 'probe. Collapsing this comparison back into a union, or deleting either red row, turns this test red',
+    // The side, what it returned and what it is held at — the row's own TEXT is
+    // left out of the comparison and carried in the message instead, so editing
+    // a rule's spacing cannot turn this red while editing what it means can.
+    named.map(({ side, actual, expected: held }) => ({ side, actual, expected: held })),
+    mustReport.map((row) => ({ side: 'the probe', actual: [], expected: heldAt(row, 'probe') })),
+    'a probe that reports nothing is named on exactly the rows the table holds it at reporting something for, and on no other — so '
+    + 'the green rows are green because BOTH sides are silent rather than because one side is, and the green half cannot be bought '
+    + 'by deleting the probe. Collapsing this comparison back into a union, or neutering probeStylesheet, turns this test red. '
+    + (named.length ? `Named: ${named.map(asSentence).join('; ')}` : 'Nothing was named.'),
   );
 });
 
