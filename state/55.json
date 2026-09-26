@@ -275,6 +275,13 @@
         "ac-3"
       ],
       "head": "81129bc97f4308c55681a071641b2206be792eb5"
+    },
+    {
+      "criteria": [
+        "ac-11",
+        "ac-8"
+      ],
+      "head": "1f27efb9f51d96280de5f3ee6debecde3e966ed5"
     }
   ],
   "review_root_caused": [],
