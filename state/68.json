@@ -172,7 +172,14 @@
       }
     ]
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/api/routes.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "src/web/pages.js",
+    "test/api/events.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
