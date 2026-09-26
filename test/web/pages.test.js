@@ -1619,6 +1619,22 @@ test('the production h1 assertion goes through H1_HOOK, not an inline regex', ()
   assert.equal(lines.length, 1, 'the anchor is found exactly once, so it cannot match a second line');
   assert.match(callSite, /assert\.match\(html, H1_HOOK,/, 'the call site uses the pinned constant');
   assert.doesNotMatch(callSite, /class="page-title"/, 'the call site inlines no class-coupled regex');
+  // The same treatment for the other assertion that had no pin. 25 shells render
+  // 25 times, and 'exactly one h1' is the assertion that says each of them has
+  // a page heading at all; deleting it cost nothing and the suite stayed green,
+  // so the suite could not tell a page with no h1 from one with the right
+  // class on it. It is a second anchor and neither protects the other: this one
+  // finds the assertion by its own text, and the one above finds the hook.
+  // Anchored on the assertion's own text rather than on its message, so the
+  // prose in this file and the test's own name above cannot match it.
+  const counted = 'levels.filter((level) => level === 1)' + '.length, 1,';
+  const countLines = source.split('\n').filter((line) => line.includes(counted));
+  assert.equal(countLines.length, 1, 'the counting assertion is found exactly once, so it cannot match a second line');
+  assert.match(
+    countLines[0],
+    /assert\.equal\(levels\.filter\(\(level\) => level === 1\)\.length, 1,/,
+    'the 25-shell test still counts the h1s of every shell — the assertion itself, not a line that merely mentions one',
+  );
 });
 
 // The class, read off the rendered h1 rather than hard-coded, so the two ends
@@ -1769,8 +1785,8 @@ test('the rule the page h1 carries still holds the declarations the page title d
   // for. The two are read from one table so they cannot drift apart.
   for (const [group, held] of Object.entries(PAGE_TITLE_HELD)) {
     assert.ok(
-      new RegExp(`${held.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*;`).test(rule[1]),
-      `the class rule declares ${held}, the value the page h1's ${group} is held at`,
+      held.some((text) => new RegExp(`${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*;`).test(rule[1])),
+      `the class rule declares one of ${held.join(', ')}, the value the page h1's ${group} is held at`,
     );
   }
 });
@@ -1818,14 +1834,15 @@ test('the rule the page h1 carries still holds the declarations the page title d
 //   carry and is a proof of non-match under ground (a), while the root, having
 //   no data-testid at all, is a proof of non-match under ground (b).
 //
-// One limit is stated rather than claimed away: only @media and @supports are
-// lifted into the rule list, so a block inside any OTHER at-rule — @layer,
-// @container, @scope — is stepped over whole and is invisible to both grounds.
-// That is a silent pass, and it is not a direction the argument above covers,
-// so it is named here. The shipped sheet uses neither, and @layer in particular
-// carries cascade semantics of its own (an unlayered rule outranks a layered
-// one) that modelling it properly is a design question rather than a line: it
-// is a follow-up, and the next @container to land is what should reopen it.
+// One limit of that claim is stated rather than claimed away. The block
+// at-rules are read rather than skipped whole — BUG-5 was exactly that skip,
+// and it made appending '@layer base { html { font-size: 20px } }' to the
+// shipped sheet a GREEN suite on a heading the browser renders at 28px — but
+// each is decided by a rule of its own, and the table with it is at readStylesheet
+// below. An at-rule the reader has never heard of is read, not skipped, because
+// a rule it cannot place is a rule it cannot report, and that is the silent
+// pass rather than the false alarm. The limits that remain are inside those
+// rules and are named where they are made.
 //
 // It also compares the VALUE the browser settles on, not only the declaration
 // that wins. The declaration test above asserts the class rule contains three
@@ -1865,11 +1882,104 @@ const PAGE_TITLE_PROPERTIES = [
 // declaration test and the cascade test read this one table; a change to a
 // value the page title is held at is a change both ends see, and it is the
 // same contract AC-2 already imposes on the class rule's own values.
+//
+// Each group is a LIST of equivalent texts rather than one. The guard reports
+// a rule that would CHANGE the value the page title is held at, and
+// '#main h1 { margin-top: 0 }' changes nothing: margin-top and margin-block-
+// start are the same property as the margin the class rule writes, so they are
+// restatements of it. Reading one spelling per group reported all three
+// (measured: 22.4px / 28px / 0px for every one), and the message it wrote was
+// self-refuting — "the page h1's font-size would be font-size: 1.4rem instead
+// of font-size: 1.4rem" (AC-18). The list is the group, and the first entry is
+// the spelling the messages name.
 const PAGE_TITLE_HELD = {
-  'font-size': 'font-size: 1.4rem',
-  'line-height': 'line-height: 1.25',
-  'margin-top': 'margin: 0',
+  'font-size': ['font-size: 1.4rem'],
+  'line-height': ['line-height: 1.25'],
+  'margin-top': ['margin: 0', 'margin-top: 0', 'margin-block-start: 0'],
 };
+
+// A shorthand is a declaration that sets MORE than the group it is filed
+// under, so it is never a restatement no matter what it is written as.
+// '#main h1 { font: 700 1.4rem system-ui }' restates the held font-size
+// exactly and still has to be reported: the shorthand's size component is read
+// as 'inherit' against the line-height, which is why Chromium settles that
+// heading at 22.4px with lineHeight 'normal' rather than 28px. '#main h1 { all:
+// unset }' takes it to 16px/24px/0px. Silencing either would be a false pass,
+// and the safe way to widen what is silent is not to widen it.
+const GROUP_SHORTHANDS = {
+  'font-size': ['font', 'all'],
+  'line-height': ['font', 'all'],
+  'margin-top': ['all'],
+};
+
+// The declaration as the browser reads it, with the importance stripped:
+// 'font-size: 1.4rem' and 'font-size: 1.4rem !important' are the same value,
+// and which one was written is not a difference the page can render.
+const declarationText = (entry) => `${entry.property}: ${entry.value.replace(/!\s*important\s*$/i, '').trim()}`;
+
+// Does this declaration put the group at a value the page title already is at?
+// The value filter, asked of the declaration the cascade KEEPS rather than of
+// any declaration in the rule, and asked of that one alone: '#main h1 { margin:
+// 0; margin-top: 24px }' keeps the longhand and is still reported.
+//
+// A shorthand is never a restatement, whatever its value reads as. 'all: revert'
+// and 'all: unset' are the same three words with opposite effects, and the only
+// honest answer for a shorthand the guard cannot expand is to report it — the
+// false alarm, which the contract permits, in place of a false pass.
+function restates(declaration, group) {
+  if (declaration === null) return false;
+  if (GROUP_SHORTHANDS[group].includes(declaration.property)) return false;
+  return PAGE_TITLE_HELD[group].includes(declarationText(declaration));
+}
+
+// A shorthand is reported under the group it moves, so a message names what the
+// declaration sets rather than quoting the shorthand as though it were the
+// longhand: 'font: 700 2.4rem system-ui' does not say the h1's font-size is
+// '700 2.4rem system-ui', it says the font shorthand is what the font-size
+// would come from.
+const setsProperty = (entry, group) => (entry.property === group
+  ? `sets ${entry.property}: ${entry.value}`
+  : `sets ${entry.property}, which sets the h1's ${group}, to ${entry.value}`);
+
+const declaredValue = (entry, group) => (entry.property === group
+  ? entry.value
+  : `whatever the ${entry.property} shorthand sets`);
+
+// The tier a declaration competes in: the two things decided before any weight
+// is read, and '@starting-style' is decided FIRST. A starting style is ranked
+// below every other declaration in its origin, importance included — measured:
+// '@starting-style { h1 { font-size: 2.4rem !important } }' leaves the h1 at
+// 22.4px, because the class rule's own plain 1.4rem is what the browser keeps.
+// Importance is the second question, in author origin: an !important declaration
+// beats every normal one whatever the rest of its weight.
+const tier = (entry) => {
+  if (entry.startingStyle) return entry.important ? 0 : -1;
+  return entry.important ? 2 : 1;
+};
+
+// The declaration the cascade keeps among `entries` — all written under
+// `branch` at `index`, unless each entry already carries its own, which is what
+// the whole-sheet pool below does: its entries come from different rules, so
+// there is no single branch to write on them. Narrowed to the heaviest tier,
+// then by layer rank, then specificity, then source order, which is the order
+// the browser settles them in. It is the same question for the class rule's own
+// pool and for the sheet's, so it is asked by one function: a restatement is
+// only a restatement if the declaration the browser would keep is the held one,
+// which is not the same as any declaration in the rule being it.
+function cascadingWinner(entries, branch, index) {
+  const top = Math.max(...entries.map(tier));
+  let winner = null;
+  let winnerAt = -1;
+  for (const [at, entry] of entries.entries()) {
+    if (tier(entry) !== top) continue;
+    const offered = entry.branch === undefined ? { ...entry, branch, index } : entry;
+    if (winner === null || keptInPool(offered, at, winner, winnerAt)) {
+      winner = offered;
+      winnerAt = at;
+    }
+  }
+  return winner;
+}
 
 // ONE scanner for the whole guard, and every cut of a selector runs on it —
 // the matcher and the specificity function must not tokenise a selector two
@@ -1891,27 +2001,122 @@ const PAGE_TITLE_HELD = {
 // selector it is written in, and cutting there hands the matcher half a
 // selector that was never in the stylesheet — BUG-4's failure one character
 // over, and the guard would report the half it invented.
+//
+// The escape case is the same disagreement one character earlier. A backslash
+// was not a character any of this could read, so it was consumed as an unknown
+// token and the fragment after it was re-read as a type selector of its own —
+// 'ain' in '#\6d ain h1' became a type that no ancestor satisfies, which is a
+// confident FALSE, and a proof fabricated out of a decode failure (BUG-8). The
+// fix is not a second place to special-case a backslash: the splitter and the
+// tokenizer have to agree about where one ends, so both run escapeLength, and
+// the raw characters are carried through for the tokenizer to decode.
 function splitOutside(text, isBoundary) {
   const parts = [];
   let current = '';
   let depth = 0;
   let quote = null;
+  let at = 0;
 
-  for (const character of text) {
+  while (at < text.length) {
+    const character = text[at];
     if (quote !== null) {
       if (character === quote) quote = null;
+    } else if (character === '\\') {
+      // One unit of text, and the whitespace that terminates a hex escape
+      // belongs to the escape rather than to the boundary scan below. That is
+      // the whole asymmetry of BUG-8: in '#mai\6e h1' the escape eats the
+      // space, so there is nothing to split on and the selector is the single
+      // id '#mainh1'.
+      const length = escapeLength(text, at);
+      current += text.slice(at, at + length);
+      at += length;
+      continue;
     } else if (character === '"' || character === "'") quote = character;
     else if (character === '[' || character === '(') depth += 1;
     else if (character === ']' || character === ')') depth -= 1;
     else if (depth === 0 && isBoundary(character)) {
       parts.push({ text: current, boundary: character });
       current = '';
+      at += 1;
       continue;
     }
     current += character;
+    at += 1;
   }
   parts.push({ text: current, boundary: null });
   return parts;
+}
+
+// ONE reader for every backslash in a selector, and the reason there is only
+// one is the contract above rather than tidiness: a rule the guard cannot
+// decode has to come back UNDECIDED, and it can only come back undecided if
+// every place that walks selector text agrees on where an escape ends. Where
+// they disagreed, the disagreement was silent — the splitter stopped at the
+// space, the tokenizer read what came after the backslash as a type selector,
+// and the browser moved the heading while the suite said it could not.
+//
+// CSS gives an escape two shapes. A backslash and one to six hex digits is
+// that code point, and ONE following whitespace terminates it and is CONSUMED.
+// A backslash and any other character is that character. Both the splitter
+// (splitOutside) and the tokenizer (splitSimple) run this, and so does the
+// attribute-body walk, so the terminator is not a boundary anywhere.
+function escapeLength(text, index) {
+  if (text[index] !== '\\') return 0;
+  let at = index + 1;
+  let digits = 0;
+  while (digits < 6 && at < text.length && /[0-9a-fA-F]/.test(text[at])) {
+    at += 1;
+    digits += 1;
+  }
+  if (digits > 0) {
+    // The terminator is one whitespace character and it belongs to the escape.
+    if (at < text.length && /\s/.test(text[at])) at += 1;
+    return at - index;
+  }
+  return at < text.length ? 2 : 1;
+}
+
+function decodeEscape(text, index) {
+  let at = index + 1;
+  let digits = '';
+  while (digits.length < 6 && at < text.length && /[0-9a-fA-F]/.test(text[at])) {
+    digits += text[at];
+    at += 1;
+  }
+  // '\' and then anything that is not a hex digit stands for that character.
+  if (digits === '') return at < text.length ? text[at] : '';
+  // CSS maps a code point outside the Unicode range — and zero — to the
+  // replacement character, and String.fromCodePoint throws on the first, so
+  // this is the one place a malformed escape could have become a build break.
+  const code = Number.parseInt(digits, 16);
+  return code === 0 || code > 0x10ffff ? '�' : String.fromCodePoint(code);
+}
+
+// An identifier at `start`, escapes decoded rather than guessed at. Null when
+// there is no name there, which every caller answers with an 'unknown' token
+// — the answer the guard has to give for text it cannot read, and never a
+// proof. A name may not begin with a digit, which is what keeps '1.4rem' out
+// of a type selector; a type selector may not begin with '-' or '_' either, so
+// the id/class and type reads ask for different opening sets.
+const NAME_START = /[A-Za-z_\-\u0080-\uffff]/;
+const NAME_REST = /[A-Za-z0-9_\-\u0080-\uffff]/;
+const TYPE_START = /[A-Za-z\u0080-\uffff]/;
+
+function readName(text, start, opener = NAME_START) {
+  let at = start;
+  let name = '';
+  while (at < text.length) {
+    const escaped = escapeLength(text, at);
+    if (escaped > 0) {
+      name += decodeEscape(text, at);
+      at += escaped;
+      continue;
+    }
+    if (!(at === start ? opener : NAME_REST).test(text[at])) break;
+    name += text[at];
+    at += 1;
+  }
+  return at === start ? null : { name, length: at - start };
 }
 
 const isCombinator = (character) => character === '>' || character === '+' || character === '~';
@@ -1956,12 +2161,16 @@ function splitTopLevelCommas(selector) {
 // The text of an attribute selector's body — everything up to the ']' — found
 // by tracking the quote rather than by the first bracket, since a quoted value
 // may hold both a space and a bracket. Returns null when the ']' never comes,
-// which the caller reports as an unreadable token rather than guessing.
+// which the caller reports as an unreadable token rather than guessing. The
+// escape scanner runs here too: an escaped ']' is a character in the value,
+// and stopping at it would cut a selector the stylesheet does not contain.
 function readAttributeBody(text) {
   let quote = null;
   for (let index = 0; index < text.length; index += 1) {
     const character = text[index];
-    if (quote !== null) {
+    if (character === '\\') {
+      index += escapeLength(text, index) - 1;
+    } else if (quote !== null) {
       if (character === quote) quote = null;
     } else if (character === '"' || character === "'") quote = character;
     else if (character === ']') return text.slice(0, index);
@@ -1969,7 +2178,28 @@ function readAttributeBody(text) {
   return null;
 }
 
-const ATTRIBUTE_SOURCE = /^\s*([^\s\]~^$*|=]+)\s*(?:(~=|\^=|\$=|\*=|\|=|=)\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]*)))?\s*$/;
+const ATTRIBUTE_SOURCE = /^\s*(~=|\^=|\$=|\*=|\|=|=)?\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]*))\s*$/;
+
+// An attribute selector's body, with its NAME read by the same scanner as
+// every other name rather than by a character class. 'h1[data\2d testid]' is
+// 'h1[data-testid]' — the hex escape consumes the space that terminates it —
+// and that is the same decode the id and class reads now do, which is why the
+// escaped attribute name moved the heading in Chromium (38.4px, measured) and
+// was previously invisible to the guard entirely. A name the scanner cannot
+// read is null here, and the caller makes an 'unknown' token of it: undecided,
+// never a proof.
+function parseAttribute(text) {
+  const leading = text.length - text.replace(/^\s+/, '').length;
+  const name = readName(text, leading);
+  if (name === null) return null;
+  const parsed = ATTRIBUTE_SOURCE.exec(text.slice(leading + name.length));
+  if (parsed === null) return null;
+  return {
+    attribute: name.name.toLowerCase(),
+    op: parsed[1] ?? null,
+    value: parsed[2] ?? parsed[3] ?? parsed[4] ?? null,
+  };
+}
 
 // One compound's simple selectors, read left to right, each carrying its own
 // source text so a token can be dropped (stripNarrowing) without re-rendering
@@ -1983,89 +2213,151 @@ function splitSimple(compound) {
   const tokens = [];
   let rest = compound;
 
-  const take = (kind, name, extra) => {
-    const source = rest.slice(0, name.length);
-    rest = rest.slice(name.length);
+  const take = (kind, name, length, extra = {}) => {
+    const source = rest.slice(0, length);
+    rest = rest.slice(length);
     tokens.push({ kind, source, name, ...extra });
   };
+  // A token the vocabulary cannot read is 'unknown', and its answer is null —
+  // undecided — in simpleMatches below. What must never happen is an
+  // UNDECODED FRAGMENT coming back as something readable, so the whole run of
+  // unreadable text is consumed here rather than re-read one character at a
+  // time. That is the difference between this and the version before it: a
+  // backslash used to be consumed as an unknown token and the 'ain' after it
+  // was then handed to the type branch, which no ancestor satisfies, which is
+  // a confident false. A decode failure had become a proof.
+  const unreadable = (length) => take('unknown', rest.slice(0, length), length);
 
   while (rest !== '') {
     if (rest.startsWith('::')) {
-      const name = /^[A-Za-z-]+/.exec(rest.slice(2))?.[0] ?? '';
-      take('pseudo-element', `::${name}`);
+      const name = readName(rest, 2);
+      if (name === null || name.name === '') unreadable(2);
+      else take('pseudo-element', `::${name.name}`, name.length + 2);
     } else if (rest.startsWith(':')) {
-      const name = /^[A-Za-z-]+/.exec(rest.slice(1))?.[0] ?? '';
+      const name = readName(rest, 1);
+      if (name === null || name.name === '') unreadable(1);
       // A functional pseudo-class takes its argument, which may itself hold
-      // brackets and quotes: ':not([data-x="a b"])' is one token.
-      if (rest[name.length + 1] === '(') {
-        let depth = 0;
-        let quote = null;
-        let end = name.length + 1;
-        for (; end < rest.length; end += 1) {
-          const character = rest[end];
-          if (quote !== null) {
-            if (character === quote) quote = null;
-          } else if (character === '"' || character === "'") quote = character;
-          else if (character === '(') depth += 1;
-          else if (character === ')') {
-            depth -= 1;
-            if (depth === 0) { end += 1; break; }
-          }
-        }
-        take('pseudo', rest.slice(0, end));
-      } else if (name !== '') take('pseudo', `:${name}`);
-      else take('unknown', rest[0]);
+      // brackets, quotes and escapes: ':not([data-x="a b"])' is one token.
+      else if (rest[name.length + 1] === '(') {
+        const end = functionalEnd(rest, name.length + 1);
+        take('pseudo', rest.slice(0, end), end);
+      } else take('pseudo', `:${name.name}`, name.length + 1);
     } else if (rest.startsWith('#') || rest.startsWith('.')) {
-      const name = /^[A-Za-z_-][\w-]*/.exec(rest.slice(1))?.[0];
-      if (name === undefined) take('unknown', rest[0]);
-      else take(rest[0] === '#' ? 'id' : 'class', rest[0] + name);
+      const name = readName(rest, 1);
+      if (name === null || name.name === '') unreadable(1);
+      else take(rest[0] === '#' ? 'id' : 'class', rest[0] + name.name, name.length + 1);
     } else if (rest.startsWith('[')) {
       const body = readAttributeBody(rest.slice(1));
-      const parsed = body === null ? null : ATTRIBUTE_SOURCE.exec(body);
+      const parsed = body === null ? null : parseAttribute(body);
       if (parsed === null) {
         // Consume the whole malformed selector rather than one character, so
         // an unreadable token cannot be re-read as a readable one.
-        const consumed = body === null ? rest.length : body.length + 2;
-        tokens.push({ kind: 'unknown', source: rest.slice(0, consumed), name: rest.slice(0, consumed) });
-        rest = rest.slice(consumed);
+        unreadable(body === null ? rest.length : body.length + 2);
       } else {
-        take('attribute', rest.slice(0, body.length + 2), {
-          attribute: parsed[1].toLowerCase(),
-          op: parsed[2] ?? null,
-          value: parsed[3] ?? parsed[4] ?? parsed[5] ?? null,
-        });
+        take('attribute', rest.slice(0, body.length + 2), body.length + 2, parsed);
       }
     } else if (rest.startsWith('*')) {
-      take('universal', '*');
+      take('universal', '*', 1);
     } else {
-      const name = /^[A-Za-z][\w-]*/.exec(rest)?.[0];
-      if (name === undefined) take('unknown', rest[0]);
-      else take('type', name);
+      const name = readName(rest, 0, TYPE_START);
+      if (name === null || name.name === '') unreadable(1);
+      else take('type', name.name, name.length);
     }
   }
 
   return tokens;
 }
 
-// Pseudo-classes narrow a match; they never widen one. :not(), :is() and :hover
-// all only remove or re-target elements, so the BASE is the whole of the
-// question a proof can be asked about — a base that provably matches nothing
-// proves the original matches nothing either. What is left is decided on, and
-// the narrowing itself is undecidable from static markup, so the answer that
-// comes back is "may match" rather than a guess: 'h1:hover' is reported at
-// rest, which is the noisy direction and the correct one.
+// Where a functional pseudo-class's argument ends, and the whole of its name.
+function functionalEnd(text, open) {
+  let depth = 0;
+  let quote = null;
+  for (let end = open; end < text.length; end += 1) {
+    const character = text[end];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    // An escaped ')' is a character in the argument, not the end of it, so
+    // the same scanner decides here.
+    else if (character === '\\') end += escapeLength(text, end) - 1;
+    else if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) return end + 1;
+    }
+  }
+  return text.length;
+}
+
+// Pseudo-classes are DECIDED here, not deleted.
 //
-// ':root' is the one that does not narrow: it NAMES an element rather than
-// qualifying one, and the chain knows the root exactly, so it is decided
-// against the element instead of stripped. Stripping it would empty the
-// compound, an empty compound matches anything, and ':root { font-size: 20px }'
-// would then be reported twice — once by each ground, the ground (a) report
-// claiming that ':root' outranks the class rule on an element it does not match.
-function stripNarrowing(compound) {
-  return splitSimple(compound)
-    .filter((token) => token.kind !== 'pseudo' || token.name === ':root')
-    .map((token) => token.source)
-    .join('');
+// The previous version of this function removed every pseudo-class token AND
+// ITS ARGUMENT and asked about whatever was left, on the theory that a
+// pseudo-class only ever narrows. That theory is right about the answer and
+// wrong about how to get it: ':where(h1)' has no base left at all, so the
+// compound became the empty string, and an empty compound matches anything —
+// the exact hazard the comment above it named for ':root' and left open. Every
+// report it produced asserted as fact a change Chromium does not make
+// (measured: 22.4px throughout), so this was a guaranteed false alarm on every
+// functional pseudo-class in the sheet (BUG-7).
+//
+// So the compound is asked about the element, one token at a time, and the
+// answer depends on which pseudo-class it is:
+//
+//   :root                 NAMES the root rather than qualifying it, and the
+//                         chain knows the root exactly, so it is decided.
+//   :not(sel)             the compound is false when any argument matches, and
+//                         true when every argument provably fails.
+//   :is(sel), :where(sel) the mirror image: true when any argument matches,
+//                         false when every one provably fails.
+//   :has(sel)             needs descendants an ancestor chain does not carry.
+//   :hover, :nth-child(2) undecidable from static markup.
+//
+// The last two are "may match", which is the reported direction and the one
+// the contract says to be wrong in: 'h1:hover' is reported at rest even though
+// this page does not move.
+//
+// The invariant that replaces the old comment is a shape, not a string: a
+// compound is a list of tokens and is never reduced to text at all, so there
+// is no empty compound for the matcher to answer vacuously true about. The one
+// way to get there would be to answer true for a compound nothing was decided
+// about, and the only answer a compound made entirely of undecidable tokens
+// gets is null. Both halves are asserted in the test below.
+function stripNarrowing(compound, chain, target) {
+  let undecided = false;
+  for (const token of splitSimple(compound)) {
+    const answer = simpleMatches(token, chain[target], chain, target);
+    if (answer === false) return false;
+    if (answer === null) undecided = true;
+  }
+  return undecided ? null : true;
+}
+
+// The decision for one functional pseudo-class, by the same rules. ':not()'
+// negates its argument and ':is()' and ':where()' do not, so the two are one
+// loop read either way round: any argument that matches settles it, and the
+// compound is only decided when every argument was decided.
+function pseudoMatches(token, element, chain, target) {
+  if (token.name === ':root') return element.isRoot === true;
+  const argument = pseudoArgument(token.name);
+  // Not functional at all: ':hover', ':focus-visible', ':first-child'. A
+  // pseudo-class is a state the served markup says nothing about.
+  if (argument === null) return null;
+  // ':has()' asks about descendants, and the chain stops at the h1.
+  if (token.name.startsWith(':has(')) return null;
+  let matched = false;
+  let undecided = false;
+  for (const selector of argument) {
+    const reached = branchReaches(selector, chain, target);
+    if (reached === true) matched = true;
+    else if (reached === null) undecided = true;
+  }
+  if (token.name.startsWith(':not(')) {
+    if (matched) return false;
+    return undecided ? null : true;
+  }
+  if (matched) return true;
+  return undecided ? null : false;
 }
 
 // Does an attribute selector hold for this element? A real VALUE comparison,
@@ -2093,7 +2385,7 @@ function attributeHolds(token, element) {
 // `false` may silence anything: false is a PROOF of non-match, true is a match,
 // and null is everything static markup cannot decide (a token the vocabulary
 // does not read). That asymmetry is the guard.
-function simpleMatches(token, element) {
+function simpleMatches(token, element, chain, target) {
   if (token.kind === 'universal') return true;
   if (token.kind === 'type') return token.name.toLowerCase() === element.tag;
   if (token.kind === 'id') return element.attrs.id === token.name.slice(1);
@@ -2102,21 +2394,23 @@ function simpleMatches(token, element) {
   // A pseudo-element styles a generated box, never the element itself, so a
   // compound carrying one cannot match the element.
   if (token.kind === 'pseudo-element') return false;
-  // The only pseudo-class that survives stripNarrowing, so the only one with a
-  // decidable answer: ':root' names the document root and nothing else.
-  if (token.kind === 'pseudo') return element.isRoot === true;
+  if (token.kind === 'pseudo') return pseudoMatches(token, element, chain, target);
+  // 'unknown': text the tokenizer could not decode. Null, and that is the
+  // whole point — it may not be false, because a false here is a proof the
+  // guard would then be standing on, and it is a proof out of a DECODE
+  // FAILURE rather than out of anything about the element.
   return null;
 }
 
-function compoundMatches(compound, element) {
-  const simple = splitSimple(stripNarrowing(compound));
-  let undecided = false;
-  for (const token of simple) {
-    const answer = simpleMatches(token, element);
-    if (answer === false) return false;
-    if (answer === null) undecided = true;
-  }
-  return undecided ? null : true;
+// The empty compound, asked anyway, is UNDECIDED and never a match. Nothing in
+// the guard produces one — the tokenizer keeps tokens and the matcher never
+// deletes them, which is what BUG-7 was — but 'the empty string matches
+// anything' is the hazard this whole function is built around, so the one input
+// that would prove the hazard is answered the only way the contract allows:
+// undecided, which reports rather than passes.
+function compoundMatches(compound, chain, target) {
+  if (compound.trim() === '') return null;
+  return stripNarrowing(compound, chain, target);
 }
 
 // THE one-directional answer, and the only place the guard decides whether a
@@ -2136,7 +2430,7 @@ function branchReaches(branch, chain, target) {
   // The rightmost compound is the part of the question the chain can answer
   // with no tree at all, so it decides first: 'h1 + p' is out because the page
   // h1 is not a p, which is a proof and needs no sibling information.
-  if (compoundMatches(parts[parts.length - 1].compound, chain[target]) === false) return false;
+  if (compoundMatches(parts[parts.length - 1].compound, chain, target) === false) return false;
 
   // '+' and '~' need siblings, which one ancestor chain does not carry.
   // Whatever got past the rightmost compound cannot be proved out on sibling
@@ -2151,7 +2445,7 @@ function branchReaches(branch, chain, target) {
       // actually carries the class, and the chain is html < body < main#main < h1.
       position -= 1;
       if (position < 0) return false;
-      if (compoundMatches(parts[index].compound, chain[position]) === false) return false;
+      if (compoundMatches(parts[index].compound, chain, position) === false) return false;
     } else {
       // A descendant may be any element to the left, so the proof is that
       // EVERY element to the left is excluded. `position` deliberately does not
@@ -2160,7 +2454,7 @@ function branchReaches(branch, chain, target) {
       // be wrong.
       const excluded = chain
         .slice(0, position)
-        .every((element) => compoundMatches(parts[index].compound, element) === false);
+        .every((element, at) => compoundMatches(parts[index].compound, chain, at) === false);
       if (excluded) return false;
     }
   }
@@ -2194,12 +2488,13 @@ const heavier = (one, other) => one[0] !== other[0]
   ? one[0] > other[0]
   : one[1] !== other[1] ? one[1] > other[1] : one[2] > other[2];
 
-// Which of two declarations the class rule wrote the cascade keeps: the one
-// under the more specific branch wins, and among equals the later one. 'at' is
-// the position in the pool, and the pool is built in document order across the
-// class rules and in body order inside each, so a pair written in ONE rule is
-// settled the way the browser settles it — 'margin-top: 24px' then 'margin: 0'
-// keeps the shorthand, which is the declaration PAGE_TITLE_HELD names.
+// Which of two declarations the class rule wrote the cascade keeps: layer rank
+// first, then the more specific branch, and among equals the later one. 'at'
+// is the position in the pool, and the pool is built in document order across
+// the class rules and in body order inside each, so a pair written in ONE rule
+// is settled the way the browser settles it — 'margin-top: 24px' then
+// 'margin: 0' keeps the shorthand, which is the declaration PAGE_TITLE_HELD
+// names.
 //
 // A specificity the vocabulary cannot compute is not a proof that the
 // declaration loses, so it is KEPT rather than passed over. That is the same
@@ -2207,6 +2502,8 @@ const heavier = (one, other) => one[0] !== other[0]
 // costs a report on a selector the guard cannot read, which is the direction
 // the contract accepts.
 function keptInPool(entry, at, keep, keepAt) {
+  if (layerOutranks(entry, keep)) return true;
+  if (layerOutranks(keep, entry)) return false;
   const one = specificityOf(entry.branch);
   const other = specificityOf(keep.branch);
   if (one === null) return true;
@@ -2225,6 +2522,14 @@ function compoundSpecificity(compound) {
       const argument = pseudoArgument(token.name);
       // ':where()' exists precisely to contribute nothing.
       if (argument === null) counts[1] += 1;
+      // ':has()' takes a RELATIVE selector list — 'h1:has(> span)' — and the
+      // guard has no tree to anchor one against. Reading the 'span' in it as a
+      // type selector of its own is the same fragment-re-read that made
+      // '#\6d ain' a proof, so the whole compound is unreadable instead. The
+      // caller reports an unreadable specificity rather than passing over it,
+      // which is why 'h1:has(> span)' is a report: the guard cannot decide it,
+      // and may-not-decide is the direction it is allowed to be wrong in.
+      else if (token.name.startsWith(':has(')) return null;
       else if (!token.name.startsWith(':where(')) {
         const heaviest = argument.reduce((top, part) => {
           const one = compoundSpecificity(part);
@@ -2248,26 +2553,131 @@ function pseudoArgument(name) {
   return open === -1 ? null : splitTopLevelCommas(name.slice(open + 1, name.length - 1));
 }
 
-// Greater specificity wins; equal specificity is decided by source order, so
-// the later declaration is the one the browser applies.
-function beats(candidate, baseline) {
-  for (let rank = 0; rank < 3; rank += 1) {
-    if (candidate.specificity[rank] !== baseline.specificity[rank]) {
-      return candidate.specificity[rank] > baseline.specificity[rank];
-    }
-  }
-  return candidate.index > baseline.index;
+// LAYER RANK joins the cascade, and it is the first comparison within an
+// origin. It is easy to get half right and each half fails in a direction the
+// other half does not, so all three parts are stated here rather than left to
+// the reader of the caller:
+//
+//   among NORMAL declarations  an UNLAYERED one beats every layer, whatever
+//                             its specificity — '@layer base { #main h1 { … } }'
+//                             at (1,0,1) loses to the unlayered class rule at
+//                             (0,1,0). That is layer order, not a specificity
+//                             error. (measured: 22.4px)
+//   among !IMPORTANT ones      a LAYERED declaration beats every unlayered one
+//                             — '@layer base { h1 { … !important } }' beats an
+//                             unlayered 'h1 { … !important }'. (measured:
+//                             22.4px)
+//   among layers               NORMAL is settled by the LATER-declared layer;
+//                             !IMPORTANT REVERSES THAT, so the EARLIER-declared
+//                             layer wins. (measured: '@layer base { 1.4rem
+//                             !important } @layer top { 2.4rem !important }'
+//                             reads 22.4px, and the same two rules in the other
+//                             order read 38.4px)
+//
+// The third part is the one a half-implementation gets backwards in exactly
+// the direction this guard is not allowed to be wrong in, so the test pins it
+// both ways round.
+function layerOutranks(one, other, important = one.important === true) {
+  // A starting style is beaten by any normal declaration for the same
+  // property, important or not, so it can never outrank the class rule. The
+  // rules are read rather than skipped, and the rank is what makes them lose.
+  if (one.startingStyle !== other.startingStyle) return !one.startingStyle;
+  if (one.layer === other.layer) return false;
+  if (one.layer === null) return !important;
+  if (other.layer === null) return important;
+  return important ? one.layer < other.layer : one.layer > other.layer;
 }
 
-// Flatten the stylesheet into rules in document order, lifting @media and
-// @supports contents up: a responsive override of the h1's font-size is a real
-// override at that width, and the failure message has to name the condition so
-// the reader knows when it bites. Keyframes describe an animation rather than a
-// rendered element, so they are skipped with their bodies.
-function readStylesheet(css) {
+// A declaration that is in no layer and carries no @starting-style: the state
+// the whole shipped sheet is in, and the one the existing callers that pass a
+// bare {specificity, index} mean.
+const UNLAYERED = { layer: null, startingStyle: false, important: false };
+
+// Greater layer rank wins, then greater specificity, then source order — so the
+// later declaration is the one the browser applies among equals.
+function beats(candidate, baseline) {
+  const one = { ...UNLAYERED, ...candidate };
+  const other = { ...UNLAYERED, ...baseline };
+  if (layerOutranks(one, other)) return true;
+  if (layerOutranks(other, one)) return false;
+  for (let rank = 0; rank < 3; rank += 1) {
+    if (one.specificity[rank] !== other.specificity[rank]) {
+      return one.specificity[rank] > other.specificity[rank];
+    }
+  }
+  return one.index > other.index;
+}
+
+// Block at-rules whose body describes something other than a rendered element:
+// an animation, a font, a page box, a registration. Nothing inside them is a
+// declaration on the page h1, so their bodies are stepped over whole. @keyframes
+// already was; the rest join it rather than each being rediscovered.
+const AT_RULES_WITHOUT_ELEMENTS = new Set([
+  'keyframes', 'font-face', 'page', 'property', 'counter-style', 'charset', 'import',
+]);
+
+// Flatten the stylesheet into rules in document order. A block at-rule is
+// walked to any depth, and every rule it produces carries the block it came
+// out of, because the previous reader recursed on /^@(media|supports)\b/ and
+// consumed every OTHER block whole: a rule inside '@layer base { … }' was never
+// produced, so it could be neither reported nor proved out, and a rule the
+// browser applies — '@layer base { html { font-size: 20px } }' moves the h1 to
+// 28px, measured — passed with the suite green. A reader that cannot read is a
+// SILENT PASS, which is the one direction the contract does not permit.
+//
+// Each at-rule is DECIDED rather than skipped, and each decision carries its
+// reason because a table read only on the reporting side is how the last three
+// bugs happened:
+//
+//   @media           descend. The MEDIUM is the only part of the condition that
+//                    can be decided here: a query naming 'print' or 'speech'
+//                    cannot match the page the guard is about, which is a page
+//                    rendered on screen. Every other condition — 'all',
+//                    'screen', a feature query, an empty one — is undecidable,
+//                    so the rules are read and the condition is named, which is
+//                    the existing behaviour for max-width and reduced-motion
+//                    and must not change. (AC-14 records the cost: a print-only
+//                    override of the page title is no longer reported.)
+//   @supports        descend, undecidable, condition named. Unchanged.
+//   @layer           descend, carrying the layer on every rule it produces.
+//                    This is the false pass above, and it also joins the
+//                    cascade — see layerOutranks.
+//   @starting-style  descend, but ranked below every normal declaration. A
+//                    starting style is beaten by any normal declaration for the
+//                    same property, important or not, so it can never outrank
+//                    the class rule: the rules are read and the rank is what
+//                    makes them lose. (measured: 22.4px even with !important)
+//   @container       descend, but silent unless the sheet DECLARES a container
+//                    anywhere. With none there is nothing for a query to match,
+//                    which is a proof; with one, the rules are read and the
+//                    query is named. (measured: 22.4px)
+//   @scope           descend, with the PRELUDE decided by the same reachability
+//                    function the matcher uses, against the same chain. A
+//                    prelude no element in the chain can match is a proof that
+//                    the block has no scoping root on this page; anything else,
+//                    including an absent prelude, is undecidable and read with
+//                    the scope named. (measured: '@scope (main)' moves the h1
+//                    to 38.4px because the h1 IS inside main; '@scope (.nope)'
+//                    reads 22.4px)
+//
+// Every row is pinned on BOTH sides in the tests, because a rule that is only
+// ever exercised on the silent side is a list of silences.
+function readStylesheet(css, chain) {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  // A container query needs a container to match, and a container comes from a
+  // declaration. The check is over the SHEET rather than over the query,
+  // because that is where the container has to come from — so the assumption is
+  // verified at run time rather than trusted. (risks: a container created at
+  // runtime by script rather than by CSS would make this wrong in the
+  // false-alarm direction. The app has no such script today.)
+  const hasContainer = /(?:^|[;{])[\s\S]{0,80}?\b(?:container|container-type|container-name)\s*:/.test(source);
+  // The layer list, declared once, in document order, as the reader meets it.
+  // A block with no name is the ANONYMOUS layer, and it is ordered here like
+  // any other — so it lands after every named layer declared before it.
+  const layers = [];
   const rules = [];
 
-  const walk = (text, atRules) => {
+  const walk = (text, context) => {
     let at = 0;
     while (at < text.length) {
       const brace = text.indexOf('{', at);
@@ -2288,16 +2698,51 @@ function readStylesheet(css) {
         end += 1;
       }
       const body = text.slice(brace + 1, end - 1);
-
-      if (/^@(media|supports)\b/i.test(selector)) walk(body, [...atRules, selector]);
-      else if (selector !== '' && !selector.startsWith('@')) {
-        rules.push({ selector, body, atRules, index: rules.length });
-      }
       at = end;
+
+      if (!selector.startsWith('@')) {
+        if (selector !== '') rules.push({ selector, body, index: rules.length, ...context });
+        continue;
+      }
+      const name = /^@([a-z-]+)/i.exec(selector)?.[1].toLowerCase() ?? '';
+      if (AT_RULES_WITHOUT_ELEMENTS.has(name)) continue;
+      const prelude = selector.slice(name.length + 1).trim();
+      const inside = { ...context, atRules: [...context.atRules, selector] };
+
+      if (name === 'media') {
+        // Every query, not just the first: '@media print, screen' still applies
+        // to the page the guard is about, and treating the whole block as
+        // printed would be a silent pass — the direction the contract forbids.
+        const queries = splitTopLevelCommas(prelude);
+        if (queries.length > 0 && queries.every((query) => /\b(?:print|speech)\b/.test(query))) continue;
+        walk(body, inside);
+      } else if (name === 'supports') {
+        walk(body, inside);
+      } else if (name === 'layer') {
+        walk(body, { ...inside, layer: layers.push(prelude) - 1 });
+      } else if (name === 'starting-style') {
+        walk(body, { ...inside, startingStyle: true });
+      } else if (name === 'container') {
+        if (hasContainer) walk(body, inside);
+      } else if (name === 'scope') {
+        // A scope root is the first element of the chain its prelude matches,
+        // and the block can only reach the page h1 when that element is the h1
+        // itself or one of its ancestors — so the question is whether the
+        // chain PROVES the prelude misses everywhere. Anything it cannot
+        // decide, including an absent prelude, is read.
+        const root = prelude.replace(/^\(([\s\S]*)\)$/, '$1').trim();
+        if (root !== '' && chain.every((element, at2) => branchReaches(root, chain, at2) === false)) continue;
+        walk(body, inside);
+      } else {
+        // An at-rule this reader has never heard of. Its body is read rather
+        // than skipped, because a rule the reader cannot place is a rule it
+        // cannot report — and that is the silent pass, not a false alarm.
+        walk(body, inside);
+      }
     }
   };
 
-  walk(css.replace(/\/\*[\s\S]*?\*\//g, ''), []);
+  walk(source, { atRules: [], layer: null, startingStyle: false });
   return rules;
 }
 
@@ -2328,15 +2773,32 @@ function branchesOf(rule) {
 //
 // The class has to be on the RIGHTMOST compound, because that is the compound
 // the branch matches the h1 BY: '.page-title h1' is a rule about a descendant
-// and is not this one. And a branch that also constrains an ancestor has to be
-// one the page h1 can be reached by, or it is a rule about some other element's
-// descendant that happens to end in the class.
+// and is not this one. And the branch has to REACH the h1, exactly as any
+// other predicate about an element does — the one reachability function, with
+// no bypass beside it.
+//
+// It used to answer true for any single-compound branch carrying the class
+// token, with no reachability question asked at all, which put two shapes on
+// the wrong side of everything downstream (BUG-6). '.page-title::after' was
+// taken to BE the class rule although a pseudo-element styles a generated box
+// and never the element, and '.page-title[data-x]' although the h1 carries no
+// data-x. Their declarations were pooled as the BASELINE and cross-checked
+// against the held value, so the value cross-check reported an override of a
+// rule the stylesheet does not have — on a build where nothing moves (measured:
+// 22.4px throughout). The same predicate reached from the other side is worse:
+// ground (a) skips a branch isClassBranch claims, so a real competitor sharing
+// a rule with one of them was invisible.
+//
+// The shortcut is deleted rather than amended. The multi-compound case is now
+// the same question, which is what AC-3's coordinated rename depends on: the
+// class rule has to stay findable when it is written 'h1.page-title' or
+// 'main > .page-title'.
 function isClassBranch(branch, cls, chain) {
   const parts = splitCompounds(branch);
   if (parts.length === 0) return false;
   const target = parts[parts.length - 1].compound;
   if (!splitSimple(target).some((token) => token.kind === 'class' && token.name === `.${cls}`)) return false;
-  return parts.length === 1 || branchReaches(branch, chain, chain.length - 1);
+  return branchReaches(branch, chain, chain.length - 1);
 }
 
 const classBranchesOf = (rule, cls, chain) => branchesOf(rule).filter((branch) => isClassBranch(branch, cls, chain));
@@ -2346,7 +2808,7 @@ const classBranchesOf = (rule, cls, chain) => branchesOf(rule).filter((branch) =
 // h1 and its ancestors; `cls` the class it carries, which is the baseline the
 // class-to-rule link names on both ends.
 function outrankingPageTitleDeclarations(css, cls, chain) {
-  const rules = readStylesheet(css);
+  const rules = readStylesheet(css, chain);
   const offenders = [];
   const pageTitle = chain.length - 1;
   // Every rule that gives the page h1 its typography, in document order. The
@@ -2384,7 +2846,14 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
     const namedBranch = classBranchesOf(classRules[classRules.length - 1], cls, chain)[0];
     const held = classRules.flatMap((rule) => declarations(rule.body)
       .filter((entry) => properties.includes(entry.property))
-      .map((entry) => ({ ...entry, index: rule.index, atRules: rule.atRules, branch: classBranchesOf(rule, cls, chain)[0] })));
+      .map((entry) => ({
+        ...entry,
+        index: rule.index,
+        atRules: rule.atRules,
+        branch: classBranchesOf(rule, cls, chain)[0],
+        layer: rule.layer,
+        startingStyle: rule.startingStyle,
+      })));
     if (held.length === 0) {
       offenders.push({
         selector: namedBranch,
@@ -2402,97 +2871,106 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
     // taking the last one regardless of importance let two .page-title rules
     // carrying the same 1.4rem flip the guard's answer on nothing but their
     // order, and reported an override the browser does not apply. So the pool is
-    // narrowed to the heaviest declarations first and the last of those wins.
-    const top = held.some((entry) => entry.important) ? held.filter((entry) => entry.important) : held;
-    // ...and the last of those only among declarations of equal SPECIFICITY
-    // too. The pool is in document order, so its last entry is the last one
-    // WRITTEN, which is not the same rule: 'h1.page-title { font-size: 2.4rem }'
-    // followed by '.page-title { font-size: 1.4rem; ... }' left the plain rule
-    // as the winner, so the value cross-check certified a 1.4rem the browser had
-    // already discarded and the suite passed green on a heading Chromium renders
-    // at 38.4px. Every entry carries the branch it was written under, so the
-    // weight the cascade would use is already in hand.
+    // narrowed to the heaviest declarations first, and then by layer rank, then
+    // by specificity, then by position — cascadingWinner asks that question
+    // once for this pool and once for every competitor below, so a restatement
+    // is judged by the same cascade on both sides.
+    //
+    // Layer rank is in there because the class rule's own winner is chosen by
+    // the same function as its competitors. Without it,
+    // '@layer base { .page-title { font-size: 2.4rem } }' made the cross-check
+    // report a 2.4rem the browser has already discarded: the unlayered shipped
+    // rule outranks a layered NORMAL declaration at any specificity, and the
+    // heading stays at 22.4px (measured).
     let winner = null;
     let winnerAt = -1;
-    for (const [at, entry] of top.entries()) {
+    for (const [at, entry] of held.entries()) {
       if (winner === null || keptInPool(entry, at, winner, winnerAt)) {
         winner = entry;
         winnerAt = at;
       }
     }
-    const classBranch = winner.branch;
-    const baseline = { specificity: specificityOf(classBranch), index: winner.index };
+    // The cascade is a property of the SHEET, not of one rule measured against
+    // another. Every declaration in this group that the browser would weigh for
+    // the page h1 goes into one pool, in document order, and the pool is asked
+    // once. Asking rule against rule instead reported overrides the browser does
+    // not apply: '#main h1 { font-size: 2.4rem }' outranks '.page-title' at
+    // (1,0,1) and so was reported, on a stylesheet where the class rule carries
+    // '.page-title { font-size: 1.4rem !important }' after it and the heading
+    // renders at 22.4px (measured). The one declaration the browser keeps is
+    // the one the report names, whichever rule wrote it.
+    const offers = [];
+    for (const rule of rules) {
+      for (const selector of branchesOf(rule)) {
+        // The class rule's own declarations are in the pool alongside everyone
+        // else's, in document order, because they decide the same question and
+        // the answer may not depend on which side of the comparison a rule
+        // happened to sit. A selector list may pair '.page-title' with a real
+        // competitor, and both branches of it are read: '#main h1, .page-title
+        // { font-size: 2.4rem }' is an override the browser applies at (1,0,1).
+        if (!branchReaches(selector, chain, pageTitle)) continue;
+        // A shorthand is in the pool under every group it sets, so 'font' and
+        // 'all' are weighed against the same longhands they would set.
+        for (const entry of declarations(rule.body)) {
+          if (!properties.includes(entry.property)) continue;
+          offers.push({
+            ...entry,
+            branch: selector,
+            index: rule.index,
+            atRules: rule.atRules,
+            layer: rule.layer,
+            startingStyle: rule.startingStyle,
+            baseline: classIndexes.has(rule.index) && isClassBranch(selector, cls, chain),
+          });
+        }
+      }
+    }
+    const decided = cascadingWinner(offers);
+    if (decided === null) continue;
 
     // The VALUE, not only the declaration that wins (BUG-2). The declaration
     // test above asserts the class rule contains the three strings; a sheet
     // that declares .page-title a second time satisfies that while the cascade
     // keeps the later rule's 2.4rem and the h1 renders at 38.4px. Importance is
     // ignored here: what the page title depends on is the value, and
-    // 'font-size: 1.4rem !important' settles at the same 1.4rem.
-    const heldText = `${winner.property}: ${winner.value.replace(/!\s*important\s*$/i, '').trim()}`;
-    if (heldText !== PAGE_TITLE_HELD[group]) {
+    // 'font-size: 1.4rem !important' settles at the same 1.4rem. So is the
+    // spelling: '#main h1 { font-size: 1.4rem }' restates the held value and
+    // moves nothing, and the message the guard used to write about it refuted
+    // itself ('would be font-size: 1.4rem instead of font-size: 1.4rem').
+    if (restates(decided, group)) continue;
+    const inside = decided.atRules.length > 0 ? ` inside ${decided.atRules.join(' then ')}` : '';
+    // Two reports from one declaration. The class rule's own is the value
+    // cross-check: the rule that holds the page title's typography no longer
+    // holds the value, and it says so about the rule. A competitor's is
+    // ground (a), and it says what outranks what — importance, or specificity
+    // read off the selector in the file.
+    if (decided.baseline === true) {
       offenders.push({
-        selector: classBranch,
-        atRules: winner.atRules,
+        selector: decided.branch,
+        atRules: decided.atRules,
         group,
-        property: winner.property,
-        message: `the selector '${classBranch}' declares ${heldText} and the cascade keeps it — `
-          + `${subject} would be ${heldText} instead of ${PAGE_TITLE_HELD[group]}`,
+        property: decided.property,
+        message: `the selector '${decided.branch}'${inside} declares ${declarationText(decided)} and the cascade keeps it — `
+          + `${subject} would be ${declaredValue(decided, group)} instead of ${PAGE_TITLE_HELD[group][0]}`,
       });
+      continue;
     }
-
-    for (const rule of rules) {
-      const carriesClass = classIndexes.has(rule.index);
-      for (const selector of branchesOf(rule)) {
-        // A rule that gives the page h1 its typography is the baseline, not a
-        // competitor — but only through the BRANCH that gives it to it. A
-        // selector list may pair '.page-title' with a real competitor, and
-        // skipping the whole RULE put the competitor out of reach of both
-        // grounds behind the class branch it shares a rule with:
-        // '#main h1, .page-title { font-size: 2.4rem }' is an override the
-        // browser applies at (1,0,1), and the guard saw only the baseline.
-        if (carriesClass && isClassBranch(selector, cls, chain)) continue;
-        if (!branchReaches(selector, chain, pageTitle)) continue;
-        const candidate = { specificity: specificityOf(selector) };
-        for (const entry of declarations(rule.body).filter((one) => properties.includes(one.property))) {
-          // Importance outranks specificity in author origin, and it is
-          // asymmetric: an !important declaration beats every normal one, so a
-          // plain rule cannot outrank a class rule that is itself !important
-          // however much of an id it carries. Of two declarations of equal
-          // weight — both normal, or both !important — the cascade decides as
-          // it does everywhere else.
-          if (entry.important !== winner.important) {
-            if (winner.important) continue;
-          } else if (candidate.specificity === null || baseline.specificity === null) {
-            // A specificity the vocabulary cannot compute, on EITHER side of the
-            // comparison, is not a proof that the rule loses, so it is reported
-            // rather than passed. The baseline can be unreadable because a
-            // class rule written 'h1::first-line.page-title' has a
-            // pseudo-element in it; comparing against it unguarded threw.
-          } else if (!beats({ ...candidate, index: rule.index }, baseline)) continue;
-          const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
-          const because = entry.important && !winner.important
-            ? 'carries !important, which outranks any normal declaration of the same property'
-            : `outranks .${cls} at (${candidate.specificity === null ? 'unreadable' : candidate.specificity.join(',')})`;
-          // A shorthand is reported under the group it moves, so name what it
-          // sets rather than quoting 'font' as though it were a font-size.
-          const sets = entry.property === group
-            ? `sets ${entry.property}: ${entry.value}`
-            : `sets ${entry.property}, which sets the h1's ${group}, to ${entry.value}`;
-          const instead = entry.property === group
-            ? `${subject} would be ${entry.value}`
-            : `${subject} would come from that shorthand`;
-          offenders.push({
-            selector,
-            atRules: rule.atRules,
-            group,
-            property: entry.property,
-            message: `the selector '${selector}'${inside} ${sets} and ${because} — `
-              + `${instead} instead of ${winner.property}: ${winner.value}`,
-          });
-        }
-      }
-    }
+    const decidedSpecificity = specificityOf(decided.branch);
+    const because = decided.important && !winner.important
+      ? 'carries !important, which outranks any normal declaration of the same property'
+      : `outranks .${cls} at (${decidedSpecificity === null ? 'unreadable' : decidedSpecificity.join(',')})`;
+    // A specificity the vocabulary cannot compute is not a proof that the rule
+    // loses, so it is reported rather than passed: a class rule written
+    // 'h1::first-line.page-title' has a pseudo-element in it, and comparing
+    // against it unguarded threw.
+    offenders.push({
+      selector: decided.branch,
+      atRules: decided.atRules,
+      group,
+      property: decided.property,
+      message: `the selector '${decided.branch}'${inside} ${setsProperty(decided, group)} and ${because} — `
+        + `${subject} would be ${declaredValue(decided, group)} instead of ${PAGE_TITLE_HELD[group][0]}`,
+    });
   }
 
   // Ground (b), the root. The class rule's own font-size is in rem, and every
@@ -2525,7 +3003,22 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
       // applies to the root as much as to the h1. '* { all: unset }' and
       // ':root { all: revert }' are ordinary-looking rules that move every rem
       // in the sheet.
-      for (const entry of declarations(rule.body).filter((one) => ['font-size', 'font', 'all'].includes(one.property))) {
+      const offered = declarations(rule.body).filter((one) => ['font-size', 'font', 'all'].includes(one.property));
+      const carried = cascadingWinner(offered, selector, rule.index);
+      // 'revert' is a REMOVAL and not a set, and it is the one exemption here.
+      // It does not declare anything, so it cannot set the root's font-size; it
+      // removes author declarations, which can only carry the root back toward
+      // the user-agent default the class rule's rem is already measured
+      // against. Measured: root 16px and h1 22.4px either way. 'revert-layer'
+      // and 'unset' are NOT in the exemption and stay reported — 'unset' sets
+      // every longhand, and whether the root happens to already be at the
+      // default on this page is a fact about the shipped sheet that a
+      // stylesheet may change, which is why the guard cannot take it. As with
+      // the class rule above, it is the declaration the cascade KEEPS that
+      // decides: a rule that reverts the root and then sets its font-size
+      // still moves the heading.
+      if (carried !== null && carried.property === 'all' && declarationText(carried) === 'all: revert') continue;
+      for (const entry of offered) {
         const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
         const sets = entry.property === 'font'
           ? `the font shorthand, which sets the root's font-size too (${entry.value})`
@@ -2539,7 +3032,7 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
           property: entry.property,
           message: `the selector '${selector}'${inside} sets ${sets} on the document root — `
             + `the class rule's font-size is written in rem and is measured against the root's font-size, `
-            + `so the page h1's font-size moves with it, away from ${PAGE_TITLE_HELD['font-size']}, `
+            + `so the page h1's font-size moves with it, away from ${PAGE_TITLE_HELD['font-size'][0]}, `
             + `even though .${cls} wins the cascade on the element`,
         });
       }
@@ -2560,12 +3053,13 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
 let css;
 let chain;
 let cls;
+let html;
 let sheetWith;
 let bySelectorAndProperty;
 
 before(async () => {
   css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
-  const html = await renderPage('/', { repositories: freshRepos() });
+  html = await renderPage('/', { repositories: freshRepos() });
   chain = pageTitleElement(html).chain;
   cls = pageTitleClass(html);
   // A stylesheet carrying the class rule and nothing else, for every case
@@ -2610,8 +3104,11 @@ test('nothing in the shipped stylesheet beats the class rule for the page h1', a
   // rules declaring a guarded property, the class rule is the only one that may
   // reach the h1 and outrank it.
   const guarded = new Set(PAGE_TITLE_PROPERTIES.flatMap((entry) => entry.properties));
-  const sheet = readStylesheet(css);
+  const sheet = readStylesheet(css, chain);
   const classRule = sheet.find((rule) => classBranchesOf(rule, cls, chain).length > 0);
+  // Layer rank travels with the branch rather than being read off the rule
+  // afterwards, so the probe asks the same cascade question the guard does and
+  // the two cannot disagree about what the baseline is.
   const outrankingPageTitle = sheet
     // Every rule carrying the class is the baseline, not a competitor: a second
     // .page-title rule is reported by the value cross-check below, which is the
@@ -2621,12 +3118,23 @@ test('nothing in the shipped stylesheet beats the class rule for the page h1', a
     // so this probe cannot disagree with the guard about what the baseline is.
     .filter((rule) => classBranchesOf(rule, cls, chain).length === 0)
     .filter((rule) => declarations(rule.body).some((entry) => guarded.has(entry.property)))
-    .flatMap((rule) => branchesOf(rule))
-    .filter((branch) => branchReaches(branch, chain, chain.length - 1))
-    .filter((branch) => beats(
-      { specificity: specificityOf(branch), index: sheet.length },
-      { specificity: specificityOf(classBranchesOf(classRule, cls, chain)[0]), index: classRule.index },
-    ));
+    .flatMap((rule) => branchesOf(rule).map((branch) => ({ branch, rule })))
+    .filter(({ branch }) => branchReaches(branch, chain, chain.length - 1))
+    .filter(({ branch, rule }) => beats(
+      {
+        specificity: specificityOf(branch),
+        index: sheet.length,
+        layer: rule.layer,
+        startingStyle: rule.startingStyle,
+      },
+      {
+        specificity: specificityOf(classBranchesOf(classRule, cls, chain)[0]),
+        index: classRule.index,
+        layer: classRule.layer,
+        startingStyle: classRule.startingStyle,
+      },
+    ))
+    .map(({ branch }) => branch);
   assert.deepEqual(outrankingPageTitle, [],
     'of the rules in the shipped sheet that declare a guarded property, no rule but the class rule may reach the h1 and outrank it');
   // Ground (b) over the WHOLE sheet rather than the guarded subset, and the
@@ -2871,7 +3379,14 @@ test('the class name is a styling decision both ends may move together', async (
   // three are stated against the class the h1 actually carries, so they hold
   // whichever name it carries.
   const renamed = css.replaceAll(`.${cls}`, '.renamed-away');
-  assert.deepEqual(outrankingPageTitleDeclarations(renamed, 'renamed-away', chain), [], 'both ends renamed together is green');
+  // BOTH ends move, so the markup is renamed with the stylesheet and the chain
+  // is re-read from the page that carries the new name. A chain still holding
+  // the old class decides '.renamed-away' out of reach on the h1, which is the
+  // one-sided case's answer and not this one's — and with isClassBranch no
+  // longer admitting a single compound on sight (BUG-6), the chain is the only
+  // thing that can answer it.
+  const renamedChain = pageTitleElement(html.replaceAll(`class="${cls}"`, 'class="renamed-away"')).chain;
+  assert.deepEqual(outrankingPageTitleDeclarations(renamed, 'renamed-away', renamedChain), [], 'both ends renamed together is green');
   assert.ok(outrankingPageTitleDeclarations(renamed, cls, chain).length > 0, 'renaming only the stylesheet fails');
   assert.ok(outrankingPageTitleDeclarations(css, 'renamed-away', chain).length > 0, 'renaming only the markup fails');
 
@@ -3116,17 +3631,28 @@ test('BUG-3 and BUG-4: the shapes to prove out, and the spellings to read whole'
     'a comma inside a quoted value is not a selector boundary, and cutting it there reported a half-selector the stylesheet does not contain',
   );
   // The functional pseudo-class carries a comma in its argument, so it is the
-  // same cut one syntax level in. Here the report is NOT silenced, and it
-  // should not be: ':is()' is undecidable from static markup, so the guard
-  // decides on the base and 'h1' may match — the noisy direction the contract
-  // takes on purpose. What matters is that it is read as ONE selector, with a
-  // specificity the cascade can be ordered by; before the fix the message read
-  // "the selector 'h1:is(.a' … at (unreadable)".
-  const functional = outrankingPageTitleDeclarations(sheetWith('h1:is(.a, .b) { font-size: 2.4rem; }'), cls, chain);
-  assert.deepEqual(bySelectorAndProperty(functional), ['h1:is(.a, .b) font-size'],
-    'a comma inside a pseudo-class argument is not a selector boundary either: the whole selector is named, and it is reported because :is() may match');
+  // same cut one syntax level in. What matters is that it is read as ONE
+  // selector, with a specificity the cascade can be ordered by; before the fix
+  // the message read "the selector 'h1:is(.a' … at (unreadable)".
+  //
+  // ':is()' is decided, not stripped: the argument is a selector list, evaluated
+  // un-negated, so one of these two is a match and the compound matches. What
+  // the cut would have thrown away is the comma AND the specificity of the
+  // argument, which is the part that has to be scored.
+  const functional = outrankingPageTitleDeclarations(sheetWith(`h1:is(.a, .${cls}) { font-size: 2.4rem; }`), cls, chain);
+  assert.deepEqual(bySelectorAndProperty(functional), [`h1:is(.a, .${cls}) font-size`],
+    'a comma inside a pseudo-class argument is not a selector boundary either: the whole selector is named, and it is reported because one of its arguments matches the h1');
   assert.match(functional[0].message, new RegExp(`outranks \\.${cls} at \\(0,1,1\\)`),
     'and its specificity is the one the whole selector has, rather than the unreadable value a cut selector leaves behind');
+  // The same list with no argument the h1 can match is a PROOF of non-match,
+  // and BUG-7 was a report about exactly this shape: the old stripNarrowing
+  // removed ':is(.a, .b)' whole, left 'h1', matched, and reported a 38.4px
+  // heading Chromium renders at 22.4px.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith('h1:is(.a, .b) { font-size: 2.4rem; }'), cls, chain),
+    [],
+    "':is(.a, .b)' decides on its arguments, and neither is a class the h1 carries, so the rule provably cannot reach it",
+  );
   // The same vocabulary, scored wrongly, is a SILENT pass: ':is(#a, h1)' is
   // (1,0,0) in CSS because of the id in its argument, so it outranks the class
   // rule at (0,1,0) at any position in the file. Scored as a flat b it read
@@ -3146,6 +3672,351 @@ test('BUG-3 and BUG-4: the shapes to prove out, and the spellings to read whole'
     "':where(#a)' contributes no specificity at all, so it reaches the h1 and loses at (0,0,0) — and the browser keeps the class rule's 1.25",
   );
 
+});
+
+test('BUG-5: the block at-rules and the layer rank, decided rather than skipped', async () => {
+  // BUG-5, verbatim. readStylesheet consumed every block at-rule whole, so a
+  // rule inside one was invisible to BOTH grounds: appending this to the shipped
+  // sheet left the suite green while the browser rendered the heading at 28px on
+  // a root of 20px. The append is to the shipped file rather than to the
+  // fixture, because the case that matters is the one a developer would write.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n@layer base { html { font-size: 20px; } }\n`, cls, chain)),
+    ['html font-size'],
+    "appending '@layer base { html { font-size: 20px; } }' to the shipped sheet is reported — the browser reads the h1 at 28px and the root at 20px",
+  );
+  // The same through the shorthand, which is the other half of the same rule.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n@layer reset { html { font: 700 2.4rem system-ui; } }\n`, cls, chain)),
+    ['html font'],
+    "and the 'font' shorthand spelling, which moves the same root to 53.76px",
+  );
+
+  // Layer rank is not 'later wins', and the table that gets it wrong is worse
+  // than no table. The measured rule, in both directions and for both weights:
+  //
+  //   among NORMAL declarations  an UNLAYERED one beats every layer, whatever
+  //                             its specificity — so a layered 2.4rem loses and
+  //                             the h1 stays at 22.4px
+  //   among !IMPORTANT ones      a LAYERED declaration beats every unlayered
+  //                             one, and among layers the EARLIER one wins, so
+  //                             the pair below settles at 22.4px in EITHER order
+  //                             (measured: the reversed spelling reads 38.4px)
+  for (const [extra, claim] of [
+    ['@layer base { h1 { font-size: 2.4rem; } }', 'a layered NORMAL declaration loses to the unlayered class rule whatever its specificity, so a red build here would be a false alarm'],
+    ['@layer base { #main h1 { font-size: 2.4rem; } }', 'and an id in a layer does not buy it back — the layer is settled before the specificity is'],
+    ['@layer base { .page-title { font-size: 2.4rem; } }', "the value cross-check reads the same cascade, so a layered '.page-title' does not make the class rule's own winner 2.4rem"],
+    ['@layer base { h1 { font-size: 1.4rem !important; } } @layer top { h1 { font-size: 2.4rem !important; } }', 'among two layers the EARLIER one wins an !important declaration, so this restates the held value'],
+    ['@layer top { h1 { font-size: 1.4rem !important; } } @layer base { h1 { font-size: 2.4rem !important; } }', 'and the same two layers in the other order settle at the same 1.4rem, because base is still the earlier one'],
+    ['@layer base { h1 { font-size: 1.4rem !important; } } h1 { font-size: 3rem !important; }', 'a layered !important beats an unlayered !important, so the unlayered 3rem is discarded'],
+  ]) {
+    assert.deepEqual(
+      outrankingPageTitleDeclarations(sheetWith(extra), cls, chain),
+      [],
+      claim,
+    );
+  }
+  for (const [extra, selector] of [
+    ['@layer base { h1 { font-size: 2.4rem !important; } }', 'h1'],
+    ['@layer base { #main h1 { font-size: 2.4rem !important; } }', '#main h1'],
+  ]) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(extra), cls, chain)),
+      [`${selector} font-size`],
+      `'${extra}' reverses layer order, so a layered !important beats the unlayered class rule and the h1 renders at 38.4px`,
+    );
+  }
+
+  // The other block at-rules are DECIDED, not skipped, and each is pinned on
+  // both sides — a table only ever exercised where it is silent is a list of
+  // silences. Silent is a PROOF here and reported is a MAY: a rule inside a
+  // block nothing can match cannot reach the h1, and a rule inside a block that
+  // may does.
+  for (const [extra, claim] of [
+    ['@starting-style { h1 { font-size: 2.4rem !important; } }', 'a starting style gives way to any normal declaration in the same origin, even an !important one (browser: 22.4px)'],
+    ['@container c { h1 { font-size: 2.4rem !important; } }', 'a container query needs a container, and this sheet declares none, so there is nothing for it to match (browser: 22.4px)'],
+    ['@scope (.nope) { h1 { font-size: 2.4rem !important; } }', "a scope root nothing in the chain can match leaves the block with no scoping root on this page (browser: 22.4px)"],
+    ['@media print { #main h1 { font-size: 2.4rem; } }', 'a printed page is not the page under test (browser: 22.4px)'],
+    ['@media speech { h1 { font-size: 2.4rem; } }', 'and neither is a spoken one (browser: 22.4px)'],
+  ]) {
+    assert.deepEqual(
+      outrankingPageTitleDeclarations(sheetWith(extra), cls, chain),
+      [],
+      `'${extra.split(' {')[0]}' is proved out on this page, so it is silent: ${claim}`,
+    );
+  }
+  // ...and reported, each naming the condition it bites in, so the report is
+  // actionable rather than a bare selector.
+  for (const [extra, selector, named] of [
+    ['@scope (main) { h1 { font-size: 2.4rem !important; } }', 'h1', '@scope (main)'],
+    ['@supports (display:grid) { h1 { font-size: 2.4rem !important; } }', 'h1', '@supports (display:grid)'],
+    ['@media (max-width: 900px) { h1 { font-size: 2.4rem !important; } }', 'h1', '@media (max-width: 900px)'],
+    ['@media (prefers-reduced-motion: reduce) { h1 { font-size: 2.4rem !important; } }', 'h1', '@media (prefers-reduced-motion: reduce)'],
+  ]) {
+    const reported = outrankingPageTitleDeclarations(sheetWith(extra), cls, chain);
+    assert.deepEqual(
+      bySelectorAndProperty(reported.filter((one) => one.property === 'font-size')),
+      [`${selector} font-size`],
+      `'${extra.split(' {')[0]}' may be true, so the rule inside it is read and reported`,
+    );
+    assert.match(reported[0].message, new RegExp(named.replace(/[()]/g, '\\$&')),
+      `and the message names the condition — '${named}' — rather than a bare selector`);
+  }
+  // Nested blocks, which is the shape a real layer-plus-query sheet has and the
+  // one a walk that only descends once would still miss.
+  const nested = outrankingPageTitleDeclarations(
+    sheetWith('@layer base { @media (max-width: 900px) { h1 { font-size: 2.4rem !important; } } }'), cls, chain);
+  assert.deepEqual(bySelectorAndProperty(nested), ['h1 font-size'],
+    'a rule nested in a layer inside a media query is found, not stepped over');
+  assert.match(nested[0].message, /@layer base then @media \(max-width: 900px\)/,
+    'and the message names both the layer and the condition, in the order they nest');
+
+  // The container exemption is about the SHEET and not about the query: a
+  // container is a declaration, so the question is whether one exists anywhere
+  // in the sheet being read. This is the false-alarm direction — a container
+  // created at runtime by script would make it wrong — and the app has no such
+  // script today.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(
+      sheetWith('main { container-type: inline-size; }\n@container c { h1 { font-size: 2.4rem !important; } }'), cls, chain)),
+    ['h1 font-size'],
+    "with 'container-type' declared anywhere in the sheet, the container query is read and its rule reported rather than proved out",
+  );
+  assert.match(
+    outrankingPageTitleDeclarations(
+      sheetWith('main { container-type: inline-size; }\n@container c { h1 { font-size: 2.4rem !important; } }'), cls, chain)[0].message,
+    /@container c/,
+    'and the message names the container query it was found in',
+  );
+  // '@media print, screen' applies to the page under test, so treating the
+  // whole block as printed would be a silent pass — the direction the contract
+  // forbids. EVERY query in the list has to be one the page is not rendered in.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('@media print, screen { #main h1 { font-size: 2.4rem; } }'), cls, chain)),
+    ['#main h1 font-size'],
+    "'print, screen' includes the screen, so the block is read and the override inside it is reported",
+  );
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith('@media print, speech { #main h1 { font-size: 2.4rem; } }'), cls, chain),
+    [],
+    "and a list of media the page is NOT rendered in is still silent, which is the whole point of asking about every query rather than the first",
+  );
+});
+
+test('BUG-6: the class rule is the branch that reaches the h1, not the rule that mentions it', async () => {
+  // BUG-6, verbatim, and the sibling from the same predicate. isClassBranch
+  // returned true for any single compound carrying the class token, without
+  // asking whether that branch matches the h1 — so a rule about a generated box
+  // or about an attribute the h1 does not carry was taken for the baseline.
+  // Both leave the h1 at 22.4px, so both are silent.
+  for (const extra of [
+    '.page-title::after { font-size: 2.4rem; }',
+    '.page-title[data-x] { font-size: 2.4rem; }',
+  ]) {
+    assert.deepEqual(
+      outrankingPageTitleDeclarations(sheetWith(extra), cls, chain),
+      [],
+      `'${extra.split(' {')[0]}' is not the class rule — it does not match the h1 — and its declaration is not the baseline, so there is nothing to report`,
+    );
+  }
+  // The predicate itself, because the report above is now decided by one pool
+  // and this bug would no longer show up in it. isClassBranch used to answer
+  // true for any single compound carrying the class token, without asking
+  // whether the branch matches the h1; asserting the two answers that shortcut
+  // got wrong is what keeps it gone rather than merely unused today.
+  assert.equal(isClassBranch(`.${cls}::after`, cls, chain), false,
+    "'.page-title::after' styles a generated box, so the branch is not the class rule at any count of compounds");
+  assert.equal(isClassBranch(`.${cls}[data-x]`, cls, chain), false,
+    "and neither is '.page-title[data-x]', which the h1 does not carry");
+  assert.equal(isClassBranch(`h1.${cls}`, cls, chain), true,
+    "while a class rule that does reach the h1 is still found, which is what AC-3 and the coordinated rename depend on");
+  // The shortcut is gone rather than amended: the branch is held to the same
+  // reachability question as any other, and a class rule that really does
+  // reach the h1 is still found.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`h1.${cls} { font-size: 2.4rem; }`), cls, chain)),
+    [`h1.${cls} font-size`],
+    "and 'h1.page-title' is still found as the class rule AND as an override, so the shortcut's removal did not take the finding with it",
+  );
+  // ...including through a multi-compound branch, which is the case AC-3 and the
+  // coordinated rename both depend on.
+  for (const spelling of [`h1.${cls}`, `main > .${cls}`, `body .${cls}`]) {
+    assert.deepEqual(
+      outrankingPageTitleDeclarations(sheetWith(`${spelling} { font-size: 1.4rem; line-height: 1.25; margin: 0; }`), cls, chain),
+      [],
+      `'${spelling}' reaches the h1 and holds it, so it is the baseline and the guard is quiet`,
+    );
+  }
+});
+
+test('BUG-7: a pseudo-class is decided, not stripped', async () => {
+  // BUG-7, verbatim. stripNarrowing deleted a pseudo-class together with its
+  // ARGUMENT, so ':where(h1)' became the empty compound, and an empty compound
+  // matching anything is the hazard the comment above that function names and
+  // leaves open. Each of these is a proof of non-match and the browser reads
+  // 22.4px for all of them.
+  for (const extra of [
+    ':where(h1) { font-size: 2.4rem; }',
+    ':where(h1[data-testid]) { font-size: 2.4rem; }',
+    ':root:not(html) { font-size: 20px; }',
+    'h1:not([data-testid]) { font-size: 2.4rem; }',
+  ]) {
+    assert.deepEqual(
+      outrankingPageTitleDeclarations(sheetWith(extra), cls, chain),
+      [],
+      `'${extra.split(' {')[0]}' is decided rather than stripped, and it is a proof of non-match`,
+    );
+  }
+  // ':where(h1)' is silent for a second reason as well: ':where()' contributes
+  // NO specificity, so it reaches the h1 at (0,0,0) and loses the cascade there.
+  // The restatement below is the same fact read as a value.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith(':where(h1) { font-size: 1.4rem; }'), cls, chain),
+    [],
+    "':where(h1)' restates the held value at zero specificity, so it is silent twice over",
+  );
+  // ':is()' and ':not()' contribute their most specific argument, which is what
+  // a 'h1' alone would not: ':is(#a, h1)' is (1,0,0) and outranks the class rule
+  // wherever it is written. Scored as a flat 'h1' it read (0,0,1), lost, and
+  // nothing was reported while the heading rendered at the rule's line-height.
+  for (const selector of [':is(#a, h1)', ':not(#a)']) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`${selector} { line-height: 2; }`), cls, chain)),
+      [`${selector} line-height`],
+      `the id in '${selector}' is a real (1,0,0), so the rule outranks the class rule wherever it is written`,
+    );
+  }
+  // The undecidable ones stay on the REPORTED side, so a fix that simply
+  // ignored pseudo-classes — the shape of the bug being closed — fails here.
+  // The first two are false alarms on this page; the third is not.
+  for (const [extra, claim] of [
+    ['h1:has(> span) { font-size: 2.4rem; }', "':has()' needs descendants an ancestor chain does not carry, so it may match and is reported (this page does not move: 22.4px)"],
+    ['h1:hover { font-size: 2.4rem; }', "a state the served markup says nothing about, so it may match and is reported (this page does not move: 22.4px)"],
+    ['h1:is(.page-title) { font-size: 2.4rem; }', "and ':is()' whose argument the h1 DOES carry is a real override: 38.4px"],
+  ]) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(extra), cls, chain)),
+      [`${extra.split(' {')[0]} font-size`],
+      claim,
+    );
+  }
+  // The invariant that closes it for good, rather than one case at a time: a
+  // compound is a list of tokens and is never reduced to text, so there is no
+  // empty compound for the matcher to answer vacuously true about. Every form
+  // that used to produce one is a counter-example.
+  const empties = [':where(h1)', ':where(h1) span', 'h1:not([data-testid])', ':root:not(html)', ':is(h1)', ':has(> span)'];
+  for (const compound of empties) {
+    const parts = splitCompounds(compound);
+    assert.ok(parts.length > 0 && parts.every((part) => part.compound !== ''),
+      `'${compound}' is cut into compounds and none of them is empty`);
+    assert.ok(splitSimple(parts[parts.length - 1].compound).length > 0,
+      `'${compound}' tokenises into at least one token, so nothing was stripped away`);
+  }
+  assert.equal(compoundMatches('', chain, chain.length - 1), null,
+    'and an empty compound, asked anyway, is UNDECIDED rather than vacuously true — that is the whole of the fix');
+  // A token the vocabulary cannot read is undecided too, never false: false is
+  // a proof, and a proof the guard would then be standing on.
+  for (const compound of ['h1\\', 'h1[', 'h1#', 'h1:not(']) {
+    assert.notEqual(compoundMatches(compound, chain, chain.length - 1), false,
+      `'${compound}' is not answered with a confident false`);
+  }
+});
+
+test('BUG-8: a backslash is a thing the scanner decodes, not one it guesses at', async () => {
+  // BUG-8, verbatim. An escape was not a character the tokenizer could read, so
+  // it was consumed as an unknown token and the fragment after it was re-read as
+  // a TYPE selector of its own: in '#\6d ain h1' the 'ain' became a type no
+  // ancestor satisfies, which is a confident FALSE. A proof fabricated out of a
+  // decode failure is the one thing this guard's contract forbids.
+  const escapedId = outrankingPageTitleDeclarations(sheetWith('#\\6d ain h1 { font-size: 2.4rem; }'), cls, chain);
+  assert.deepEqual(bySelectorAndProperty(escapedId), ['#\\6d ain h1 font-size'],
+    "'#\\6d ain h1' is '#main h1' at (1,0,1), so it reaches the h1 and is a real override (browser: 38.4px)");
+  assert.deepEqual(readName('#\\6d ain h1', 1), { name: 'main', length: 7 },
+    "and the scanner reads the escape out of it rather than taking the fragment after it for a type selector of its own: "
+    + "the hex escape takes the space that ends it, so 'ain' continues the SAME name and the id is '#main'");
+  // The report names the selector AS WRITTEN, which is what a developer greps
+  // the stylesheet for; the decoding is asserted on readName above rather than
+  // by rewriting the selector in a message.
+  // The escaped ATTRIBUTE NAME, red today by accident through the value
+  // cross-check. It has to stay red through reachability, which is a different
+  // question and the one that was broken.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('h1[data\\2d testid="page-title"] { font-size: 2.4rem; }'), cls, chain)),
+    ['h1[data\\2d testid="page-title"] font-size'],
+    "'h1[data\\2d testid=\"page-title\"]' decodes to 'h1[data-testid=\"page-title\"]', which the h1 carries, so it stays red — through reachability, which is the question that was broken",
+  );
+  assert.equal(readName('data\\2d testid', 0).name, 'data-testid',
+    'and the attribute NAME decodes through the same reader, so the rule is matched rather than merely not crashing');
+  // The case that says the scanner decodes rather than merely stops crashing.
+  // This one looks like a false pass and is not: a hex escape consumes the
+  // whitespace that terminates it, so this is the single id '#mainh1' and it
+  // matches nothing at all.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith('#mai\\6e h1 { font-size: 2.4rem; }'), cls, chain),
+    [],
+    "'#mai\\6e h1' is the id '#mainh1' — the escape eats the space that follows it — so it matches nothing and the browser leaves the h1 at 22.4px",
+  );
+  assert.equal(decodeEscape('\\6d ', 0), 'm', 'a hex escape decodes to the character it names');
+  assert.equal(escapeLength('#mai\\6e h1', 4), 4, 'and it consumes the terminating space with it, which is why the id above is one token');
+  assert.equal(escapeLength('h1\\:not', 2), 2, "an escaped non-hex character is the character itself, and the backslash ends there");
+  assert.equal(decodeEscape('\\:not', 0), ':', 'so it decodes to a colon, which is a character in a name rather than a pseudo-class');
+});
+
+test('AC-18: a rule that restates the held value moves nothing, and is silent', async () => {
+  // T-14, and the report this closes. A rule that outranks the class rule and
+  // restates the value the class rule already holds is not an override of
+  // anything, and the message the guard used to write about it refuted itself
+  // ('would be font-size: 1.4rem instead of font-size: 1.4rem'). Each of these
+  // measures 22.4px / 28px / 0px.
+  for (const extra of [
+    'h1[data-testid] { font-size: 1.4rem; }',
+    '#main h1 { font-size: 1.4rem; }',
+    '#main h1 { line-height: 1.25; }',
+    '#main h1 { margin: 0; }',
+    '#main h1 { margin-top: 0; }',
+    '#main h1 { margin-block-start: 0; }',
+  ]) {
+    assert.deepEqual(
+      outrankingPageTitleDeclarations(sheetWith(extra), cls, chain),
+      [],
+      `'${extra.split(' {')[0]}' restates a value the page title is already held at, in one of the spellings the group is written in, so it changes nothing`,
+    );
+  }
+  // The rule must not reach a shorthand, or the filter becomes a false pass.
+  // 'font: 700 1.4rem system-ui' leaves the font-size at 22.4px and drops the
+  // line-height to 'normal' (measured), and 'all: unset' takes the h1 to
+  // 16px / 24px / 0px (measured). Neither is a restatement, and a guard that
+  // compared the shorthand's own text would have read the first as a match.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('#main h1 { font: 700 1.4rem system-ui; }'), cls, chain)),
+    ['#main h1 font', '#main h1 font'],
+    "the font shorthand restates nothing the page title can see, and the line-height it sets is 'normal', not the held 1.25",
+  );
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('#main h1 { all: unset; }'), cls, chain)),
+    ['#main h1 all', '#main h1 all', '#main h1 all'],
+    "and 'all' is reported once per group it moves, because it moves all three (measured: 16px / 24px / 0px)",
+  );
+  // 'revert' is a REMOVAL and not a set, so on the root it is not a font-size
+  // and moves nothing: measured 22.4px. 'unset' and 'revert-layer' are reported
+  // beside it, and both are FALSE ALARMS on this page today — measured 22.4px
+  // for each — because nothing the guard can see gives either of them anything
+  // to act on. They are reported because the alternative is resolving what
+  // 'unset' unsets to, which is a renderer. That is the direction the contract
+  // permits being wrong in, and it is pinned here so the next reader does not
+  // read the pair as a contradiction.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith(':root { all: revert; }'), cls, chain),
+    [],
+    "':root { all: revert }' removes what the cascade had put there rather than setting a font-size, so the root is 16px and the h1 is 22.4px (measured)",
+  );
+  for (const value of ['unset', 'revert-layer']) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`:root { all: ${value}; }`), cls, chain)),
+      [`:root all`],
+      `':root { all: ${value} }' is reported as a root declaration that could set a font-size — a known false alarm on this page, and the loud direction is the safe one`,
+    );
+  }
 });
 
 test('ground (b): a font-size on the document root moves the page h1', async () => {
