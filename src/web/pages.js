@@ -66,6 +66,7 @@ function layout({ route, state, title, tenantName, content, announcement = '' })
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)} · Autonomous Growth OS</title>
 <link rel="stylesheet" href="/assets/styles.css">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 </head>
 <body data-page="${escapeHtml(route)}" data-state="${escapeHtml(state)}">
 <a class="skip-link" href="#main">Skip to content</a>

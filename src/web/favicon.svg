@@ -1,0 +1,10 @@
+<!-- The tab icon, served as image/svg+xml by /assets/favicon.svg and declared
+     in the head of every page. Its job is to stop the browser's implicit
+     /favicon.ico request, so it is drawn in the two palette tokens the theme
+     already has: the accent as the plate, the surface as the mark. No script, no
+     external reference, nothing the CSP or the asset route has to special-case. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="Autonomous Growth OS">
+  <rect width="16" height="16" rx="3" fill="#1D5FBF"/>
+  <path d="M3 12.5h10" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M4.5 10l2.5-2.5 2 2 3-4" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

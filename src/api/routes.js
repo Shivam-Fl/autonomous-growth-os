@@ -266,6 +266,13 @@ export function buildApp({ repositories, policySecret = DEFAULT_SIGNING_SECRET, 
   app.get('/assets/client.js', (request, response) => {
     response.type('application/javascript').sendFile(join(PACKAGE_ROOT, 'src', 'web', 'client.js'));
   });
+  // Declared in the head of every page (src/web/pages.js), so the browser stops
+  // asking for /favicon.ico on every load and getting a 404 it logs as a console
+  // error. A real asset rather than a data: URL, because an icon that does not
+  // resolve is the same defect under another path.
+  app.get('/assets/favicon.svg', (request, response) => {
+    response.type('image/svg+xml').sendFile(join(PACKAGE_ROOT, 'src', 'web', 'favicon.svg'));
+  });
 
   for (const route of ['/', '/journal', '/opportunities', '/experiments', '/approvals']) {
     app.get(route, async (request, response) => {
