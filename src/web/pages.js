@@ -9,7 +9,7 @@
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
-import { canonicalCurrency, formatMoney, fromMicros } from '../domain/money.js';
+import { canonicalCurrency, formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
 import { isReadableComponent } from '../domain/opportunities.js';
 import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 
@@ -222,10 +222,19 @@ function tenantCurrency(tenant) {
  *
  * The fallback is for a code that names no currency, NOT for a code spelled
  * differently: 'usd', 'Usd' and ' USD ' are the same unit of account as 'USD'
- * and render as dollars, because canonicalCurrency resolves a stored code
- * before the membership test. Mis-casing a currency is not a currency error,
+ * and render as dollars, because every call site reaches money() through the
+ * tenantCurrency() seam above, which resolves a stored code before this
+ * membership test ever runs. Mis-casing a currency is not a currency error,
  * and a renderer that drew a tenant's amounts in the wrong unit over three
  * letters of case would be the bug, not the fix.
+ *
+ * That also means money()'s own membership guard CANNOT be pinned by a test:
+ * every call site has already resolved the code, so a change to this line —
+ * in either direction — leaves the suite green. It is kept as defence in depth
+ * for a path no current caller takes, not as protection that is being verified.
+ * Making the site observable needs the call graph changed (one currency seam,
+ * resolved once, with every money() call site unable to pass an unresolved
+ * code), which is its own change; see issue #44.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
@@ -237,7 +246,7 @@ function money(micros, currency = 'INR') {
   if (!isReadableComponent('value_micros', micros)) {
     return '—';
   }
-  return formatMoney(fromMicros(micros, canonicalCurrency(currency) ?? 'INR'));
+  return formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR'));
 }
 
 function metaTable(collection, title, headers, rows, currency) {

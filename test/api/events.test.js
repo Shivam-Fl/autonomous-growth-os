@@ -319,6 +319,29 @@ test('an unrecognised tenant currency is still a 400 reporting the stored code v
   assert.deepEqual(body.details, { tenant_currency: 'ZZZ', received: 'USD' });
 });
 
+test('an unrecognised tenant currency is not silently treated as INR on ingest', async () => {
+  // The other direction of the same case, and the one that was untested. The
+  // suite pinned ZZZ against USD but never ZZZ against INR, so nothing stopped
+  // a read-side INR fallback from reaching the write path: there, 'ZZZ' was
+  // compared as if it were INR and this spend was accepted with 202. A 400
+  // naming the stored code is the only signal an operator gets that the row is
+  // wrong, so an unknown code must never match a validated spend currency.
+  repositories.tenants.create({ id: 'tenant_odd_inr', name: 'Odd Tenant', currency: 'ZZZ' });
+  const response = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ event_id: 'evt_odd_inr_spend', event_name: 'spend.observed', occurred_at: NOW(), tenant_id: 'tenant_odd_inr', value: 1_000_000_000, currency: 'INR' }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400, `a ZZZ tenant must not accept INR spend, got ${JSON.stringify(body)}`);
+  assert.equal(body.code, 'CURRENCY_MISMATCH');
+  assert.equal(body.message, 'tenant tenant_odd_inr keeps ZZZ; spend in INR was rejected');
+  assert.deepEqual(body.details, { tenant_currency: 'ZZZ', received: 'INR' });
+  // A rejected spend writes nothing: the 4xx is a real rejection, not a
+  // response code over an event that was still appended.
+  assert.equal(repositories.rawEvents.count('tenant_odd_inr'), 0, 'a rejected spend appends no raw event');
+});
+
 test('a canonical tenant still rejects a genuinely different currency', async () => {
   // The guard in the other direction: canonicalising the tenant side must not
   // loosen a real mismatch, which is what keeps mixed-currency micros from

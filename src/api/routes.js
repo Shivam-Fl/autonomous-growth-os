@@ -57,16 +57,35 @@ function resolveTenantId(repositories, requested) {
 }
 
 /**
- * The one place in this file that reads a tenant row's currency, for the two
- * comparisons that use it: the funnel's foreign-spend exclusion and the ingest
- * mismatch check. A stored code is an arbitrary string — the QA repro sets it
- * with raw SQL, which never reaches tenants.create — so it is resolved through
- * the domain's read-time boundary here. A code naming no ISO currency at all
- * falls back to INR, as before. The stored string is still what the 400
- * reports: only the comparison is canonicalised, never the message.
+ * The read side's answer to "what unit of account should this draw in?" — the
+ * funnel's foreign-spend exclusion on GET /v1/metrics. A stored code is an
+ * arbitrary string — the QA repro sets it with raw SQL, which never reaches
+ * tenants.create — so it is resolved through the domain's read-time boundary
+ * here, and a code naming no ISO currency at all falls back to INR: a read must
+ * draw something rather than 500.
+ *
+ * The INR fallback is for the READ side only. The ingest check below asks a
+ * different question and deliberately does not use it, so the two disagree on
+ * purpose for a row with bad data: the screen draws rupees while the API
+ * refuses to add to them.
  */
 function resolveTenantCurrency(row) {
   return canonicalCurrency(row?.currency) ?? 'INR';
+}
+
+/**
+ * The write side's answer to "does this spend event's currency match the
+ * tenant's?" A stored code that names an ISO currency is compared canonically,
+ * so 'usd', 'Usd' and ' USD ' accept the USD spend they name — mis-casing a
+ * currency is not a currency error. A stored code naming NO currency is
+ * compared VERBATIM, which can never match: a validated spend currency is
+ * always in ISO_CURRENCIES by the time it reaches here (measurement.js
+ * rejects anything else first), so 'ZZZ' is always a mismatch and the 400
+ * below fires with the raw stored code in its message and details.
+ */
+function tenantCurrencyMismatch(row, spendCurrency) {
+  const canonical = canonicalCurrency(row?.currency);
+  return canonical === null ? row.currency !== spendCurrency : canonical !== spendCurrency;
 }
 
 function errorResponse(response, status, error) {
@@ -157,7 +176,7 @@ export function buildApp({ repositories }) {
       ? validated.event.payload.currency
       : undefined;
     const existingTenant = repositories.tenants.get(tenantId);
-    if (spendCurrency !== undefined && existingTenant && resolveTenantCurrency(existingTenant) !== spendCurrency) {
+    if (spendCurrency !== undefined && existingTenant && tenantCurrencyMismatch(existingTenant, spendCurrency)) {
       return errorResponse(response, 400, {
         code: 'CURRENCY_MISMATCH',
         message: `tenant ${tenantId} keeps ${existingTenant.currency}; spend in ${spendCurrency} was rejected`,
