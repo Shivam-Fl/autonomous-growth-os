@@ -23,6 +23,29 @@ export const ISO_CURRENCIES = [
   'XOF', 'XPF', 'YER', 'ZAR', 'ZMW', 'ZWG',
 ];
 
+/**
+ * Resolve a STORED currency code to the ISO 4217 code it names, or null when
+ * it names none. Case and surrounding whitespace are not currency errors:
+ * 'usd', 'Usd' and ' USD ' all name the same unit of account as 'USD', and a
+ * row holding one is data this module did not write — a human UPDATE, a legacy
+ * import — so the read path resolves it rather than rejecting it. A code that
+ * names no ISO currency at all ('ZZZ', or the non-national 'XTS') stays null:
+ * that is genuine bad data, and every caller's documented fallback is for it.
+ *
+ * This is a read-time boundary, not a second constructor. assertValidCurrency
+ * stays strict on purpose: fromMicros/toMicros accept "a code I can render",
+ * and an event's payload currency is validated exactly at ingest on both paths
+ * into the payload, so normalising here would loosen a pinned contract for
+ * nothing.
+ */
+export function canonicalCurrency(currency) {
+  if (typeof currency !== 'string') {
+    return null;
+  }
+  const code = currency.trim().toUpperCase();
+  return ISO_CURRENCIES.includes(code) ? code : null;
+}
+
 export function moneyError(code, message, details = {}) {
   const error = new Error(message);
   error.code = code;

@@ -1,15 +1,24 @@
 {
   "$id": "stop",
   "title": "Stop",
-  "description": "An agent saying it cannot produce its artifact, and why. Written INSTEAD of the artifact: a planner that cannot plan, a debugger that cannot reproduce, a root-cause pass that finds nothing a code change fixes. A script posts the reason, records where to resume and hands the issue to a person — the agent comments and labels nothing itself.",
+  "description": "An agent saying it cannot produce its artifact, and why. Written INSTEAD of the artifact: a planner that cannot plan, a debugger that cannot reproduce, a root-cause pass that finds nothing a code change fixes. A script posts the reason, records where to resume and hands the issue to a person \u2014 the agent comments and labels nothing itself.",
   "type": "object",
-  "required": ["kind", "reason"],
+  "required": [
+    "kind",
+    "reason"
+  ],
   "additionalProperties": false,
   "properties": {
     "kind": {
-      "description": "cannot-reproduce: the bug could not be made to happen. needs-decision: a person has to settle something the ticket does not say. environmental: the failure is outside the code (preview down, seed data missing, a misconfigured check). cannot-plan: anything else that stops a plan from being written honestly.",
+      "description": "cannot-reproduce: the bug could not be made to happen. needs-decision: a person has to settle something the ticket does not say. environmental: the failure is outside the code (preview down, seed data missing, a misconfigured check). cannot-plan: anything else that stops a plan from being written honestly. already-done: every change the ticket asks for is already true on the default branch \u2014 each claim reproduced and found fixed; what was run goes in reason.",
       "type": "string",
-      "enum": ["cannot-reproduce", "needs-decision", "environmental", "cannot-plan"]
+      "enum": [
+        "cannot-reproduce",
+        "needs-decision",
+        "environmental",
+        "cannot-plan",
+        "already-done"
+      ]
     },
     "reason": {
       "description": "What exactly stops you, what you tried, and what a person would have to provide or decide to unblock it.",

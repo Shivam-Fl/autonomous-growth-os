@@ -19,6 +19,7 @@ import {
   policyBand,
 } from '../domain/measurement.js';
 import { validateEvent } from '../domain/events.js';
+import { canonicalCurrency } from '../domain/money.js';
 import { utcNow } from '../data/db.js';
 import {
   calibrationReport,
@@ -53,6 +54,52 @@ function resolveTenantId(repositories, requested) {
   }
   const tenants = repositories.tenants.list();
   return tenants.length === 1 ? tenants[0].id : 'tenant_demo';
+}
+
+/**
+ * The read side's answer to "what unit of account should this draw in?" — the
+ * funnel's foreign-spend exclusion on GET /v1/metrics. A stored code is an
+ * arbitrary string — the QA repro sets it with raw SQL, which never reaches
+ * tenants.create — so it is resolved through the domain's read-time boundary
+ * here, in one rule for every code: a code that NAMES a currency is
+ * canonicalised ('usd' -> 'USD'), a code that names none is passed through
+ * VERBATIM so it matches no stored spend row, and only a MISSING row falls back
+ * to INR (tenants.currency is TEXT NOT NULL, so a present row always holds a
+ * string).
+ *
+ * A bad code therefore reads as an honest unknown — no spend, a null CPL —
+ * rather than as rupees this row cannot be said to hold. The write guard below
+ * already answered the same way: for a bad row it refuses to add a rupee the
+ * read will not report, so the two surfaces now AGREE about what the row is.
+ *
+ * The chain is `??`, not `||`: a stored '' names no currency either, and must
+ * exclude exactly as 'ZZZ' does. `||` would read it as INR — the very collapse
+ * of read and write this seam exists to keep.
+ */
+function resolveTenantCurrency(row) {
+  const stored = row?.currency;
+  return canonicalCurrency(stored) ?? stored ?? 'INR';
+}
+
+/**
+ * The write side's answer to "does this spend event's currency match the
+ * tenant's?" A stored code that names an ISO currency is compared canonically,
+ * so 'usd', 'Usd' and ' USD ' accept the USD spend they name — mis-casing a
+ * currency is not a currency error. A stored code naming NO currency is
+ * compared VERBATIM, which can never match: a validated spend currency is
+ * always in ISO_CURRENCIES by the time it reaches here (measurement.js
+ * rejects anything else first), so 'ZZZ' is always a mismatch and the 400
+ * below fires with the raw stored code in its message and details.
+ *
+ * The call site guarantees a row (the `existingTenant &&` guard in the ingest
+ * handler below), so this states that precondition rather than half-guarding a
+ * read whose result the canonical arm discards. The `??` chain is the same rule
+ * as resolveTenantCurrency above, one rule rather than two arms with different
+ * left operands.
+ */
+function tenantCurrencyMismatch(row, spendCurrency) {
+  const canonical = canonicalCurrency(row.currency);
+  return (canonical ?? row.currency) !== spendCurrency;
 }
 
 function errorResponse(response, status, error) {
@@ -143,7 +190,7 @@ export function buildApp({ repositories }) {
       ? validated.event.payload.currency
       : undefined;
     const existingTenant = repositories.tenants.get(tenantId);
-    if (spendCurrency !== undefined && existingTenant && existingTenant.currency !== spendCurrency) {
+    if (spendCurrency !== undefined && existingTenant && tenantCurrencyMismatch(existingTenant, spendCurrency)) {
       return errorResponse(response, 400, {
         code: 'CURRENCY_MISMATCH',
         message: `tenant ${tenantId} keeps ${existingTenant.currency}; spend in ${spendCurrency} was rejected`,
@@ -165,9 +212,11 @@ export function buildApp({ repositories }) {
   app.get('/v1/metrics', (request, response) => {
     const tenantId = resolveTenantId(repositories, request.query.tenant_id);
     const rows = repositories.rawEvents.listByTypes(tenantId, FUNNEL_TYPES);
-    // The tenant row's currency (INR default when absent) excludes any
-    // foreign-currency spend rows legacy batches may still hold.
-    const tenantCurrency = repositories.tenants.get(tenantId)?.currency ?? 'INR';
+    // The tenant row's currency excludes any foreign-currency spend rows
+    // legacy batches may still hold. A stored code naming no ISO currency is
+    // used verbatim, so it matches no spend row; INR applies only when the
+    // tenant has no row at all.
+    const tenantCurrency = resolveTenantCurrency(repositories.tenants.get(tenantId));
     const funnel = computeFunnel(rows, tenantCurrency);
     const latest = dataThrough(rows);
     const now = utcNow();
