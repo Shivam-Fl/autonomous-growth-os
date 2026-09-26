@@ -46,6 +46,46 @@ export const READ_METHODS = Object.freeze([
 ]);
 
 /**
+ * The typed WRITE interface (issue #20): the four mutations the policy kernel's
+ * roster registers, and no more. A provider gains a write method only when a
+ * class names the action it performs — the roster is the reason a write exists,
+ * so an unrostered mutation has no place to be gated.
+ */
+export const WRITE_METHODS = Object.freeze([
+  'setCampaignStatus',
+  'updateAdSetBudget',
+  'updateCampaignCreative',
+  'createCampaign',
+]);
+
+/**
+ * The one map the executor resolves a write through, keyed by the CONTRACT'S
+ * action slugs rather than by the JavaScript method names — the executor looks
+ * it up with the capability's SIGNED action string, so the key has to be the
+ * thing that was signed.
+ *
+ * An action absent from this map is a MALFORMED_CAPABILITY rather than a
+ * fallthrough to a default: a signed envelope naming a write this build does
+ * not implement is refused, never quietly routed somewhere adjacent.
+ */
+export const ACTION_WRITES = Object.freeze({
+  set_campaign_status: 'setCampaignStatus',
+  update_campaign_budget: 'updateAdSetBudget',
+  update_campaign_creative: 'updateCampaignCreative',
+  create_campaign: 'createCampaign',
+});
+
+/** Writes resolve to the same {ok, ...} envelope the reads use, so the
+ * executor has ONE failure shape to handle rather than a per-method one. */
+export function writeOk(data) {
+  return { ok: true, data };
+}
+
+export function writeError(error) {
+  return { ok: false, error };
+}
+
+/**
  * Deterministic by-id sort (ui.md: every table sorts deterministically). Ids
  * are strings per the row shapes, compared by code unit so the order is
  * locale-independent. Returns a new array; the input is never reordered.

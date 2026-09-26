@@ -9,6 +9,8 @@ import { validateDecisionRecord } from '../src/domain/decisions.js';
 import { validateLearning } from '../src/memory/learnings.js';
 import { validateOpportunity, scoreOpportunity, opportunityError, isReadableOpportunityRecord, unreadableComponents } from '../src/domain/opportunities.js';
 import { validateExperiment } from '../src/domain/experiments.js';
+import { decisionNonce } from '../src/policy/kernel.js';
+import { resetSeededKillSwitches } from '../src/strategy/guardian.js';
 
 const TENANT = { id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' };
 
@@ -408,6 +410,191 @@ const EVENTS = [
   ...DECISIONS,
 ];
 
+// The approval queue (issue #20). Four fixtures, three pending and one lapsed,
+// so the page renders exactly three cards, one lapsed row and an empty
+// executed section until QA decides something.
+//
+// NO NONCE IS WRITTEN BY HAND anywhere below: decisionNonce(approval_id) is
+// the one definition of an approval decision's nonce, and both the executor's
+// dedupe read and --reset-approvals' purge call it.
+//
+// Every delta_micros is INSIDE its class micro-limit, because the gate applies
+// to the approval path too and a fixture above the limit would make its own
+// acceptance criterion unrunnable.
+export const SEEDED_APPROVAL_IDS = Object.freeze([
+  'apv_seed_budget_1',
+  'apv_seed_campaign_1',
+  'apv_seed_geography_1',
+  'apv_seed_lapsed_1',
+]);
+
+/** The three that must come back PENDING from a reset. */
+export const SEEDED_PENDING_IDS = Object.freeze([
+  'apv_seed_budget_1',
+  'apv_seed_campaign_1',
+  'apv_seed_geography_1',
+]);
+
+export const SEEDED_LAPSED_ID = 'apv_seed_lapsed_1';
+
+// expires_offset_hours is relative to the moment of writing, so the pending
+// fixtures are always inside their decision window and the lapsed one is
+// lapsed from the first second of a fresh seed rather than later.
+const SEED_APPROVALS = [
+  {
+    approval_id: 'apv_seed_budget_1',
+    action_class: 'budget-change',
+    action: 'update_campaign_budget',
+    resource: 'adset_001',
+    constraints: { delta_micros: 40_000_000 },
+    impact: 'raise brand-defence daily budget by ₹40',
+    downside: 'spend on saturated brand terms lifts qualified CPL',
+    evidence_refs: ['evt_seed_journey_spend_1', 'evt_seed_journey_lead_qualified_1'],
+    expires_offset_hours: 24,
+  },
+  {
+    approval_id: 'apv_seed_campaign_1',
+    action_class: 'campaign-status',
+    action: 'set_campaign_status',
+    resource: 'campaign_001',
+    constraints: { status: 'PAUSED' },
+    impact: 'pause brand defence while the new creative is built',
+    downside: 'brand coverage gap for one day',
+    evidence_refs: ['evt_seed_journey_lead_qualified_2'],
+    expires_offset_hours: 24,
+  },
+  {
+    // resource is the PROPOSED campaign id and is deliberately not one of the
+    // fake's fixtures (campaign_001/002/003). The executor takes the NAME from
+    // constraints.name for create_campaign, so the created campaign is called
+    // 'Retargeting — new region' and not 'campaign_004'.
+    approval_id: 'apv_seed_geography_1',
+    action_class: 'new-geography',
+    action: 'create_campaign',
+    resource: 'campaign_004',
+    constraints: { name: 'Retargeting — new region' },
+    impact: 'open a new region for retargeting',
+    downside: 'new spend on untested geography',
+    evidence_refs: ['evt_seed_journey_spend_1'],
+    expires_offset_hours: 24,
+  },
+  {
+    approval_id: 'apv_seed_lapsed_1',
+    action_class: 'budget-change',
+    action: 'update_campaign_budget',
+    resource: 'adset_002',
+    constraints: { delta_micros: 30_000_000 },
+    impact: 'raise prospecting budget',
+    downside: 'prospecting CPL drifts above target',
+    evidence_refs: [],
+    // 72 hours in the PAST: the stamp is this fixture's identity, and
+    // --reset-approvals restores it rather than re-dating it to now + 24h.
+    expires_offset_hours: -72,
+  },
+];
+
+/**
+ * The trust ledger: five rows, one per class that has evidence. The numbers
+ * are calibration fixtures; what matters is that the page's posture table and
+ * the gate read THESE rows through trust.postureFor, so the two can never
+ * disagree. campaign-launch has NO row at all — it is the one no-evidence,
+ * fail-closed class, and the only shadow rows are the two pinned ones.
+ */
+const SEED_TRUST = [
+  // 6 of 6 precise, no needless interventions: autonomy earned.
+  { action_class: 'campaign-status', evaluated: 6, correct: 6, needless: 0, downside_penalties: 0, pinned: false },
+  // 0.67 precision, below the 0.90 threshold: held to a human.
+  { action_class: 'budget-change', evaluated: 3, correct: 2, needless: 1, downside_penalties: 0, pinned: false },
+  { action_class: 'creative-refresh', evaluated: 4, correct: 4, needless: 0, downside_penalties: 0, pinned: true },
+  { action_class: 'new-geography', evaluated: 2, correct: 2, needless: 0, downside_penalties: 0, pinned: true },
+];
+
+function hoursFromNow(hours) {
+  return new Date(Date.now() + hours * 3_600_000).toISOString();
+}
+
+function seedApprovals(repositories) {
+  let written = 0;
+  for (const fixture of SEED_APPROVALS) {
+    const { expires_offset_hours: offset, ...row } = fixture;
+    const result = repositories.approvals.create({
+      tenant_id: TENANT.id,
+      ...row,
+      expires_at: hoursFromNow(offset),
+      status: 'pending',
+    });
+    if (result.created) {
+      written += 1;
+    }
+  }
+  return written;
+}
+
+function seedTrustLedger(repositories) {
+  let written = 0;
+  for (const row of SEED_TRUST) {
+    // upsert is INSERT OR REPLACE, so a re-seed refreshes the numbers without
+    // erroring; `written` counts only rows this run actually created, which is
+    // what the alreadySeeded summary reports.
+    if (repositories.trustLedger.get(TENANT.id, row.action_class) === null) {
+      written += 1;
+    }
+    repositories.trustLedger.upsert(TENANT.id, row);
+  }
+  return written;
+}
+
+/**
+ * `seed --reset-approvals`, in this order, each step reporting its own count so
+ * QA can tell a lock from an empty queue:
+ *
+ *   1. purge the seeded receipts, by the same nonces the fixtures produce
+ *   2. release the idempotency claims the executor took on those nonces
+ *   3. restore the four approval rows, re-stamping the two groups
+ *      DIFFERENTLY — the lapsed fixture back to 72h in the past, the other
+ *      three forward 24h. Re-stamping all four forward would make the lapsed
+ *      one pending again, so the queue would render FOUR cards and ZERO lapsed
+ *      rows, contradicting the seed's own defining property.
+ *   4. clear the seeded kill switch
+ *
+ * raw_events is NOT re-stamped (it is append-only) and derived is NOT touched.
+ * The nonce list is built by CALLING decisionNonce over SEEDED_APPROVAL_IDS, so
+ * a future rename of a fixture cannot make the reset silently miss.
+ */
+export function resetApprovals(repositories) {
+  const nonces = SEEDED_APPROVAL_IDS.map(decisionNonce);
+  const purged = repositories.actionRecords.purgeSeeded(TENANT.id, nonces);
+
+  // release() drops the claim and returns nothing, so the count is taken from
+  // the read BEFORE it: a summary that always said "released 0 claims" would
+  // be indistinguishable from a reset that found nothing to release.
+  let released = 0;
+  for (const nonce of nonces) {
+    if (repositories.idempotency.get(TENANT.id, nonce, 'executor') !== null) {
+      released += 1;
+    }
+    repositories.idempotency.release(TENANT.id, nonce, 'executor');
+  }
+
+  for (const approvalId of SEEDED_PENDING_IDS) {
+    repositories.approvals.resetToSeed(TENANT.id, approvalId, { expires_at: hoursFromNow(24) });
+  }
+  repositories.approvals.resetToSeed(TENANT.id, SEEDED_LAPSED_ID, { expires_at: hoursFromNow(-72) });
+
+  const killSwitch = resetSeededKillSwitches({ repositories, tenantId: TENANT.id });
+
+  // The two counts are printed SEPARATELY: "four rows restored" must never be
+  // read as "four pending".
+  return {
+    purged_receipts: purged,
+    released_claims: released,
+    pending: SEEDED_PENDING_IDS.length,
+    lapsed: 1,
+    kill_switch_cleared: killSwitch.reset,
+    kill_switch_scope: `${killSwitch.scope} ${killSwitch.scope_id}`,
+  };
+}
+
 export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
   const db = openDatabase(dbPath);
   const repositories = createRepositories(db);
@@ -478,6 +665,8 @@ export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
 
   const opportunitiesWritten = seedOpportunities(repositories);
   const experimentsWritten = seedExperiments(repositories);
+  const approvalsWritten = seedApprovals(repositories);
+  const trustRowsWritten = seedTrustLedger(repositories);
 
   return {
     tenant: repositories.tenants.get(TENANT.id),
@@ -486,17 +675,28 @@ export function seed({ dbPath = process.env.DB_PATH || DEFAULT_DB_PATH } = {}) {
     learningsWritten,
     opportunitiesWritten,
     experimentsWritten,
+    approvalsWritten,
+    trustRowsWritten,
     alreadySeeded: appended === 0 && decisionRows === 0 && learningsWritten === 0
-      && opportunitiesWritten === 0 && experimentsWritten === 0,
+      && opportunitiesWritten === 0 && experimentsWritten === 0 && approvalsWritten === 0,
   };
 }
 
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop());
 if (isMain) {
-  const result = seed();
-  console.log(
-    result.alreadySeeded
-      ? `seed: tenant ${TENANT.id} already present, nothing new written`
-      : `seed: wrote ${result.appended} events, ${result.decisions} decisions, ${result.learningsWritten} learnings, ${result.opportunitiesWritten} opportunities and ${result.experimentsWritten} experiments for tenant ${TENANT.id}`,
-  );
+  if (process.argv.includes('--reset-approvals')) {
+    const db = openDatabase(process.env.DB_PATH || DEFAULT_DB_PATH);
+    const summary = resetApprovals(createRepositories(db));
+    console.log(
+      `seed --reset-approvals: purged ${summary.purged_receipts} receipts, released ${summary.released_claims} claims, `
+      + `${summary.pending} approvals pending, ${summary.lapsed} lapsed, ${summary.kill_switch_cleared} kill switch cleared (${summary.kill_switch_scope})`,
+    );
+  } else {
+    const result = seed();
+    console.log(
+      result.alreadySeeded
+        ? `seed: tenant ${TENANT.id} already present, nothing new written`
+        : `seed: wrote ${result.appended} events, ${result.decisions} decisions, ${result.learningsWritten} learnings, ${result.opportunitiesWritten} opportunities, ${result.experimentsWritten} experiments, ${result.approvalsWritten} approvals and ${result.trustRowsWritten} trust rows for tenant ${TENANT.id}`,
+    );
+  }
 }
