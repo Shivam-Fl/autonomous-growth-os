@@ -7,6 +7,7 @@ import {
   subtract,
   allocate,
   formatMoney,
+  canonicalCurrency,
 } from '../../src/domain/money.js';
 
 // 1 paise = 10^4 micros; 1 rupee = 10^6 micros.
@@ -60,6 +61,56 @@ test('unknown or malformed ISO currency codes are rejected', () => {
   }
   assert.equal(fromMicros(100, 'INR').currency, 'INR');
   assert.equal(fromMicros(100, 'USD').currency, 'USD');
+});
+
+// canonicalCurrency is the read-time boundary for a STORED row: the stored
+// side of every currency comparison in the app goes through it, because
+// tenants.create takes any string and the QA repro sets the column with raw
+// SQL. The constructor is deliberately NOT loosened by any of this — see the
+// last test, which pins that.
+test('canonicalCurrency resolves a canonical stored code to itself', () => {
+  assert.equal(canonicalCurrency('USD'), 'USD');
+  assert.equal(canonicalCurrency('INR'), 'INR');
+  assert.equal(canonicalCurrency('EUR'), 'EUR');
+});
+
+test('canonicalCurrency resolves a mis-cased stored code to the currency it names', () => {
+  // 'usd' and 'USD' are the same unit of account. Reading them as different
+  // ones is what made a USD tenant's own spend look foreign.
+  assert.equal(canonicalCurrency('usd'), 'USD');
+  assert.equal(canonicalCurrency('Usd'), 'USD');
+  assert.equal(canonicalCurrency('uSd'), 'USD');
+  assert.equal(canonicalCurrency('inr'), 'INR');
+});
+
+test('canonicalCurrency resolves a padded stored code to the currency it names', () => {
+  assert.equal(canonicalCurrency(' USD '), 'USD');
+  assert.equal(canonicalCurrency('\nINR\t'), 'INR');
+});
+
+test('canonicalCurrency returns null for a stored code that names no ISO currency', () => {
+  assert.equal(canonicalCurrency('ZZZ'), null, 'an unknown code stays bad data');
+  // A non-national code stays an error even once normalised: ISO_CURRENCIES
+  // deliberately omits the fund codes (XTS, XXX), and canonicalising must not
+  // quietly promote one into a renderable currency.
+  assert.equal(canonicalCurrency('Xts'), null);
+  assert.equal(canonicalCurrency('XTS'), null);
+});
+
+test('canonicalCurrency returns null without throwing for a non-string or a blank code', () => {
+  for (const blank of [undefined, null, 42, {}, [], '', '   ']) {
+    assert.equal(canonicalCurrency(blank), null, `${JSON.stringify(blank) ?? String(blank)} must resolve to null, not throw`);
+  }
+});
+
+test('canonicalCurrency is a read-time boundary, not a second constructor', () => {
+  // The write path stays strict: fromMicros still refuses a code it cannot
+  // render, so a money value can never be built around a mis-cased code. If
+  // this ever stops throwing, canonicalCurrency has been allowed to leak into
+  // the constructor and the INVALID_CURRENCY contract has moved.
+  assert.throws(() => fromMicros(1, 'usd'), (err) => err.code === 'INVALID_CURRENCY');
+  assert.throws(() => fromMicros(1, ' USD '), (err) => err.code === 'INVALID_CURRENCY');
+  assert.throws(() => toMicros({ amountMicros: 1, currency: 'Usd' }), (err) => err.code === 'INVALID_CURRENCY');
 });
 
 test('add and subtract reject cross-currency arithmetic', () => {

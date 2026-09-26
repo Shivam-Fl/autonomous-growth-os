@@ -51,7 +51,7 @@ runs again — check the list yourself, whatever the proposal and the critique d
   | **90+** | Root cause verified, all callers checked, edge cases covered, tests will prove it |
   | **70-89** | Approach sound, some unknowns, nothing load-bearing is a guess |
   | **50-69** | Plausible, resting on an unverified assumption — say which |
-  | **<50** | Do not ship this. Write `stop.json` instead of `work-order.json`: `{ "kind": "needs-decision" or "cannot-plan", "reason": "what would resolve it" }`. A script posts it and hands the issue to a person — do not comment or label. |
+  | **<50** | Do not ship this. Write `stop.json` instead of `work-order.json`: `{ "kind": "needs-decision" or "cannot-plan", "reason": "what would resolve it" }` — or `already-done`, when every change asked for is already on the default branch and you reproduced each claim. A script posts it and hands the issue to a person — do not comment or label. |
 
 - `confidence_rationale` — one paragraph. What would move this number, in either direction?
 - `debate_summary` — what the critique changed, and what you rejected with the reason. This is

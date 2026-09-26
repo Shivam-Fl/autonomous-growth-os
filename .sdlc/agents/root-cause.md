@@ -98,7 +98,7 @@ field, so it is dropped, and the plan beside it is posted and built as if you ha
 `kind` is `environmental` (preview, seed data, IdP, a misconfigured check), `needs-decision`
 (QA and the tests disagree and only a person can say which is right), or `cannot-plan`
 (anything else). Do not comment or label the issue; a script posts your reason and parks it.
-Stop when:
+Stop when: `already-done` when every change the ticket asks for is already true on the default branch: reproduce each claim first, and put what you ran and what you saw in `reason`. A ticket the pipeline filed then closes on your evidence, so be sure.
 
 - the failure is environmental (preview not deployed, seed data missing, IdP down) — the code
   may be fine, and burning another implement cycle proves nothing

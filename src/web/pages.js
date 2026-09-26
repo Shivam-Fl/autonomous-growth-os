@@ -9,7 +9,7 @@
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
-import { formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
+import { canonicalCurrency, formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
 import { isReadableComponent } from '../domain/opportunities.js';
 import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
 import { ACTION_CLASSES } from '../policy/kernel.js';
@@ -77,7 +77,7 @@ function layout({ route, state, title, tenantName, content, announcement = '' })
 </div>
 </header>
 <div id="live-region" class="visually-hidden" aria-live="polite" role="status">${escapeHtml(announcement)}</div>
-<main id="main">
+<main id="main" tabindex="-1">
 ${heading}
 ${content}
 </main>
@@ -94,6 +94,16 @@ function panel({ kind = '', title, body, testid }) {
 <h2>${escapeHtml(title)}</h2>
 ${body}
 </section>`;
+}
+
+/** Wraps a table in the scroll region its column may not fit, so a table wider
+ * than #main's column scrolls inside its own box instead of the page. The
+ * region takes focus and carries an accessible name because a scroll container
+ * that cannot be focused cannot be scrolled by keyboard outside Chromium: the
+ * columns past the right edge would be unreachable rather than merely
+ * off-screen. */
+function tableRegion(label, table) {
+  return `<div class="table-scroll" tabindex="0" role="region" aria-label="${escapeHtml(label)}">${table}</div>`;
 }
 
 function emptyState({ title, message, action, testid }) {
@@ -278,14 +288,58 @@ const META_CELLS = {
 };
 
 /**
+ * The one place in this file that reads a tenant row's currency. A stored code
+ * is an arbitrary string — tenants.create takes any string, and nothing the
+ * app writes produces a non-canonical one — so it is resolved through the
+ * domain's read-time boundary here rather than at each of the eight call
+ * sites: canonical when it names a currency, verbatim when it names none (so a
+ * bad row's amounts are excluded from the dashboard funnel too), and INR only
+ * for a MISSING row.
+ *
+ * This seam and resolveTenantCurrency in src/api/routes.js are the same rule on
+ * two surfaces — the dashboard tile and GET /v1/metrics both read the same
+ * computeFunnel from the same row — and test/web/pages.test.js asserts they
+ * agree rather than leaving that to a comment.
+ */
+function tenantCurrency(tenant) {
+  const stored = tenant?.currency;
+  return canonicalCurrency(stored) ?? stored ?? 'INR';
+}
+
+/**
  * The one money renderer in this file, over the repo's currency-aware
  * formatter, so every amount on every screen agrees with the dashboard's
  * Qualified CPL. Two guards keep a page strictly safer than the hand-rolled
  * rupee version it replaces: a value the domain's readability rule rejects
- * degrades to the em-dash (today's ₹NaN), and a currency outside
- * ISO_CURRENCIES falls back to INR rather than throwing — tenants.create
- * accepts any string, so an unknown code is bad data, and a page render must
- * not 500 on it.
+ * degrades to the em-dash (today's ₹NaN), and a currency naming no ISO
+ * 4217 code at all falls back to INR rather than throwing — a page render
+ * must not 500 on bad data. That fallback is a relabelling, not a
+ * pass-through: a currency this build cannot render is drawn as INR, so a
+ * tenant whose stored currency is bad data reads its amounts in rupees
+ * rather than in its own code. That is a deliberate choice — the
+ * alternative, printing the bare code ('ZZZ 1,000.00'), puts a
+ * mislabelled-but-honest amount in front of a reader; this puts a
+ * correctly-formatted amount whose unit is the repo default. The trade is
+ * knowingly wrong-unit over knowingly unformatted.
+ *
+ * The fallback is for a code that names no currency, NOT for a code spelled
+ * differently: 'usd', 'Usd' and ' USD ' are the same unit of account as 'USD'
+ * and render as dollars, because every call site reaches money() through the
+ * tenantCurrency() seam above, which resolves a stored code before this
+ * membership test ever runs. Mis-casing a currency is not a currency error,
+ * and a renderer that drew a tenant's amounts in the wrong unit over three
+ * letters of case would be the bug, not the fix.
+ *
+ * That guard is load-bearing, and reached. tenantCurrency() above passes a
+ * code naming no ISO currency through VERBATIM rather than resolving it away,
+ * so every money() call on every screen for such a tenant arrives here with an
+ * unknown code. Without the membership test, fromMicros(6_000_000_000, 'ZZZ')
+ * throws INVALID_CURRENCY and the page 500s — the exact outcome this guard
+ * exists to prevent. It is covered rather than invisible: the 'ZZZ' tenant
+ * cases in test/web/pages.test.js assert the relabelling, so replacing the
+ * 'INR' fallback below with `currency` turns them red. The knowingly-wrong-unit
+ * trade described above is deliberate and unchanged; this guard is what
+ * implements it.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
@@ -304,9 +358,9 @@ function metaTable(collection, title, headers, rows, currency) {
   const cells = META_CELLS[collection];
   const body = rows.length === 0
     ? `<p class="empty-copy">No ${escapeHtml(title.toLowerCase())} in the last good sync.</p>`
-    : `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
+    : tableRegion(`${title} table`, `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
 ${rows.map((row) => `<tr>${cells(row, currency).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
-</tbody></table>`;
+</tbody></table>`);
   return panel({
     title: `${title} · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
     body,
@@ -401,7 +455,7 @@ ${panel({
     const age = tenant && through ? `${staleAgeHours(nowIso, through)}h ago` : 'unknown';
     return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(through ?? 'unknown')} (${escapeHtml(age)})</div>
 ${kpiStrip(state, { repositories, tenant, stale: true })}
-${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
+${await metaRegions({ metaProvider, metaError, currency: tenantCurrency(tenant) })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state, { repositories, tenant })}`;
@@ -421,7 +475,7 @@ ${guardianPanel(state, { repositories, tenant })}`;
   }
 
   return `${kpiStrip(state, { repositories, tenant })}
-${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
+${await metaRegions({ metaProvider, metaError, currency: tenantCurrency(tenant) })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
 ${guardianPanel(state, { repositories, tenant })}`;
@@ -452,7 +506,7 @@ function kpiStrip(state, { repositories, tenant }) {
   const rows = repositories.rawEvents.listByTypes(tenant.id, ['spend.observed', 'lead_qualified']);
   // Same tenant-currency exclusion GET /v1/metrics applies (routes.js): the
   // tenant row's currency leaves foreign-currency legacy spend out of the sum.
-  const funnel = computeFunnel(rows, tenant.currency ?? 'INR');
+  const funnel = computeFunnel(rows, tenantCurrency(tenant));
   const coverage = coverageOf(rows);
   const through = dataThrough(rows);
   const nowIso = new Date().toISOString();
@@ -465,7 +519,7 @@ function kpiStrip(state, { repositories, tenant }) {
     // as every other amount on every other screen: integer micros divided,
     // formatted without floats, em-dash while the volume is zero (money()'
     // safe-integer guard).
-    kpiCard('Qualified CPL', money(cpl, tenant.currency ?? 'INR'), maturity, through),
+    kpiCard('Qualified CPL', money(cpl, tenantCurrency(tenant)), maturity, through),
     kpiCard('Qualified volume', String(funnel.qualified_volume), maturity, through),
     kpiCard('Maturity coverage', coverage.toFixed(2), maturity, through),
   ];
@@ -488,7 +542,7 @@ function decisionFeed(state, { repositories, tenant }) {
     title: `Decision feed · ${decisions.length} row${decisions.length === 1 ? '' : 's'}`,
     body: decisions.length === 0
       ? `<p class="empty-copy">No decisions recorded yet. Decisions appear here once shadow mode starts.</p>`
-      : `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`,
+      : tableRegion('Decision feed table', `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`),
   });
 }
 
@@ -567,9 +621,9 @@ function decisionsOf(repositories, tenant) {
 function journalTable(rows, filters) {
   const body = rows.length === 0
     ? `<p class="empty-copy">No decisions match the current filters. Widen the class or status filter, or clear both, to see the full journal.</p>`
-    : `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
+    : tableRegion('Decision journal table', `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
 ${rows.map(journalRow).join('')}
-</tbody></table>`;
+</tbody></table>`);
   return panel({
     title: `Decision journal · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
     body,
@@ -831,7 +885,7 @@ function opportunities(state, { repositories, tenant }) {
   if (state === 'partial') {
     return `<div class="banner banner-warn" role="status">Some experiment arms await maturity — scores shown are provisional until conversions mature.</div>
 ${researchObservations(repositories, tenant)}
-${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenant?.currency ?? 'INR')}`;
+${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenantCurrency(tenant))}`;
   }
 
   if (state === 'empty' || ranked.length === 0) {
@@ -845,7 +899,7 @@ ${emptyState({
   }
 
   return `${researchObservations(repositories, tenant)}
-${rankedList(ranked, '', tenant?.currency ?? 'INR')}`;
+${rankedList(ranked, '', tenantCurrency(tenant))}`;
 }
 
 const STATE_BADGES = {
@@ -920,7 +974,7 @@ ${panel({
     title: 'Running experiments',
     body: cards.length === 0
       ? `<p class="empty-copy">No experiments running, so no arms await maturity.</p>`
-      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
+      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenantCurrency(tenant))).join('')}</ul>`,
   })}
 ${hypothesisComposer()}`;
   }
@@ -936,7 +990,7 @@ ${hypothesisComposer()}`;
 
   return panel({
     title: `Running experiments · ${cards.length}`,
-    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
+    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenantCurrency(tenant))).join('')}</ul>`,
   }) + hypothesisComposer();
 }
 
@@ -971,9 +1025,9 @@ function postureTable(repositories, tenant) {
   }).join('');
   return `<section class="panel" data-testid="posture-table">
 <h2>Autonomy posture by action class</h2>
-<table><thead><tr><th>Action class</th><th>Posture</th><th>Why</th></tr></thead><tbody>
+${tableRegion('Autonomy posture by action class table', `<table><thead><tr><th>Action class</th><th>Posture</th><th>Why</th></tr></thead><tbody>
 ${rows}
-</tbody></table>
+</tbody></table>`)}
 </section>`;
 }
 
