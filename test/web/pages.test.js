@@ -1815,10 +1815,14 @@ test('the rule the page h1 carries still holds the declarations the page title d
 // them moves the rendered value. `font` is in the first two groups because it
 // sets both at once — reported once per group, which is a correct report rather
 // than a duplicate, and cheaper than letting a shorthand through unnoticed.
+// `all` is in all three, because it sets all three: 'h1[data-testid="page-title"]
+// { all: unset }' is an ordinary-looking reset that Chromium settles at 16px
+// with a default line-height and the browser's own top margin, and a guard that
+// listed only the three longhands certified every one of them wrong.
 const PAGE_TITLE_PROPERTIES = [
-  { group: 'font-size', properties: ['font-size', 'font'] },
-  { group: 'line-height', properties: ['line-height', 'font'] },
-  { group: 'margin-top', properties: ['margin', 'margin-top', 'margin-block', 'margin-block-start'] },
+  { group: 'font-size', properties: ['font-size', 'font', 'all'] },
+  { group: 'line-height', properties: ['line-height', 'font', 'all'] },
+  { group: 'margin-top', properties: ['margin', 'margin-top', 'margin-block', 'margin-block-start', 'all'] },
 ];
 
 // The declaration each guarded group must finally be settled by, as the
@@ -1834,10 +1838,12 @@ const PAGE_TITLE_HELD = {
   'margin-top': 'margin: 0',
 };
 
-// ONE splitter for the whole guard, and the matcher and the specificity
-// function both run on it — a selector shape that tokenised one way for
-// matching and another for the cascade would mis-order the two against each
-// other, and the fix for that is one function, not two that agree today.
+// ONE scanner for the whole guard, and every cut of a selector runs on it —
+// the matcher and the specificity function must not tokenise a selector two
+// ways, and a selector must not be cut two ways either. A selector shape that
+// tokenised one way for matching and another for the cascade would mis-order
+// the two against each other, and the fix for that is one function, not two
+// that agree today.
 //
 // Quote- and bracket-aware, because a space inside a quoted value is not a
 // compound boundary: 'h1[data-x="a b"]' is ONE compound, and the plain
@@ -1846,40 +1852,72 @@ const PAGE_TITLE_HELD = {
 // comment claimed to support. A newline is whitespace too, because the
 // shipped sheet breaks a comma list across one.
 //
-// Each compound carries the combinator joining it to the one BEFORE it, and
-// the spaces either side of a '>' emit no empty compound: 'main > h1' is two
-// compounds, not three, and the empty middle one silently broke the match.
-function splitCompounds(branch) {
-  const compounds = [];
-  let text = '';
-  let combinator = '';
+// The same state decides where the comma BETWEEN two selectors is, which is
+// why both cuts come from here rather than from a second copy of the walk: a
+// ',' inside a quoted value or inside a functional pseudo-class belongs to the
+// selector it is written in, and cutting there hands the matcher half a
+// selector that was never in the stylesheet — BUG-4's failure one character
+// over, and the guard would report the half it invented.
+function splitOutside(text, isBoundary) {
+  const parts = [];
+  let current = '';
   let depth = 0;
   let quote = null;
 
-  const push = () => {
-    if (text.trim() !== '') compounds.push({ compound: text.trim(), combinator });
-    text = '';
-    combinator = '';
-  };
-
-  for (const character of branch) {
+  for (const character of text) {
     if (quote !== null) {
       if (character === quote) quote = null;
     } else if (character === '"' || character === "'") quote = character;
     else if (character === '[' || character === '(') depth += 1;
     else if (character === ']' || character === ')') depth -= 1;
-    else if (depth === 0 && (character === '>' || character === '+' || character === '~')) {
-      push();
-      combinator = character;
-      continue;
-    } else if (depth === 0 && /\s/.test(character)) {
-      push();
+    else if (depth === 0 && isBoundary(character)) {
+      parts.push({ text: current, boundary: character });
+      current = '';
       continue;
     }
-    text += character;
+    current += character;
   }
-  push();
+  parts.push({ text: current, boundary: null });
+  return parts;
+}
+
+const isCombinator = (character) => character === '>' || character === '+' || character === '~';
+
+// Each compound carries the combinator joining it to the one BEFORE it, and
+// the spaces either side of a '>' emit no empty compound: 'main > h1' is two
+// compounds, not three, and the empty middle one silently broke the match.
+//
+// The combinator is read off the boundary that ENDS a compound, which is the
+// whole reason a combinator written with spaces round it must survive: in
+// 'main > h1' the boundary after 'main' is the space and the one that ends the
+// empty middle is the '>', so a scanner that took the first boundary and moved
+// on read 'h1 + p' and 'h1+p' as different selectors — and dropping the '+'
+// there let a sibling selector be answered by the descendant rule, which can
+// return false and so manufactured a proof the guard is only allowed to have.
+function splitCompounds(branch) {
+  const compounds = [];
+  let combinator = '';
+  for (const part of splitOutside(branch, (character) => isCombinator(character) || /\s/.test(character))) {
+    const compound = part.text.trim();
+    if (compound !== '') {
+      compounds.push({ compound, combinator });
+      combinator = '';
+    }
+    // The boundary that ENDS a compound joins it to the one AFTER it, so it
+    // is held until there is one. In 'main > h1' that is the '>' ending the
+    // empty part between the spaces, and holding it across the empty part is
+    // what keeps the spaced spelling of a combinator from being dropped.
+    if (isCombinator(part.boundary)) combinator = part.boundary;
+  }
   return compounds;
+}
+
+// A rule's selector list, cut on top-level commas only: 'html, body' is two
+// branches, and so is the shipped sheet's own list broken across a newline.
+function splitTopLevelCommas(selector) {
+  return splitOutside(selector, (character) => character === ',')
+    .map((part) => part.text.trim())
+    .filter((part) => part !== '');
 }
 
 // The text of an attribute selector's body — everything up to the ']' — found
@@ -2180,7 +2218,7 @@ function declarations(body) {
 }
 
 function branchesOf(rule) {
-  return rule.selector.split(',').map((branch) => branch.trim());
+  return splitTopLevelCommas(rule.selector);
 }
 
 // Every declaration that would move one of the three properties the page title
@@ -2199,7 +2237,6 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
   // class rule "declares no line-height" about a stylesheet that declares it.
   const classRules = rules.filter((rule) => branchesOf(rule).includes(`.${cls}`));
   const classIndexes = new Set(classRules.map((rule) => rule.index));
-  const heldWinner = {};
 
   for (const { group, properties } of PAGE_TITLE_PROPERTIES) {
     const subject = `the page h1's ${group}`;
@@ -2231,7 +2268,6 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
     // name and the one whose importance decides the comparison — and the rule
     // it came from is the one the class rule is compared with for order.
     const winner = held[held.length - 1];
-    heldWinner[group] = winner;
     const baseline = { specificity: specificityOf(classBranch), index: winner.index };
 
     // The VALUE, not only the declaration that wins (BUG-2). The declaration
@@ -2341,7 +2377,20 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   const html = await renderPage('/', { repositories: freshRepos() });
   const { chain } = pageTitleElement(html);
   const cls = pageTitleClass(html);
-  const inMedia = `${css}\n@media (max-width: 900px) { #main h1 { font-size: 2.4rem; } }\n`;
+  // A stylesheet carrying the class rule and nothing else, for every case
+  // below that asserts what the guard REPORTS. Those cases are about the
+  // guard, and pinning them to the shipped file ties them to a property of
+  // that file their verdict must not depend on: append
+  // '.page-title { font-size: 1.4rem !important; }' and the browser still
+  // renders 22.4px, so a plain competitor is correctly no longer reported —
+  // and a case that insisted on the report would then be red on a correct
+  // stylesheet, which is the false alarm this guard exists to remove. The
+  // class is interpolated, so the fixture follows a coordinated rename like
+  // every other case here. The shipped sheet stays the input to the
+  // clean-tree probes and to the cases that are about the file itself: the
+  // two-longhand winner, the appended !important class rule, and the renames.
+  const sheetWith = (extra) => `.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }\n${extra}\n`;
+  const inMedia = sheetWith('@media (max-width: 900px) { #main h1 { font-size: 2.4rem; } }');
 
   // The shipped stylesheet must be clean, and it is the case that proves the
   // resolver is not simply flagging everything: the '*' reset and the body
@@ -2408,7 +2457,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   const bySelectorAndProperty = (offenders) => offenders.map((one) => `${one.selector} ${one.property}`);
 
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(override), cls, chain)),
     ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
     'a later, higher-specificity h1 rule is named once per property — this leaves every declaration above satisfied',
   );
@@ -2423,9 +2472,13 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     'the message names the condition the override bites in',
   );
   assert.deepEqual(
-    // Anchored on the resolved class, not the literal, or the insertion would
-    // silently no-op under a coordinated rename and this case would pass green.
-    bySelectorAndProperty(outrankingPageTitleDeclarations(css.replace(`.${cls} {`, `${override}\n\n.${cls} {`), cls, chain)),
+    // The override above the class rule rather than below it, in the fixture
+    // rather than in the shipped sheet, so the only thing that differs from
+    // the case above is the order. Anchored on the resolved class, not the
+    // literal, or the substitution would silently no-op under a coordinated
+    // rename and this case would pass green.
+    bySelectorAndProperty(outrankingPageTitleDeclarations(
+      `${override}\n.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }\n`, cls, chain)),
     ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
     'specificity decides, not source order: the same rule declared above the class rule still fails',
   );
@@ -2440,17 +2493,17 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // declaration that does not move the root (ground (a), where it reaches the
   // h1 and loses).
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n* { font-size: 2.4rem; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('* { font-size: 2.4rem; }'), cls, chain)),
     ['* font-size'],
     "'*' declaring font-size is reported under ground (b) — it matches the root, and the h1 renders at 53.76px",
   );
   assert.deepEqual(
-    outrankingPageTitleDeclarations(`${css}\n* { line-height: 2; }\n* { margin: 24px 0 0; }\n`, cls, chain),
+    outrankingPageTitleDeclarations(sheetWith('* { line-height: 2; }\n* { margin: 24px 0 0; }'), cls, chain),
     [],
     "'*' declaring anything else on a guarded property reaches the h1 and loses at (0,0,0), and touches no root font-size — silent at 22.4px",
   );
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n* { font: 700 2.4rem system-ui; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('* { font: 700 2.4rem system-ui; }'), cls, chain)),
     ['* font'],
     'the font shorthand sets the root font-size too, so it is the same ground-(b) report',
   );
@@ -2458,16 +2511,16 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // on the body leaves the page h1 at 22.4px even though the body is an ancestor
   // of it — and a declaration matching the element beats an inherited one at
   // any weight, !important included.
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem; }\n`, cls, chain), [],
+  assert.deepEqual(outrankingPageTitleDeclarations(sheetWith('body { font-size: 2.4rem; }'), cls, chain), [],
     'body reaches the h1 by inheritance and still loses at (0,0,1)');
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem !important; }\n`, cls, chain), [],
+  assert.deepEqual(outrankingPageTitleDeclarations(sheetWith('body { font-size: 2.4rem !important; }'), cls, chain), [],
     'an !important on an ancestor is still only an inherited value, and a declaration matching the h1 beats it at any weight');
   for (const rule of ['main { font-size: 20px; }', '#main { font-size: 20px; }']) {
-    assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n${rule}\n`, cls, chain), [],
+    assert.deepEqual(outrankingPageTitleDeclarations(sheetWith(rule), cls, chain), [],
       `'${rule.split(' {')[0]}' is not the root either — rem is measured against the root, and the h1 stays at 22.4px`);
   }
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1 { font-size: 2.4rem !important; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('h1 { font-size: 2.4rem !important; }'), cls, chain)),
     ['h1 font-size'],
     '!important beats the class rule on specificity alone, which a guard that ignored it would miss',
   );
@@ -2489,7 +2542,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   ]) {
     const selector = override.split(' {')[0];
     assert.deepEqual(
-      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls, chain)),
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(override), cls, chain)),
       [`${selector} font-size`],
       `'${selector}' matches the shipped page h1, so it is a real override and must be reported`,
     );
@@ -2503,7 +2556,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // rename like every other case in this test.
   for (const selector of ['[data-testid="page-title"]', `[class~="${cls}"]`]) {
     assert.deepEqual(
-      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 2.4rem; }\n`, cls, chain)),
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`${selector} { font-size: 2.4rem; }`), cls, chain)),
       [`${selector} font-size`],
       `'${selector}' matches the shipped page h1 at (0,1,0) and later in the file, so it is a real override`,
     );
@@ -2514,15 +2567,39 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // property. It is reported once per group it moves, which is the truth rather
   // than a duplicate.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n#main h1 { font: 700 2.4rem/1.6 system-ui; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('#main h1 { font: 700 2.4rem/1.6 system-ui; }'), cls, chain)),
     ['#main h1 font', '#main h1 font'],
     'the font shorthand sets both guarded typographic properties and is outranked in neither',
+  );
+
+  // 'all' is the shorthand of all three guarded properties, and the table of
+  // guarded properties is what decides whether a declaration is read at all —
+  // so a sheet could reset the page title's font-size, line-height and top
+  // margin with one ordinary-looking declaration and leave the suite green.
+  // Chromium settles 'h1[data-testid="page-title"] { all: unset }' at 16px
+  // with the browser's own line-height, against the 22.4px the page title is
+  // held at: all three wrong, nothing reported. It is reported once per group
+  // it moves, the same treatment the 'font' shorthand gets above.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('h1[data-testid="page-title"] { all: unset; }'), cls, chain)),
+    ['h1[data-testid="page-title"] all', 'h1[data-testid="page-title"] all', 'h1[data-testid="page-title"] all'],
+    "'all' sets all three guarded properties at once, so a matching rule that outranks the class rule is reported once per group it moves",
+  );
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith('h1 { all: unset; }'), cls, chain),
+    [],
+    "the same reset through a bare 'h1' reaches the h1 and loses at (0,0,1), so the cascade still leaves the heading at 22.4px and the guard is quiet",
+  );
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`.${cls} { all: unset; }`), cls, chain)),
+    [`.${cls} all`, `.${cls} all`, `.${cls} all`],
+    'and in the class rule itself the value cross-check catches it: the declaration the cascade keeps is no longer the one the page title depends on',
   );
 
   // '*' under a descendant combinator still matches the h1, so the pre-filter
   // has to read the last compound rather than the whole branch.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nmain * { font-size: 2.4rem !important; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('main * { font-size: 2.4rem !important; }'), cls, chain)),
     ['main * font-size'],
     "a universal selector under a descendant combinator matches the h1, and !important on it wins",
   );
@@ -2550,7 +2627,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     'an !important class declaration is not outranked by a plain rule at (1,0,1), and the rest of the class rule still holds',
   );
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 1.4rem; }\n#main h1 { font-size: 2.4rem; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`.${cls} { font-size: 1.4rem; }\n#main h1 { font-size: 2.4rem; }`), cls, chain)),
     ['#main h1 font-size'],
     'the same override is reported once the class rule drops the !important',
   );
@@ -2565,7 +2642,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   assert.ok(outrankingPageTitleDeclarations(renamed, cls, chain).length > 0, 'renaming only the stylesheet fails');
   assert.ok(outrankingPageTitleDeclarations(css, 'renamed-away', chain).length > 0, 'renaming only the markup fails');
 
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n.checklist li:not(.x) { font-size: 2rem; }\n`, cls, chain), [],
+  assert.deepEqual(outrankingPageTitleDeclarations(sheetWith('.checklist li:not(.x) { font-size: 2rem; }'), cls, chain), [],
     'a selector that cannot reach the page h1 is skipped unparsed, so the guard does not throw on CSS it never evaluates');
 
   // BUG-2, verbatim. The class rule declared twice with different values
@@ -2576,12 +2653,12 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // cascade test compares the class rule's WINNING declaration against it, so a
   // second rule can no longer leave the two disagreeing.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 2.4rem; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`.${cls} { font-size: 2.4rem; }`), cls, chain)),
     [`.${cls} font-size`],
     "a second .page-title rule is reported by the VALUE cross-check, not by ground (a) — it IS the baseline rule",
   );
   assert.match(
-    outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 2.4rem; }\n`, cls, chain)[0].message,
+    outrankingPageTitleDeclarations(sheetWith(`.${cls} { font-size: 2.4rem; }`), cls, chain)[0].message,
     /font-size: 2\.4rem.*instead of font-size: 1\.4rem/,
     'the message names the winning value and the one the page title depends on, not merely the selector',
   );
@@ -2590,7 +2667,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     ['margin-top', 'margin', `.${cls} { margin: 24px 0 0; }`],
   ]) {
     assert.deepEqual(
-      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${rule}\n`, cls, chain)),
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(rule), cls, chain)),
       [`.${cls} ${property}`],
       `the value cross-check covers the ${group} group too, not only font-size`,
     );
@@ -2599,7 +2676,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // 'font-size: 1.4rem !important' settles at the same 1.4rem the h1 depends
   // on, and the comparison ignores importance on purpose.
   assert.deepEqual(
-    outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 1.4rem !important; }\n`, cls, chain),
+    outrankingPageTitleDeclarations(sheetWith(`.${cls} { font-size: 1.4rem !important; }`), cls, chain),
     [],
     'a restatement of the held value is green, even carrying !important',
   );
@@ -2610,16 +2687,33 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // title carries the class itself rather than sitting inside one. Chromium
   // reads 22.4px, so a red build here is a false alarm.
   for (const selector of ['.page-title h1', '.page-title h2', '.panel h1']) {
-    assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 2.4rem; }\n`, cls, chain), [],
+    assert.deepEqual(outrankingPageTitleDeclarations(sheetWith(`${selector} { font-size: 2.4rem; }`), cls, chain), [],
       `'${selector}' provably cannot reach the page h1, so it is a no-op at any specificity — the h1 stays at 22.4px`);
   }
   // The ancestor requirement holds in the other direction too: the class on the
   // h1 itself matches, at (0,2,0) with the type.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1.${cls} { font-size: 2.4rem; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`h1.${cls} { font-size: 2.4rem; }`), cls, chain)),
     [`h1.${cls} font-size`],
     'the class on the h1 itself is a match, not a missing ancestor',
   );
+  // And a sibling combinator, which needs information the chain does not carry.
+  // The h1 is main#main's first child, so no '.kpi + h1' matches it today and
+  // Chromium reads 22.4px — but the two spellings below differ only by the
+  // spaces round the '+', and the spaced one used to lose its combinator and
+  // be answered by the DESCENDANT rule, which can return false. That is a
+  // proof the guard is only allowed to have when it has one, so the spaced
+  // spelling is reported: undecidable, may match, the noisy direction.
+  for (const selector of ['.kpi + h1.page-title', '.kpi~h1.page-title', 'h1 + .page-title']) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`${selector} { font-size: 2.4rem; }`), cls, chain)),
+      [`${selector} font-size`],
+      `'${selector}' cannot be proved out — the rightmost compound matches the h1 and the sibling is undecidable from an ancestor chain, so it may match`,
+    );
+  }
+  assert.equal(branchReaches('.kpi + h1.page-title', chain, chain.length - 1),
+    branchReaches('.kpi~h1.page-title', chain, chain.length - 1),
+    'a combinator written with spaces round it is the same selector as one written without, and reaches the same answer');
 
   // BUG-4, verbatim, and the pair that pins why. The space is inside a quoted
   // value, so the selector is one compound; the shipped h1 carries no data-x,
@@ -2627,7 +2721,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // "the cascade guard cannot read the selector 'h1[data-x="a b"]': the token
   // '[data-x="a'" — a build break on ordinary CSS.
   assert.deepEqual(
-    outrankingPageTitleDeclarations(`${css}\nh1[data-x="a b"] { font-size: 2.4rem; }\n`, cls, chain),
+    outrankingPageTitleDeclarations(sheetWith('h1[data-x="a b"] { font-size: 2.4rem; }'), cls, chain),
     [],
     'a space inside a quoted value is not a compound boundary, and a guard that threw here was a build break on valid CSS',
   );
@@ -2637,15 +2731,40 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // not its presence, or this is a false failure on a rule that changes
   // nothing. Its companion below differs only in the hyphen and IS reported.
   assert.deepEqual(
-    outrankingPageTitleDeclarations(`${css}\nh1[data-testid="page title"] { font-size: 2.4rem; }\n`, cls, chain),
+    outrankingPageTitleDeclarations(sheetWith('h1[data-testid="page title"] { font-size: 2.4rem; }'), cls, chain),
     [],
     'the h1 carries data-testid="page-title" with a hyphen, so this names a value it does not have — a proof of non-match',
   );
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1[data-testid="page-title"] { font-size: 2.4rem; }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('h1[data-testid="page-title"] { font-size: 2.4rem; }'), cls, chain)),
     ['h1[data-testid="page-title"] font-size'],
     'the same selector with the value the h1 really carries is a real override at (0,1,1)',
   );
+  // BUG-4's sibling: the same quoted value, cut on a comma instead of a space.
+  // A rule's selector list is cut on TOP-LEVEL commas only, and the walk that
+  // decides that is the one that decides where a compound ends — a bare
+  // ',', split turned 'h1[data-x="a,b"]' into the half-selector 'h1[data-x="a',
+  // which the matcher cannot read: the message named a selector that is not in
+  // the stylesheet, the specificity came back unreadable, and a rule that
+  // changes nothing at all was reported. Chromium reads 22.4px for it, because
+  // the shipped h1 carries no data-x.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(sheetWith('h1[data-x="a,b"] { font-size: 2.4rem; }'), cls, chain),
+    [],
+    'a comma inside a quoted value is not a selector boundary, and cutting it there reported a half-selector the stylesheet does not contain',
+  );
+  // The functional pseudo-class carries a comma in its argument, so it is the
+  // same cut one syntax level in. Here the report is NOT silenced, and it
+  // should not be: ':is()' is undecidable from static markup, so the guard
+  // decides on the base and 'h1' may match — the noisy direction the contract
+  // takes on purpose. What matters is that it is read as ONE selector, with a
+  // specificity the cascade can be ordered by; before the fix the message read
+  // "the selector 'h1:is(.a' … at (unreadable)".
+  const functional = outrankingPageTitleDeclarations(sheetWith('h1:is(.a, .b) { font-size: 2.4rem; }'), cls, chain);
+  assert.deepEqual(bySelectorAndProperty(functional), ['h1:is(.a, .b) font-size'],
+    'a comma inside a pseudo-class argument is not a selector boundary either: the whole selector is named, and it is reported because :is() may match');
+  assert.match(functional[0].message, /outranks \.page-title at \(0,1,1\)/,
+    'and its specificity is the one the whole selector has, rather than the unreadable value a cut selector leaves behind');
 
   // Ground (b), reported. These lose the cascade on the element and still move
   // the heading, because the class rule's font-size is in rem. Chromium reads
@@ -2658,7 +2777,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     ['html, body', 'html'],
     ['[lang]', '[lang]'],
   ]) {
-    const offenders = outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 2.4rem; }\n`, cls, chain);
+    const offenders = outrankingPageTitleDeclarations(sheetWith(`${selector} { font-size: 2.4rem; }`), cls, chain);
     assert.deepEqual(bySelectorAndProperty(offenders), [`${named} font-size`],
       `'${selector}' may match the document root and declares font-size, so it moves the h1 whatever the cascade says on the element`);
     assert.match(offenders[0].message, /document root/,
@@ -2676,7 +2795,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     "under ground (b) it is a report: the root is <html lang=\"en\"> and the rule matches it");
   for (const selector of ['html', ':root']) {
     assert.deepEqual(
-      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 20px; }\n`, cls, chain)),
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`${selector} { font-size: 20px; }`), cls, chain)),
       [`${selector} font-size`],
       `'${selector} { font-size: 20px }' renders the h1 at 28px and is reported`,
     );
@@ -2684,12 +2803,12 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // Inside an at-rule is the same report with the condition named, like any
   // other override the reader has to be told the width of.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n@media (max-width: 900px) { html { font-size: 20px; } }\n`, cls, chain)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('@media (max-width: 900px) { html { font-size: 20px; } }'), cls, chain)),
     ['html font-size'],
     'a root font-size inside a media query is a real override at that width',
   );
   assert.match(
-    outrankingPageTitleDeclarations(`${css}\n@media (max-width: 900px) { html { font-size: 20px; } }\n`, cls, chain)[0].message,
+    outrankingPageTitleDeclarations(sheetWith('@media (max-width: 900px) { html { font-size: 20px; } }'), cls, chain)[0].message,
     /@media \(max-width: 900px\)/,
     'and its message names the condition',
   );
