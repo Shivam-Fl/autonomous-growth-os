@@ -1003,7 +1003,8 @@
         "detail": "The work order in the repository root is version 4 and its files[] names three paths (src/policy/kernel.js, src/executor/executor.js, src/web/pages.js); `gh pr diff 53` is 26 files and +7348/−102. Recorded here because the council's scope rule reads files[] as the reviewable unit, and a reviewer who took it literally would either block the PR over 23 files or, worse, review three files and pass the rest. I checked all 26 and found no drive-by change: every deleted line in the diff is issue-20 work (the read-only fake provider replaced by a writable one, the hard-coded AUTONOMY_POSTURE table replaced by the trust-derived one, the inline maturity computation replaced by tenantMaturity with the metrics wire shape preserved, buildApp/boot signatures widened for the kernel). The work order's own acceptance criteria AC-3 through AC-12 and its QA script name most of the other files, so this is a plan that was revised three times against one ticket, not an unreviewed change — but nothing on the PR says so.\n\n`work-order.json:1`\n\nEvidence: work-order.json version 4, files[] = 3 paths, one of which (src/web/pages.js) is listed with 'action: no change should be made'. gh pr view 53 --json changedFiles,additions,deletions -> 26 / 7348 / 102. The four commits on the branch are the feature (f8b19ba), a fix round (70bac84b), this round's fix (b8a0ddc) and three base merges.\n\nFix: State it on the issue rather than in a file the implementer rewrites each round: that the PR is the whole of #20 and work-order.json is its final revision, so the council reviews the diff against the ticket's acceptance criteria and not against files[]. If the split is meant to be enforced, the pipeline needs the earlier revisions' file lists carried forward into the current work order."
       }
     ],
-    "pr": "53"
+    "pr": "53",
+    "filed": 76
   },
   "qa": {
     "verdict": "pass",
