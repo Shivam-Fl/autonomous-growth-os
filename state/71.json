@@ -532,46 +532,26 @@
       {
         "id": "BUG-2",
         "severity": "minor",
-        "title": "The journal decision drawer scrolls stored free text sideways instead of wrapping it, unlike the four card lists this PR fixed",
-        "expected": "Free text that is one unbreakable token wraps inside the surface that shows it, which is the rule this PR applies to .experiment-card, .opportunity-row, .approval-card and .learning-card.",
-        "actual": "With a decision carrying 120-character unbreakable evidence_refs, memory_refs, policy_decision_id and worst_reasonable_case, the drawer body lays out 1870px of content inside 271px (320), 326px (375) and 365px (414) of client width, and 6-7 elements sit at right=1895.3, past the viewport edge. The page does not widen only because #journal-drawer is position: fixed and therefore excluded from document scroll width; the text is reachable by scrolling the drawer horizontally, which its `overflow-y: auto` makes `overflow-x: auto`.",
+        "title": "A long unbreakable decision_id overflows the journal's awaiting-maturity list and scrolls the whole page sideways",
+        "area": "/journal awaiting-maturity list",
+        "expected": "a decision_id is free text like any card name, so a long unbreakable one should wrap inside its .awaiting-list li and leave document.documentElement.scrollWidth == window.innerWidth, as it now does for .experiment-card, .opportunity-row, .approval-card and .learning-card",
+        "actual": "With a 120-character decision_id the page reads scrollWidth 1443 against innerWidth 320, 375 and 414. The .awaiting-list li extends to x=1443 and its <strong> to x=1426 on a single line with computed overflow-wrap: normal, so the panel border and the rest of the page are pushed off the right edge. .awaiting-list is display: grid and its li are grid items, so the item's automatic minimum is the token's min-content width — the same mechanism the stylesheet comment names for .experiment-list and .approval-list, in a fifth list the wrap rule does not name.",
         "repro": [
-          "Create a decision for tenant_demo whose record carries 120-character unbreakable evidence_refs, memory_refs, policy_decision_id and worst_reasonable_case (repositories.decisions.create)",
-          "Open /journal at a 320, 375 or 414px viewport",
-          "Click the row's open-decision action for that decision",
-          "Read #journal-drawer-body scrollWidth (1870) against clientWidth (271/326/365)"
+          "Create a decision for tenant_demo whose decision_id is 120 unbreakable characters (for example 'dec_' followed by 116 'q') and whose status is awaiting-maturity.",
+          "Open /journal?state=partial at a 320, 375 or 414px viewport.",
+          "Read document.documentElement.scrollWidth: it is 1443, against an innerWidth of 320, 375 or 414.",
+          "The Awaiting maturity list entry for that decision runs off the right edge of the screen and the whole page scrolls sideways."
         ],
-        "area": "/journal, #journal-drawer-body",
         "evidence": [
-          "qa-evidence/T-15-320.png",
-          "qa-evidence/T-15-414.png",
-          "qa-evidence/drawer.json"
+          "qa-evidence/BUG-1-awaiting-list-320.png",
+          "qa-evidence/BUG-1-awaiting-list-414.png",
+          "qa-evidence/T-11-awaiting.json",
+          "qa-evidence/T-11-awaiting-head-320.png",
+          "qa-evidence/T-11-awaiting-base-320.png"
         ],
-        "suspected_cause": "The wrap rule is scoped to four list classes and the drawer body is not one of them. This is the scoping trade the PR's own comment makes -- \"Scoped to these four lists, never to #main\" -- and #journal-drawer-body renders the same kind of stored free text by a different route (client-rendered from GET /v1/decisions/:id). Nothing in this diff touches the drawer, so this predates #71 and is filed rather than fixed here.",
-        "reproducible": "always",
-        "introduced_by_pr": false
-      },
-      {
-        "id": "BUG-3",
-        "severity": "minor",
-        "title": "Tab escapes the journal decision dialog on the first press, while the dialog is marked aria-modal",
-        "expected": "A dialog rendered with role=\"dialog\" aria-modal=\"true\" holds focus, or traps it, so a keyboard user is not delivered to page content sitting behind an overlay that claims the rest is unavailable.",
-        "actual": "On opening a decision the Close button is focused, and the first Tab lands on the skip link outside #journal-drawer, then walks the brand and the five nav links behind it. The drawer is fixed and covers the whole viewport at this width, so the focus ring is drawn on content the user cannot see. #journal-drawer carries no tabindex, so the drawer itself is not a tab stop.",
-        "repro": [
-          "Open /journal at a viewport 900px wide or narrower",
-          "Click any row's open-decision action",
-          "Press Tab once",
-          "Observe focus move to the skip link outside the dialog, which is aria-modal=\"true\""
-        ],
-        "area": "/journal, #journal-drawer",
-        "evidence": [
-          "qa-evidence/T-16.png",
-          "qa-evidence/T-16b.png",
-          "qa-evidence/drawer-kbd.json"
-        ],
-        "suspected_cause": "src/web/client.js focuses the Close button on open but installs no keydown handler for Tab, so the dialog is announced as modal and behaves as a plain panel. The file's own comment on the error panel shows the focus-on-open pattern is deliberate; the trap is the part that is missing. The contrast with .table-scroll, which the stylesheet gives tabindex=\"0\" precisely so its overflow is keyboard-scrollable, is the closest thing to a precedent in this codebase. Predates #71 -- nothing in this diff touches the drawer.",
-        "reproducible": "always",
-        "introduced_by_pr": false
+        "suspected_cause": "src/web/styles.css scopes the wrap rule to four class lists (.experiment-card, .opportunity-row, .approval-card, .learning-card). The awaiting-maturity list at src/web/pages.js:599 is a fifth list of the same shape — .awaiting-list is display: grid, its li are grid items, and the free text is the decision_id in a <strong> — and it is not in the selector list, so nothing sets overflow-wrap on it. Reproduced identically on origin/main (8e9ef8c), so this PR neither caused nor fixed it.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
       }
     ]
   },
