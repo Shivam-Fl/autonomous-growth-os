@@ -100,8 +100,13 @@ a {
   align-items: center;
 }
 
+/* The header tenant name is the request's tenant_id verbatim — src/api/routes.js
+   auto-creates an unknown tenant with name = id — so it is free text like any
+   card name, and .header-status is a flex row that would floor at it. */
 .tenant-name {
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* The skip link points at #main, so activating it focuses the whole container.
@@ -361,44 +366,41 @@ th, td {
   gap: var(--space-1);
 }
 
-/* A free-text name on an experiment, opportunity or approval is one
-   unbreakable token, and one long enough token still scrolls the whole page
-   sideways even with the floor lifted above. The reason is a level down from
-   where #48 fixed it: #main's own children may now shrink, but a grid item's
+/* A free-text name on an experiment, opportunity, approval or research
+   observation is one unbreakable token, and one long enough token still
+   scrolls the page sideways even with the floor lifted above: a grid item's
    automatic minimum is its min-content width, and .experiment-list and
-   .approval-list are both display: grid — so the track sizes itself to the
-   string. .opportunity-list is not a grid at all, and there the same string
-   simply overflows an ordinary block child that refuses to break. Measured at
-   a 375px viewport: 581px of document scrollWidth on / and /experiments, 587px
-   on /opportunities, on every width from 320 to 414.
-   min-width: 0 on the list items is deliberately NOT added: a box that stops
-   growing does not make its content break, and it still measured 564px.
-   anywhere rather than break-word, because break-word adds the break
-   opportunity but leaves intrinsic sizing alone — the grid track above is
-   still floored at the string's min-content width, and /experiments kept
-   measuring 581px with it.
-   Scoped to the three card lists rather than applied to #main, because a
-   blanket overflow-wrap reaches the table cells and makes every wide table
-   wrap to its column instead of scrolling in the region #48 gave it: measured,
-   /journal's region collapsed from 755>278 to 278>278, as did every region on
-   /. The cure would have undone the fix, and no test could see it. */
+   .approval-list are both display: grid, so the track sizes to the string.
+   `anywhere` rather than `break-word`, which leaves intrinsic sizing alone.
+   Scoped to these four lists, never to #main: a blanket wrap reaches the
+   table cells and makes every wide table wrap instead of scrolling in its
+   own region. No `*` descendants — overflow-wrap is inherited. */
 .experiment-card,
 .opportunity-row,
 .approval-card,
-.experiment-card *,
-.opportunity-row *,
-.approval-card * {
+.learning-card {
   overflow-wrap: anywhere;
 }
 
+/* The card's own min-content used to be this row: a nowrap flex row holding
+   an <input> whose automatic minimum is its ~234px intrinsic width, and
+   .approval-card is a grid item, so the track floored at ~389px and the page
+   overflowed at 320px. The wrap below is what lets the row shrink, so the input
+   needs no automatic minimum — and must not have one: `flex: 1` is basis 0%, so
+   at min-width 0 the field is the row's only shrinkable item and takes the whole
+   deficit, measuring 59px at a 414px viewport — six characters of the reason
+   being typed, against 232px before this ticket. Wrap plus floor is one
+   constraint: the wrap is what makes the floor safe to declare. */
 .approval-actions {
   display: flex;
   gap: var(--space-2);
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .approval-actions input {
   flex: 1;
+  min-width: 16ch;
   min-height: 44px;
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--color-muted);
@@ -468,6 +470,7 @@ th, td {
 }
 
 .journal-drawer-body {
+  overflow-wrap: anywhere;
   display: grid;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
