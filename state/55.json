@@ -999,24 +999,23 @@
     "pr": "59",
     "qa": [
       {
-        "id": "BUG-9",
-        "severity": "minor",
-        "title": "The 25-shell test's 'exactly one h1' assertion is unpinned, so it can be deleted with the suite green",
-        "area": "test/web/pages.test.js, 25-shell test",
-        "expected": "A deletion is caught, as it is for the neighbouring H1_HOOK call site that 'the production h1 assertion goes through H1_HOOK' pins on its own message.",
-        "actual": "Deleting 'assert.equal(levels.filter((level) => level === 1).length, 1, `${where}: exactly one h1`)' and changing nothing else leaves 81 pass / 0 fail, exit 0. The assertion exists on origin/main (line 206 of that file) and this PR adds a pin beside it but not for the count, so the 'exactly one h1' half of AC-6 loses its automated check without any test objecting. The behaviour is correct today — I confirmed one h1 per document on all 25 shells in the browser — so this is a coverage hole in the guard family, not a product defect.",
+        "id": "BUG-12",
+        "severity": "trivial",
+        "title": "Every page load 404s on /favicon.ico and logs a console error",
+        "area": "web / static assets",
+        "expected": "A normal page load produces no console errors, or the document declares a favicon that resolves.",
+        "actual": "The browser's automatic /favicon.ico request is answered with HTTP 404 on every route, and the browser logs 'Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/favicon.ico'. There is no public asset directory in the tree and no favicon link in src/web/pages.js.",
         "repro": [
-          "Check out d923294 and run npm ci --no-audit --no-fund.",
-          "In test/web/pages.test.js, delete the line 'assert.equal(levels.filter((level) => level === 1).length, 1, `${where}: exactly one h1`);' from the test 'every route renders exactly one h1 that opens the hierarchy, in every state'.",
-          "Run node --test: 81 pass, 0 fail, exit 0 — including 'the production h1 assertion goes through H1_HOOK', which is still there and still passes.",
-          "Restore the file with git checkout -- test/web/pages.test.js"
+          "Open http://localhost:3000/ in a browser with devtools open.",
+          "Read the console: one error, a 404 on /favicon.ico.",
+          "Request http://localhost:3000/favicon.ico directly: HTTP 404.",
+          "Repeat on any of /journal, /opportunities, /experiments, /approvals — same on all five."
         ],
-        "suspected_cause": "The pinning test at test/web/pages.test.js:1608 anchors on the single literal 'the h1 carries the page-title' + ' hook' and asserts it is found exactly once. It has no second anchor for the h1-count assertion, so only that one line is protected.",
-        "reproducible": "always",
-        "introduced_by_pr": false,
         "evidence": [
-          "qa-evidence/t19-unpinned-h1-count.txt"
-        ]
+          "/home/runner/work/autonomous-growth-os/autonomous-growth-os/qa-evidence/T-5-console-initial-load.log"
+        ],
+        "introduced_by_pr": false,
+        "reproducible": "always"
       }
     ]
   },
