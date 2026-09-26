@@ -351,20 +351,23 @@ test('BUG-12: every served page declares an icon that the asset route answers', 
     for (const state of STATES) {
       const where = `${route}?state=${state}`;
       const html = await renderPage(route, { repositories: freshRepos(), override: state });
-      // Two attributes, each matched on its own rather than as one literal
-      // start tag: attribute order in a tag is not significant, so pinning the
-      // whole tag would go red on a reorder that breaks nothing — the same
-      // shape this ticket exists to close, in its own new test. The PATH is
-      // still pinned, because a renamed asset is a real change and a
-      // declaration that does not resolve is the defect.
-      assert.match(
-        html,
-        /<link\b[^>]*\brel="icon"/,
-        `${where}: the head declares the icon, or the browser asks for /favicon.ico and logs the 404`,
+      // Two attributes, read off the parsed tag rather than matched as text:
+      // attribute order in a tag is not significant, and neither is which
+      // quote character wraps a value, so pinning either would go red on a
+      // change that breaks nothing — the same shape this ticket exists to
+      // close, in its own new test. The PATH is still pinned, because a
+      // renamed asset is a real change and a declaration that does not resolve
+      // is the defect.
+      const links = [...html.matchAll(/<link\b((?:"[^"]*"|'[^']*'|[^>"'])*)>/g)]
+        .map((tag) => parseAttributes(tag[1]));
+      const icon = links.find((attrs) => (attrs.rel ?? '').trim().split(/\s+/).includes('icon'));
+      assert.ok(
+        icon,
+        `${where}: the head declares rel="icon", or the browser asks for /favicon.ico and logs the 404`,
       );
-      assert.match(
-        html,
-        /<link\b[^>]*\bhref="\/assets\/favicon\.svg"/,
+      assert.equal(
+        icon.href,
+        '/assets/favicon.svg',
         `${where}: ...and it points at the asset the route below serves`,
       );
     }
@@ -3580,7 +3583,7 @@ const heldAt = (row, side) => row[3]?.[side] ?? row[1];
 // The fourteen no-op spellings are the ones the report names, and each of them
 // is a rule the browser leaves the heading at 22.4px / 28px / 0px on. Between
 // them and the real overrides sits the one row the two sides are MEANT to
-// differ on. The last three are real overrides — two on the h1 and one on the
+// differ on. The last eight are real overrides — four on the h1 and four on the
 // root — which is what stops the table from being satisfied by a probe that had
 // stopped asking about the h1, or about the root, at all: agreeing on nothing
 // is agreement too, and only the rows a silent probe cannot satisfy distinguish
@@ -3644,6 +3647,25 @@ const BUG_10_ROWS = [
   // guard and the probe or this table goes red — which is the obligation, not
   // a trap.
   ['html { font-size: 2.4rem; }', ['html font-size'], 'a real override of the root, so the two must agree on REPORTING it and name the selector'],
+  // The four rows below are DISCRIMINATING: each one's expected verdict is
+  // produced by one half of probeStylesheet and never by the other, which is
+  // the only kind of row that can catch a half NARROWED rather than deleted.
+  // A row both halves answer is satisfied by either half alone, so it goes on
+  // passing when the half it was written for has stopped looking — which is
+  // how the root half came to be pinned to the one spelling in 'html' above.
+  // Two levers make a row discriminating. Specificity: a selector below the
+  // class rule's (0,1,0) loses the cascade on the h1, so '*' is reported by the
+  // root half and by no other. Layer: a layered normal declaration cannot
+  // outrank the unlayered class rule (beats/layerOutranks), so ':root' and
+  // ':focus-visible' reach the root half and stop there. 'h1[data-testid]' is
+  // the mirror image — it beats the class rule and cannot match the root, so it
+  // is ground (a) alone. The guard returns the same verdict as the probe on
+  // every one of the four, which is the whole point: the guard is unmutated, so
+  // a narrowing shows up as a disagreement and BUG-10 names the probe.
+  ['* { font-size: 2.4rem; }', ['* font-size'], 'the universal selector reaches the root and its font-size moves the h1, while it loses the cascade on the h1 outright at (0,0,0) — so this verdict comes from the ground-(b) half ALONE, and a root half narrowed away from "*" is caught here'],
+  ['@layer base { :root { font-size: 2.4rem; } }', [':root font-size'], 'the same door on the ":root" spelling: inside a layer the rule is beaten by the unlayered class rule on the h1, so ground (a) is silent and the verdict again comes from the root half alone — an unlayered ":root" row would NOT do, because at (0,1,0) it ties the class rule and wins on source order, so the h1 half reports it too and the row passes under the very narrowing it was meant to catch'],
+  ['@layer base { :focus-visible { font-size: 2.4rem; } }', [':focus-visible font-size'], 'and the same door on a pseudo-class, which may match anything and so may match the root; layered for the same reason, so narrowing the root filter to skip anything carrying a ":" is caught here too'],
+  ['h1[data-testid] { font-size: 2.4rem; }', ['h1[data-testid] font-size'], 'the symmetric door on the h1 half: it beats the class rule at (0,1,1) and a type selector of h1 is proved out against the <html> root, so this verdict comes from ground (a) ALONE and an outranking chain narrowed to "#main h1" is caught here'],
 ];
 
 test('BUG-10: the guard and the shipped-sheet probe answer the same question about the same rule', () => {
@@ -3685,19 +3707,20 @@ test('BUG-10: the guard and the shipped-sheet probe answer the same question abo
 // up as a changed expectation instead of as silence — and so respacing a row's
 // text does not turn this test red for a reason that has nothing to do with the
 // probe. It is the rows the table holds the probe at reporting something for,
-// which is four now that the table carries the importance divergence and a real
-// override of the root, and each one is named with the side that failed to say
-// it.
+// which is eight now that the table carries the importance divergence, a real
+// override of the root and the four discriminating rows, and each one is named
+// with the side that failed to say it.
 //
 // The COUNT is pinned alongside, and it is the half that keeps the third door
 // shut. An expectation read out of the table moves with the table, so deleting a
 // row would otherwise delete the demand along with it and leave this green — the
 // neutered probe and the missing red rows together are the wrong fix AC-21
 // forbids, and each of them alone is caught. Only a number stated here is
-// independent of the table, and it is four because the two real overrides, the
-// divergence and the root override are the rows a silent probe cannot satisfy —
-// the last of them on the ground (b) half of probeStylesheet, which until it
-// was a row had no such door at all.
+// independent of the table, and it is eight because the two real overrides, the
+// divergence, the root override and the four discriminating rows are the rows a
+// silent probe cannot satisfy — the root override and three of the four
+// discriminating rows on the ground (b) half of probeStylesheet, which until
+// they were rows had no such door at all.
 test('BUG-11: the agreement table is a comparison that can fail', () => {
   const mustReport = BUG_10_ROWS.filter((row) => heldAt(row, 'probe').length > 0);
   const named = BUG_10_ROWS.flatMap((row) => disagreementsIn({
@@ -3711,10 +3734,11 @@ test('BUG-11: the agreement table is a comparison that can fail', () => {
 
   assert.equal(
     mustReport.length,
-    4,
-    'the table still holds the probe at reporting something for exactly four rows — the two real overrides, the importance '
-    + 'divergence and the real override of the root. Delete one and the assertion below it is satisfied by a table with no red '
-    + 'half left, which is the wrong fix AC-21 forbids; add one legitimately and this number is what moves',
+    8,
+    'the table still holds the probe at reporting something for exactly eight rows — the two real overrides, the importance '
+    + 'divergence, the real override of the root and the four discriminating rows ("*", ":root" and ":focus-visible" on the '
+    + 'ground-(b) half, "h1[data-testid]" on the ground-(a) half). Delete one and the assertion below it is satisfied by a table '
+    + 'with no red half left, which is the wrong fix AC-21 forbids; add one legitimately and this number is what moves',
   );
   assert.deepEqual(
     // The side, what it returned and what it is held at — the row's own TEXT is
