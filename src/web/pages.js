@@ -93,6 +93,16 @@ ${body}
 </section>`;
 }
 
+/** Wraps a table in the scroll region its column may not fit, so a table wider
+ * than #main's column scrolls inside its own box instead of the page. The
+ * region takes focus and carries an accessible name because a scroll container
+ * that cannot be focused cannot be scrolled by keyboard outside Chromium: the
+ * columns past the right edge would be unreachable rather than merely
+ * off-screen. */
+function tableRegion(label, table) {
+  return `<div class="table-scroll" tabindex="0" role="region" aria-label="${escapeHtml(label)}">${table}</div>`;
+}
+
 function emptyState({ title, message, action, testid }) {
   return panel({
     kind: 'panel-empty',
@@ -244,9 +254,9 @@ function metaTable(collection, title, headers, rows, currency) {
   const cells = META_CELLS[collection];
   const body = rows.length === 0
     ? `<p class="empty-copy">No ${escapeHtml(title.toLowerCase())} in the last good sync.</p>`
-    : `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
+    : tableRegion(`${title} table`, `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
 ${rows.map((row) => `<tr>${cells(row, currency).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
-</tbody></table>`;
+</tbody></table>`);
   return panel({
     title: `${title} · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
     body,
@@ -428,7 +438,7 @@ function decisionFeed(state, { repositories, tenant }) {
     title: `Decision feed · ${decisions.length} row${decisions.length === 1 ? '' : 's'}`,
     body: decisions.length === 0
       ? `<p class="empty-copy">No decisions recorded yet. Decisions appear here once shadow mode starts.</p>`
-      : `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`,
+      : tableRegion('Decision feed table', `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`),
   });
 }
 
@@ -495,9 +505,9 @@ function decisionsOf(repositories, tenant) {
 function journalTable(rows, filters) {
   const body = rows.length === 0
     ? `<p class="empty-copy">No decisions match the current filters. Widen the class or status filter, or clear both, to see the full journal.</p>`
-    : `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
+    : tableRegion('Decision journal table', `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
 ${rows.map(journalRow).join('')}
-</tbody></table>`;
+</tbody></table>`);
   return panel({
     title: `Decision journal · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
     body,
@@ -895,9 +905,9 @@ function approvals(state, { repositories, tenant }) {
     .filter((event) => event.payload.status !== 'approved');
   const posture = `<section class="panel">
 <h2>Autonomy posture by action class</h2>
-<table><thead><tr><th>Action class</th><th>Posture</th><th>Why</th></tr></thead><tbody>
+${tableRegion('Autonomy posture by action class table', `<table><thead><tr><th>Action class</th><th>Posture</th><th>Why</th></tr></thead><tbody>
 ${AUTONOMY_POSTURE.map(([actionClass, posture, why]) => `<tr><td>${escapeHtml(actionClass)}</td><td>${escapeHtml(posture)}</td><td>${escapeHtml(why)}</td></tr>`).join('')}
-</tbody></table>
+</tbody></table>`)}
 </section>`;
 
   if (state === 'empty' || (pending.length === 0 && state === 'ideal')) {

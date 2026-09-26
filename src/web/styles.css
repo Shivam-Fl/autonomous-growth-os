@@ -125,6 +125,17 @@ a {
   gap: var(--space-3);
 }
 
+/* #main is a grid, and a grid item is floored at its min-content width unless
+   it opts out — so one wide child set the single auto track for the whole page
+   and every sibling was measured stretching to it: the journal's seven-column
+   table has a min-content of 755px, and h1.page-title came out 670px wide on /
+   at a 375px viewport, 805px on /journal. min-width: 0 lets the column track
+   the container's width instead, which is what stops the page itself scrolling
+   sideways. The wide table then scrolls inside its own region, below. */
+#main > * {
+  min-width: 0;
+}
+
 .page-footer {
   color: var(--color-muted);
   font-size: 0.85rem;
@@ -210,6 +221,16 @@ a {
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+/* A table wider than its column now scrolls inside its own region rather than
+   widening the page, which is the second half of the fix above. The region is
+   keyboard-reachable and has an accessible name because pages.js renders it
+   with a tabindex and an aria-label: a scroll container that cannot take focus
+   cannot be scrolled by keyboard outside Chromium, so the columns past the
+   edge would be unreachable. */
+.table-scroll {
+  overflow-x: auto;
 }
 
 th, td {
