@@ -591,18 +591,21 @@
     ]
   },
   "qa": {
-    "verdict": "fail",
+    "verdict": "pass",
     "introduced_bugs": 0,
     "ac_ids": [
       "AC-1",
       "AC-2",
       "AC-3",
-      "AC-4"
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7"
     ],
-    "sha": "22204ea6ead24c4aaee3f78e33df1f336fe47d16",
-    "run_id": "36198231105",
-    "work_order_version": 1,
-    "at": "2026-09-25T22:54:36.246Z"
+    "sha": "469a6d14ec8097dce866aea8bf4b96804fa48aed",
+    "run_id": "36228522798",
+    "work_order_version": 2,
+    "at": "2026-09-26T08:13:40.268Z"
   },
   "qa_open_bugs": [],
   "failure_packet": {
