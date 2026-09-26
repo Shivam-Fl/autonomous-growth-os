@@ -1542,7 +1542,7 @@ test('a bad code still renders a symbol on every money() surface, and no raw mic
   const opportunities = await renderPage('/opportunities', { repositories: repos });
   assert.deepEqual(opportunityRowMoney(opportunities), ['₹6,000.00', '₹1,900.00'], 'the opportunity amounts still render, relabelled');
   // Both cards.map(experimentCard) branches the currency seam moved through
-  // (pages.js:892 for ?state=partial, 908 for the ideal page). A positive money
+  // (pages.js:988 for ?state=partial, 1004 for the ideal page). A positive money
   // assertion is what stops this route from being vacuous: relabelled to the
   // repo default, and never the raw micros behind it.
   for (const override of [null, 'partial']) {
@@ -1806,7 +1806,10 @@ test('the approval action row can shrink, and the selectors below have something
   // The render is what makes the two pins facts about the page rather than
   // about the file: until this, no test had ever rendered an approval card.
   const html = await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-approval-actions-') });
-  assert.match(html, /<li class="approval-card">/, 'a pending approval renders the card the pins above are about');
+  // The pin is the class attribute, not the whole tag: the render carries
+  // data-approval-card / data-approval-id / data-tenant-id on the same li, so
+  // a match that closed the tag at the quote went red when those landed.
+  assert.match(html, /<li class="approval-card"/, 'a pending approval renders the card the pins above are about');
   const row = /<form class="approval-actions"[\s\S]*?<\/form>/.exec(html)?.[0];
   assert.ok(row, 'and the action row inside it');
   assert.equal((row.match(/<button /g) ?? []).length, 2, 'the row holds the Approve and Reject buttons the flex-wrap pin is about');
@@ -1972,25 +1975,51 @@ test('every file:line citation this branch added still names a line that holds i
       reader: 'test/web/pages.test.js',
       cited: 'src/web/pages.js',
       expressions: ['cards.map((card) => experimentCard(card, tenantCurrency(tenant)))'],
+      anchor: 'cards.map(experimentCard) branches',
     },
   ];
 
   // Repo-relative, resolved from this file's own location.
   const at = (path) => new URL(`../../${path}`, import.meta.url);
 
-  for (const { reader, cited, expressions } of claims) {
-    const source = readFileSync(at(reader), 'utf8');
+  // An `anchor` narrows one entry to the comment that makes the claim. The
+  // test reader below holds a citation this branch did not add (the
+  // pendingApprovalRepos note naming the approval read), and that note is not
+  // this entry's business. Scoping by a phrase the comment must contain keeps
+  // the LINE NUMBER parsed, which is the whole point: an anchor is prose, and
+  // prose does not move when a line does.
+  const isComment = (text) => /^\s*(?:\/\/|\/\*|\*)/.test(text);
+  const commentBlockAt = (lines, i) => {
+    if (!isComment(lines[i])) return [lines[i]];
+    let start = i;
+    let end = i;
+    while (start > 0 && isComment(lines[start - 1])) start -= 1;
+    while (end + 1 < lines.length && isComment(lines[end + 1])) end += 1;
+    return lines.slice(start, end + 1);
+  };
+
+  for (const { reader, cited, expressions, anchor } of claims) {
+    const source = readFileSync(at(reader), 'utf8').split('\n');
     const target = readFileSync(at(cited), 'utf8').split('\n');
     const basename = cited.split('/').pop();
-    const citations = [...source.matchAll(new RegExp(`${basename.replace('.', '\\.')}:(\\d+)`, 'g'))];
-    assert.ok(citations.length > 0, `${reader} cites ${cited} nowhere, so this entry guards nothing`);
+    const citation = new RegExp(`${basename.replace('.', '\\.')}:(\\d+)`, 'g');
+
+    const citations = source.flatMap((text, i) => {
+      if (anchor && !commentBlockAt(source, i).join('\n').includes(anchor)) return [];
+      return [...text.matchAll(citation)].map(([, line]) => line);
+    });
+    // Asserted on the SCOPED set, so an anchor that stops matching fails by
+    // name instead of quietly emptying the entry.
+    assert.ok(citations.length > 0, anchor
+      ? `${reader} cites ${cited} in no comment naming '${anchor}', so this entry guards nothing`
+      : `${reader} cites ${cited} nowhere, so this entry guards nothing`);
 
     // Direction one: every citation lands on a line holding one of this
     // reader's claims. The other direction — every claim keeping a citation
     // behind it — is asserted below, so deleting a citation is a failure too
     // rather than a silently unguarded claim.
     const held = new Set();
-    for (const [, line] of citations) {
+    for (const line of citations) {
       const where = `${basename}:${line}`;
       const actual = target[Number(line) - 1] ?? '';
       const expression = expressions.find((candidate) => actual.includes(candidate));
