@@ -18,61 +18,7 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
-  "touch_paths": [],
-  "acceptance": [],
-  "planned_route": [
-    "plan",
-    "implement",
-    "review",
-    "qa"
-  ],
-  "on_complete": "merge",
-  "artifacts": {},
-  "failure_history": [],
-  "review_history": [],
-  "review_root_caused": [],
-  "created_at": "2026-09-26T10:10:36.473Z",
-  "updated_at": "2026-09-26T10:12:52.179Z",
-  "history": [
-    {
-      "at": "2026-09-26T10:10:52.985Z",
-      "agent": "intake",
-      "action": "-> planning"
-    },
-    {
-      "at": "2026-09-26T10:12:32.174Z",
-      "agent": "router",
-      "action": "route plan -> implement -> review -> qa (model, confidence 80)"
-    },
-    {
-      "at": "2026-09-26T10:12:48.624Z",
-      "agent": "plan",
-      "action": "plan attempt 1"
-    },
-    {
-      "at": "2026-09-26T10:12:52.179Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    }
-  ],
-  "resume_at": null,
-  "flow_plan": {
-    "kind": "feature",
-    "confidence": 80,
-    "matched_rule": null,
-    "gates": {
-      "plan_approval": true
-    },
-    "councils": {
-      "plan": "council",
-      "review": "council"
-    },
-    "decided_at": "2026-09-26T10:12:32.174Z"
-  },
-  "stopped_at": null,
-  "dispatched_stage": "plan",
-  "validated_work_order": {
+  "work_order": {
     "issue": 78,
     "version": 1,
     "kind": "chore",
@@ -268,9 +214,67 @@
       "Whether the deferral delays the announcement noticeably on a slow connection — the risk is latency on the page-state sentence, never a lost signal, but a user who has already read the page may hear the state sentence late.",
       "The two false lines in .sdlc/memory/qa/selectors.md (line 8 and line 21) that this ticket cannot fix. QA reads that file; both lines are wrong against this branch and one of them becomes wrong in a new way here.",
       "A page title containing '·' inside the page name truncates the announcement's page name. Pre-existing at client.js:23, not caused by this change, and not measured — but more visible now that the announcement is composed with the failure sentence."
-    ]
+    ],
+    "mode": "committed"
   },
+  "touch_paths": [],
+  "acceptance": [],
+  "planned_route": [
+    "plan",
+    "implement",
+    "review",
+    "qa"
+  ],
+  "on_complete": "merge",
+  "artifacts": {},
+  "failure_history": [],
+  "review_history": [],
+  "review_root_caused": [],
+  "created_at": "2026-09-26T10:10:36.473Z",
+  "updated_at": "2026-09-26T10:12:52.179Z",
+  "history": [
+    {
+      "at": "2026-09-26T10:10:52.985Z",
+      "agent": "intake",
+      "action": "-> planning"
+    },
+    {
+      "at": "2026-09-26T10:12:32.174Z",
+      "agent": "router",
+      "action": "route plan -> implement -> review -> qa (model, confidence 80)"
+    },
+    {
+      "at": "2026-09-26T10:12:48.624Z",
+      "agent": "plan",
+      "action": "plan attempt 1"
+    },
+    {
+      "at": "2026-09-26T10:12:52.179Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    }
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "feature",
+    "confidence": 80,
+    "matched_rule": null,
+    "gates": {
+      "plan_approval": true
+    },
+    "councils": {
+      "plan": "council",
+      "review": "council"
+    },
+    "decided_at": "2026-09-26T10:12:32.174Z"
+  },
+  "stopped_at": null,
+  "dispatched_stage": "plan",
   "validated_from": "plan",
   "validated_at": "2026-09-26T10:37:21.058Z",
-  "validated_ac_changes": []
+  "validated_ac_changes": [],
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-09-26T10:37:43.901Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5845539817"
 }
