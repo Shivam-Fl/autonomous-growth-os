@@ -145,7 +145,12 @@
       "reason": "The bulk of this ticket is doc-comment prose, and a comment that still overstates is exactly what the #68 review caught and exactly what no test can fail on. If the granted route has no review stage, these three paragraphs ship unexamined and the next reader inherits a claim the code does not support - the same defect, filed a third time. The one executable change (the sweep fixture) is small; its correctness argument deserves the same scrutiny."
     }
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "test/web/pages.test.js",
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
