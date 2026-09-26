@@ -808,29 +808,35 @@
       "AC-3",
       "AC-4",
       "AC-5",
-      "AC-6"
+      "AC-6",
+      "AC-7",
+      "AC-8",
+      "AC-9",
+      "AC-10",
+      "AC-11",
+      "AC-12"
     ],
-    "sha": "97295e890452be07cbba96c279818c17c20e5587",
-    "run_id": "36192850610",
-    "work_order_version": 1,
-    "at": "2026-09-25T21:50:54.232Z"
+    "sha": "d9232947e15a67812bb3951d760318284ea678a1",
+    "run_id": "36237488793",
+    "work_order_version": 2,
+    "at": "2026-09-26T11:22:37.932Z"
   },
   "qa_open_bugs": [
     {
-      "id": "BUG-1",
-      "title": "Cascade guard skips the exact-match attribute selectors, so a 38.4px page title passes the suite"
+      "id": "BUG-5",
+      "title": "The cascade guard reads no rule inside an @layer block, so a 28px or 38.4px page title passes the suite"
     },
     {
-      "id": "BUG-2",
-      "title": "A second .page-title rule re-sizes the page title to 38.4px with every test green"
+      "id": "BUG-6",
+      "title": "A rule on the page title's ::after is reported as an override of the page title's font-size, on a build that changes nothing"
     },
     {
-      "id": "BUG-3",
-      "title": "Cascade guard reports a no-op descendant rule as an override, with a message that is not true"
+      "id": "BUG-7",
+      "title": "A selector made only of narrowing pseudo-classes is reported as moving the document root's font-size, with a message that is not true"
     },
     {
-      "id": "BUG-4",
-      "title": "Cascade guard throws on an attribute selector whose quoted value contains a space"
+      "id": "BUG-8",
+      "title": "A hex-escaped identifier in a selector is turned into a proof of non-match, so a real override goes unreported"
     }
   ],
   "failure_packet": {
