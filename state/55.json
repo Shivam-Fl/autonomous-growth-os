@@ -1129,7 +1129,7 @@
   "work_order_posted_at": "2026-09-26T17:47:04.104Z",
   "work_order_from": "root-cause",
   "work_order_comment": "5848450143",
-  "implemented_version": 5,
+  "implemented_version": 6,
   "follow_ups": {
     "review": [
       {
