@@ -70,7 +70,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": null,
+  "resume_at": "plan",
   "flow_plan": {
     "kind": "feature",
     "confidence": 85,
@@ -82,7 +82,7 @@
     },
     "decided_at": "2026-09-26T02:00:37.823Z"
   },
-  "stopped_at": null,
+  "stopped_at": "plan",
   "dispatched_stage": "plan",
   "failure_packet": {
     "issue": 72,
