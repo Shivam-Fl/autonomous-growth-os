@@ -513,6 +513,11 @@
         "plan:timeout:37fbe9c6d1ae4b5a",
         "qa:unknown:a4e5722de209d6eb"
       ]
+    },
+    "triage": {
+      "verdict": "repair",
+      "diagnosis": "Two deterministic unit-test failures in test/web/pages.test.js, both reproduced locally at head 13cdc1c; nothing here is transient, and the work itself survived on the pushed branch sdlc/issue-72 and open PR #75, so this is a fix-forward on that branch, not a re-plan. (1) The branch's NEW citation guard ('every file:line citation this branch added still names a line that holds its claim', test/web/pages.test.js:1949 on the branch) is broader than its name: it asserts EVERY 'pages.js:NNN' occurrence in its reader file against a single allow-list of cards.map expressions, so it inherits main's pre-existing, unrelated citation 'src/web/pages.js:924' at test/web/pages.test.js:90 — a comment about .approval-actions/.approval-card that now lands on 'function experimentCard(experiment, currency) {' — and dies there before it ever reaches the branch's own claim. The branch's own comment at test/web/pages.test.js:1545 is stale too: it cites pages.js:892 and :908 for the two cards.map((card) => experimentCard(card, tenantCurrency(tenant))) sites, which are src/web/pages.js:988 and :1004 at this head. As written the guard is unsatisfiable: correcting 892/908 alone still fails on 924, and correcting 924 to the real approvalCard line still fails, because that line holds an expression the claim table does not allow. Fix both — correct the two branch citations to 988/1004, and either scope the guard to the citations this branch added or add the approval-card expression to the claim table. (2) Test 464 ('the approval action row can shrink, and the selectors below have something to match') asserts match(html, /<li class=\"approval-card\">/) while src/web/pages.js:1054 renders the li as '<li class=\"approval-card\" data-testid=\"approval-card\" data-approval-card data-approval-id=... data-tenant-id=...>'. Relax it to /<li class=\"approval-card\"/. This one is NOT this branch's doing: I reproduced it on main itself at 632153e (#62), where a clean `node --test` is 471 tests / 1 fail on exactly this assertion at test/web/pages.test.js:1779, and both the assertion and the data-attribute render landed in that same commit. The branch only inherited it because 13cdc1c merged main in — the earlier attempt 4e55414 predated #62 and ran 308 tests green. So main is red at HEAD independently of PR #75; say that in the issue, and fix main's assertion here or on its own ticket, whichever the maintainer prefers — do not let it be reported as this PR breaking CI.",
+      "evidence": "failed-run.log:3250 'not ok 464 - the approval action row can shrink…' with actual HTML '<li class=\"approval-card\" data-testid=\"approval-card\" data-approval-card data-approval-id=…' and stack at test/web/pages.test.js:1809; failed-run.log:3387 'not ok 469 - every file:line citation this branch added…' error: 'test/web/pages.test.js cites pages.js:924 for a claim it no longer supports — that line reads: function experimentCard(experiment, currency) {'; failed-run.log:3460 '# tests 475 / # pass 473 / # fail 2'. Reproduced: on main (632153e) `node --test` gives '# tests 471 / # pass 470 / # fail 1', failing on the same approval-card assertion at test/web/pages.test.js:1779; on sdlc/issue-72 the guard test reproduces the pages.js:924 message verbatim. Line check on the branch: `grep -n 'cards.map((card) => experimentCard' src/web/pages.js` returns 988 and 1004, while 892 reads '// Rows always come from the repository in stored-score order…' and 908 reads \"testid: 'opportunities-empty',\"; `git diff --stat 4e55414 13cdc1c` shows the merge added 10 test files, which is why the earlier run reported 308 tests and passed."
     }
   },
   "triage_history": [
@@ -531,6 +536,14 @@
       "confidence": 92,
       "diagnosis": "QA did not fail at its job; its report was rejected on a technicality of the work order it was handed. The plan wrote AC-6 (behaviour-neutrality: 'function bodies byte-identical', '64 pass / 0 fail') with a how_to_verify that literally opens 'verify: test.' but left the structured `verify` field off the criterion. `verify` is optional in .sdlc/schemas/work-order.json, so the gate at .sdlc/bin/lib/qa-consistency.js:186 reads an absent field as the default, browser - and rejects the one criterion ",
       "run": "36227584582"
+    },
+    {
+      "at": "2026-09-26T08:55:12.752Z",
+      "stage": "ci",
+      "verdict": "repair",
+      "confidence": 94,
+      "diagnosis": "Two deterministic unit-test failures in test/web/pages.test.js, both reproduced locally at head 13cdc1c; nothing here is transient, and the work itself survived on the pushed branch sdlc/issue-72 and open PR #75, so this is a fix-forward on that branch, not a re-plan. (1) The branch's NEW citation guard ('every file:line citation this branch added still names a line that holds its claim', test/web/pages.test.js:1949 on the branch) is broader than its name: it asserts EVERY 'pages.js:NNN' occurre",
+      "run": "36231008812"
     }
   ],
   "validated_from": "root-cause",
