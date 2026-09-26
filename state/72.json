@@ -331,6 +331,11 @@
       "prior_signatures": [
         "plan:timeout:37fbe9c6d1ae4b5a"
       ]
+    },
+    "triage": {
+      "verdict": "replan",
+      "diagnosis": "QA did not fail at its job; its report was rejected on a technicality of the work order it was handed. The plan wrote AC-6 (behaviour-neutrality: 'function bodies byte-identical', '64 pass / 0 fail') with a how_to_verify that literally opens 'verify: test.' but left the structured `verify` field off the criterion. `verify` is optional in .sdlc/schemas/work-order.json, so the gate at .sdlc/bin/lib/qa-consistency.js:186 reads an absent field as the default, browser - and rejects the one criterion QA proved by citing \"ci\", citing a line whose own prose says test. AC-6 has no browser surface at all: no page, route or user-visible state changes, so QA cannot produce the in-app proof the gate demands, and citing CI is the only honest way to prove it. Re-running QA unchanged would land on the same deterministic gate, which is why the run was dispatched to triage rather than to a retry. What must happen instead is a work-order revision: root-cause adds `verify: \"test\"` to AC-6 (and gives AC-2/AC-3/AC-5, the read-the-comment criteria, the same honest marking), after which QA runs again against the same commit. Nothing is lost - PR #75 is open on sdlc/issue-72 at eae9a62 with ci-verify SUCCESS, the reviewer approved at 07:42, and the work order is on the ledger at version 1; the implementation and its green CI are untouched by this.",
+      "evidence": "failed-run.log:2124-2125 - 'sdlc: the QA report does not hold up against what QA was handed:\\n  - AC-6 cites \"ci\" as its proof, but the work order has QA verify it in the running app', from .sdlc/bin/post-qa-report.mjs:88-89 via checkAcCoverage; .sdlc/bin/lib/qa-consistency.js:186-188 `if ((a.test_ids ?? []).includes(CI) && c.verify !== 'test')`. The ledger work order QA was judged against (state/72.json on sdlc-state, identical to previous-work-order.json) has AC-6 = {id, check, how_to_verify} with no `verify` key, while AC-1 in the same array does carry \"verify\": \"test\". Log:2107-2109 shows the rest of the QA run succeeded first: schema validate 'valid', check-evidence '57 file(s) collected, 44 cited, all present'."
     }
   },
   "triage_history": [
@@ -341,6 +346,14 @@
       "confidence": 84,
       "diagnosis": "The planner did its job and the run died afterwards. A complete 26 KB work-order.json for #72 — every required field present, four concrete file edits, six acceptance criteria, all four target files real in this tree — was written by the agent and survives in artifact plan-output (id 10896660480) of run 36210315752, 30-day retention. What failed was not the planning. The claude-code-action step logged \"Claude Code initialized\" at 02:01:25 and then emitted nothing for the remaining 45 minutes, un",
       "run": "36210315752"
+    },
+    {
+      "at": "2026-09-26T07:58:10.586Z",
+      "stage": "qa",
+      "verdict": "replan",
+      "confidence": 92,
+      "diagnosis": "QA did not fail at its job; its report was rejected on a technicality of the work order it was handed. The plan wrote AC-6 (behaviour-neutrality: 'function bodies byte-identical', '64 pass / 0 fail') with a how_to_verify that literally opens 'verify: test.' but left the structured `verify` field off the criterion. `verify` is optional in .sdlc/schemas/work-order.json, so the gate at .sdlc/bin/lib/qa-consistency.js:186 reads an absent field as the default, browser - and rejects the one criterion ",
+      "run": "36227584582"
     }
   ],
   "validated_from": "plan",
