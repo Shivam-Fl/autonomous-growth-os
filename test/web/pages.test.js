@@ -1618,7 +1618,12 @@ test('the production h1 assertion goes through H1_HOOK, not an inline regex', ()
   assert.ok(callSite, 'the 25-shell h1 assertion is still in this file');
   assert.equal(lines.length, 1, 'the anchor is found exactly once, so it cannot match a second line');
   assert.match(callSite, /assert\.match\(html, H1_HOOK,/, 'the call site uses the pinned constant');
-  assert.doesNotMatch(callSite, /class="page-title"/, 'the call site inlines no class-coupled regex');
+  // Matched on the attribute rather than on the shipped class name: what this
+  // decides is that the call site inlines no class-coupled regex AT ALL, and a
+  // pin on one spelling would still pass if the regex came back written against
+  // the old one. It would be the pin to a literal, going quietly stale, that
+  // #55 is about.
+  assert.doesNotMatch(callSite, /class="/, 'the call site inlines no class-coupled regex');
   // The same treatment for the other assertion that had no pin. 25 shells render
   // 25 times, and 'exactly one h1' is the assertion that says each of them has
   // a page heading at all; deleting it cost nothing and the suite stayed green,
@@ -1723,6 +1728,35 @@ function pageTitleClass(html) {
   return pageTitleElement(html).element.classes.join(' ');
 }
 
+// The class is written out as a LITERAL in exactly two tables in this file,
+// and these are them. Both are about what a class SELECTOR is worth rather
+// than about the class the page h1 carries: one is a table of weights, the
+// other a table of names that are provably not the class. Neither follows a
+// coordinated rename, because neither is trying to name the shipped rule.
+//
+// They are NAMED constants rather than an enumeration of the lines they sit
+// on, and the audit at the end of the class-link tests below is the reason. A
+// per-line allow-list of literals is the same defect the audit exists to
+// close — a decision pinned to where a thing is rather than to what it is —
+// and a fifth table would be a fifth line in it. The audit names THESE two and
+// finds them by their declaration, so a vocabulary table that grows a row is
+// still allowed and a literal written anywhere else is not.
+const CLASS_VOCABULARY = {
+  // A class selector is one b...
+  plain: '.page-title',
+  // ...and ':is()' is scored by its heaviest argument, which an id outranks.
+  isWithId: ':is(#a, h1.page-title)',
+};
+
+// A name that merely STARTS with the class is not the class, and a
+// pseudo-element styles a generated box rather than the element. Both are
+// PROVABLE non-matches, and that each is one is the whole of the claim each
+// case is about; which class they name is not part of it.
+const REACH_VOCABULARY = {
+  longerName: '.page-title-extra',
+  pseudoElement: '.page-title::after',
+};
+
 // Issue #51 finding 2: this is the one place in the suite that asserts on a
 // class name, and deliberately so. .sdlc/memory/qa/selectors.md says class
 // names are styling hooks and not assertions; the class is the single hook
@@ -1780,15 +1814,109 @@ test('the rule the page h1 carries still holds the declarations the page title d
   // The same three values again, as the table the cascade guard compares the
   // stylesheet's RESOLVED value against. The literals above stay so a reader
   // can see what the values are; this is what stops a stylesheet that declares
-  // .page-title a second time from satisfying both while the cascade keeps the
-  // second rule's 2.4rem (BUG-2), which is a false pass this file was filed
-  // for. The two are read from one table so they cannot drift apart.
+  // the class rule a second time from satisfying both while the cascade keeps
+  // the second rule's 2.4rem (BUG-2), which is a false pass this file was
+  // filed for. The two are read from one table so they cannot drift apart.
   for (const [group, held] of Object.entries(PAGE_TITLE_HELD)) {
     assert.ok(
       held.some((text) => new RegExp(`${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*;`).test(rule[1])),
       `the class rule declares one of ${held.join(', ')}, the value the page h1's ${group} is held at`,
     );
   }
+});
+
+// BUG-9. The cascade contract below builds every class-coupled fixture through
+// `cls`, the class read off the rendered h1, and four of them spelled the class
+// out instead. One of the four went RED under a coordinated rename, on a
+// stylesheet that was correct. The other three were worse than red, and that is
+// why this is a test: a selector that matches nothing is silent, so a fixture
+// pinned to the old name keeps passing while testing nothing at all — the
+// pseudo-element case stops being about a pseudo-element and becomes a selector
+// for a class no element carries, and the suite cannot tell the two apart.
+// Nothing about that is observable from the outside, so it is checked here, in
+// the idiom of the pinning test at the top of this file: this file reads its
+// own source.
+//
+// The allow-list is the two named vocabulary tables and nothing else. A class
+// literal is fine inside CLASS_VOCABULARY or REACH_VOCABULARY, because the case
+// there is about what a class selector is worth rather than about the shipped
+// one, and fine in prose, which is why a failure message may quote one. It is
+// not fine anywhere else — and "anywhere else" is DECIDED rather than listed,
+// by what the text around the literal reads as. A comment is prose and is left
+// in, so the reasoning above may name the class as freely as the messages do.
+//
+// It is a test and not a convention on purpose: the same report has been filed
+// twice against this file, once for the 25-shell count assertion and once for
+// those four fixtures, and a convention is not what a fifth fixture is going to
+// read first.
+test('every class-coupled fixture in this file follows the class the element carries', async () => {
+  const resolved = pageTitleClass(await renderPage('/', { repositories: freshRepos() }));
+  assert.notEqual(resolved, '', 'the shipped h1 does carry a class, so the audit below has a literal to look for');
+  const escaped = resolved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const literal = new RegExp(`\\.${escaped}\\b`, 'g');
+  // Block comments are five JSDoc headers at the top of this file and hold no
+  // class, so they are blanked rather than parsed — blanked in place, so the
+  // line numbers the failure names are the ones a reader opens the file at.
+  const lines = readFileSync(new URL(import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ' '))
+    .split('\n');
+
+  const covers = (name) => {
+    const from = lines.findIndex((line) => line.startsWith(`const ${name} = {`));
+    assert.notEqual(from, -1, `${name} is still declared in this file, and the audit reads that declaration rather than a list of lines`);
+    const to = lines.findIndex((line, at) => at > from && line === '};');
+    assert.notEqual(to, -1, `${name} is still a block declaration, so the lines it spans can be found`);
+    return (at) => at >= from && at <= to;
+  };
+  const allowed = [covers('CLASS_VOCABULARY'), covers('REACH_VOCABULARY')];
+
+  // The text of the string a literal sits in, or null if it sits in none. The
+  // quote state has to be WALKED rather than guessed at from either side: an
+  // assertion message quotes a selector in single quotes inside a double-quoted
+  // string, and cutting at the inner quote would read the tail of a sentence
+  // as a bare selector. Walking it makes the first quote the string opens and
+  // the first quote of THAT character the one that closes it.
+  const stringAt = (line, at) => {
+    const isQuote = (cursor) => "'\"`".includes(line[cursor]) && line[cursor - 1] !== '\\';
+    let start = -1;
+    for (let cursor = 0; cursor < at; cursor += 1) {
+      if (!isQuote(cursor)) continue;
+      if (start === -1) { start = cursor; continue; }
+      for (cursor += 1; cursor < line.length && !isQuote(cursor); cursor += 1);
+    }
+    if (start === -1) return null;
+    const closing = line.indexOf(line[start], start + 1);
+    return line.slice(start, closing === -1 ? line.length : closing + 1);
+  };
+
+  const pinned = [];
+  lines.forEach((line, at) => {
+    literal.lastIndex = 0;
+    const found = literal.exec(line);
+    if (found === null) return;
+    if (allowed.some((span) => span(at))) return;
+    if (/^\s*\/\//.test(line)) return;
+    const quoted = stringAt(line, found.index);
+    // A block is a stylesheet whatever the words around it are: '@layer base {
+    // .page-title { … }' has two perfectly good English words in it and is a
+    // fixture, not a sentence.
+    if (quoted === null || /[{}]/.test(quoted)) {
+      pinned.push(`line ${at + 1}: ${line.trim()}`);
+      return;
+    }
+    // Otherwise it has to READ as a sentence. Three lowercase words of three
+    // letters or more, counted with the literal itself taken out first — so
+    // '.page-title-extra' is left with one word and is a selector, and a
+    // message quoting the same thing is left with a dozen and is prose. It is
+    // a floor and not a grammar, and the failure it can let through is a
+    // selector spelled entirely in long lowercase words.
+    const words = quoted.replace(new RegExp(literal.source, 'g'), '').split(/[^A-Za-z]+/).filter((word) => /^[a-z]{3,}$/.test(word));
+    if (words.length >= 3) return;
+    pinned.push(`line ${at + 1}: ${line.trim()}`);
+  });
+  assert.deepEqual(pinned, [],
+    'every class literal in this file is inside CLASS_VOCABULARY, inside REACH_VOCABULARY, or prose in a message — '
+    + 'a fixture spelled out instead of interpolated goes red on a correct stylesheet, or, when the selector matches nothing, keeps passing while testing nothing');
 });
 
 // ---------------------------------------------------------------------------
@@ -1912,6 +2040,15 @@ const GROUP_SHORTHANDS = {
   'margin-top': ['all'],
 };
 
+// The root-side question, asked in one place rather than in the two that ask
+// it. A declaration on the document root is a report only if it can set that
+// root's font-size, because that is what the class rule's rem is measured
+// against. `font` is in the list because the shorthand sets it, and `all`
+// because it sets every property including that one — the same argument that
+// puts 'all' in PAGE_TITLE_PROPERTIES, and the reason an ordinary-looking
+// reset moves every rem in the sheet.
+const ROOT_FONT_PROPERTIES = ['font-size', 'font', 'all'];
+
 // The declaration as the browser reads it, with the importance stripped:
 // 'font-size: 1.4rem' and 'font-size: 1.4rem !important' are the same value,
 // and which one was written is not a difference the page can render.
@@ -1930,6 +2067,59 @@ function restates(declaration, group) {
   if (declaration === null) return false;
   if (GROUP_SHORTHANDS[group].includes(declaration.property)) return false;
   return PAGE_TITLE_HELD[group].includes(declarationText(declaration));
+}
+
+// 'revert' is a REMOVAL and not a set, and it is a WORD rather than a
+// property. The previous version of this guard exempted one spelling of it —
+// `carried.property === 'all' && declarationText(carried) === 'all: revert'` —
+// and reported the other three, one of them with a message asserting as fact
+// that the page h1's font-size 'moves with it' while the declared value was the
+// word 'revert' and the browser read 22.4px. A guard that exempts one spelling
+// of a concept reports the next spelling, and this one had already reported
+// three of them.
+//
+// Exactly 'revert', though. 'revert-layer', 'unset', 'initial' and 'inherit'
+// are NOT removals: 'unset' sets every longhand, and what it sets a root to is
+// a renderer this file does not have. They stay reported — the loud direction,
+// which the contract accepts — and the case that says so is what keeps the
+// word from quietly becoming the rule.
+function isRemoval(declaration) {
+  if (declaration === null) return false;
+  return declaration.value.replace(/!\s*important\s*$/i, '').trim().toLowerCase() === 'revert';
+}
+
+// THE value decision, in one function, called by every place that answers the
+// question "would this put the page title somewhere it is not already". The
+// guard has two push points and the shipped-sheet probe has two more, and until
+// this was pulled out the four did not answer it the same way: the guard
+// composed two inline tests, and the probe asked neither. Two answers to one
+// question is how a rule the guard had already decided was a no-op reached the
+// probe as a violation, in a message that named a selector and said nothing
+// about a value.
+//
+// `subject` is a parameter rather than an implicit difference between callers
+// because the revert exemption is true for one subject and false for the
+// other, and the reason is a fact about where the declaration applies:
+//
+//   on the ROOT, a removal can only carry the font-size back toward the
+//   user-agent default the class rule's rem is already measured against — the
+//   shipped root reads 16px — so it moves nothing. (measured: root 16px and
+//   h1 22.4px either way)
+//   on the H1, a removal drops the class rule's OWN declaration and hands the
+//   element to the user-agent's 'h1 { font-size: 2em }', which is 32px on a
+//   16px root. '#main h1 { all: revert }' genuinely moves the heading, so it
+//   stays reported, and generalising the exemption to reach it would be a
+//   FALSE PASS on a heading at 32px.
+//
+// Everything else is one rule: false for a declaration that is not there,
+// false for a removal on the root, false for a group the page title is already
+// held at, true otherwise. The shorthand rule stays inside restates, where it
+// was already correct — moving it would be churn, and churn is how the second
+// answer appeared in the first place.
+function movesTheHeldValue(declaration, group, subject) {
+  if (declaration === null) return false;
+  if (subject === 'root' && isRemoval(declaration)) return false;
+  return !restates(declaration, group);
 }
 
 // A shorthand is reported under the group it moves, so a message names what the
@@ -2930,14 +3120,22 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
 
     // The VALUE, not only the declaration that wins (BUG-2). The declaration
     // test above asserts the class rule contains the three strings; a sheet
-    // that declares .page-title a second time satisfies that while the cascade
-    // keeps the later rule's 2.4rem and the h1 renders at 38.4px. Importance is
-    // ignored here: what the page title depends on is the value, and
-    // 'font-size: 1.4rem !important' settles at the same 1.4rem. So is the
+    // that declares the class rule a second time satisfies that while the
+    // cascade keeps the later rule's 2.4rem and the h1 renders at 38.4px.
+    // Importance is ignored here: what the page title depends on is the value,
+    // and 'font-size: 1.4rem !important' settles at the same 1.4rem. So is the
     // spelling: '#main h1 { font-size: 1.4rem }' restates the held value and
     // moves nothing, and the message the guard used to write about it refuted
     // itself ('would be font-size: 1.4rem instead of font-size: 1.4rem').
-    if (restates(decided, group)) continue;
+    //
+    // It is movesTheHeldValue that decides, and not an inline test, because
+    // this is one of four places that answer the question and the other three
+    // are the probe's two filters and the root side below. The subject is 'h1',
+    // which is what makes the revert exemption FALSE here and true on the root:
+    // 'all: revert' on the h1 drops the class rule's own declaration and hands
+    // the element to the user-agent's 2em, so it is reported, and the reason
+    // is written next to the exemption rather than left to the reader.
+    if (!movesTheHeldValue(decided, group, 'h1')) continue;
     const inside = decided.atRules.length > 0 ? ` inside ${decided.atRules.join(' then ')}` : '';
     // Two reports from one declaration. The class rule's own is the value
     // cross-check: the rule that holds the page title's typography no longer
@@ -3003,21 +3201,25 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
       // applies to the root as much as to the h1. '* { all: unset }' and
       // ':root { all: revert }' are ordinary-looking rules that move every rem
       // in the sheet.
-      const offered = declarations(rule.body).filter((one) => ['font-size', 'font', 'all'].includes(one.property));
+      const offered = declarations(rule.body).filter((one) => ROOT_FONT_PROPERTIES.includes(one.property));
       const carried = cascadingWinner(offered, selector, rule.index);
-      // 'revert' is a REMOVAL and not a set, and it is the one exemption here.
-      // It does not declare anything, so it cannot set the root's font-size; it
+      // The value decision again, with the root as the subject. 'revert' is a
+      // REMOVAL and not a set, and on the root it is the one exemption there
+      // is: it declares nothing, so it cannot set the root's font-size, and it
       // removes author declarations, which can only carry the root back toward
       // the user-agent default the class rule's rem is already measured
-      // against. Measured: root 16px and h1 22.4px either way. 'revert-layer'
-      // and 'unset' are NOT in the exemption and stay reported — 'unset' sets
-      // every longhand, and whether the root happens to already be at the
-      // default on this page is a fact about the shipped sheet that a
-      // stylesheet may change, which is why the guard cannot take it. As with
-      // the class rule above, it is the declaration the cascade KEEPS that
-      // decides: a rule that reverts the root and then sets its font-size
-      // still moves the heading.
-      if (carried !== null && carried.property === 'all' && declarationText(carried) === 'all: revert') continue;
+      // against. Measured: root 16px and h1 22.4px either way. On the h1 the
+      // same word is a REPORT, and movesTheHeldValue is where that asymmetry
+      // lives rather than being a comparison written out again here.
+      //
+      // 'revert-layer' and 'unset' are not removals and are not in the
+      // exemption: 'unset' sets every longhand, and whether the root happens
+      // to already be at the default on this page is a fact about the shipped
+      // sheet that a stylesheet may change, which is why the guard cannot take
+      // it. As with the class rule above, it is the declaration the cascade
+      // KEEPS that decides: a rule that reverts the root and then sets its
+      // font-size still moves the heading.
+      if (!movesTheHeldValue(carried, 'font-size', 'root')) continue;
       for (const entry of offered) {
         const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
         const sets = entry.property === 'font'
@@ -3040,6 +3242,103 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
   }
 
   return offenders;
+}
+
+// THE SHIPPED-SHEET PROBE, as a function of any sheet rather than of the one it
+// is written beside, so the guard and the probe can be asked the SAME question
+// about the SAME rule and the two answers compared. Reading the whole sheet by
+// hand is the claim that makes the guard's verdict on it worth anything: a
+// guard that quietly stopped asking about half the sheet would return the same
+// [] the clean tree produces, and this is the assertion that would notice.
+//
+// It asked the question the other way for a while, which is how BUG-10
+// happened. It filtered on 'this rule declares a guarded property SOMEWHERE'
+// and stopped there, so it never picked a winner and had no declaration to ask
+// anything of: '#main h1 { line-height: 1.25 }' restates the value the page
+// title is already held at, the guard was silent about it, and the probe named
+// the selector as an override of nothing. It is now asked the way the guard
+// asks — which declaration the cascade KEEPS for each group, and whether that
+// puts the h1 somewhere it is not already — so the two answer one question and
+// the agreement table below can hold them to it.
+//
+// A sheet carrying no class rule is not this function's report to make. The
+// guard reports that once per guarded group, and the probe's claim is about
+// what the class rule outranks, which is not a question without one.
+function probeStylesheet(sheet, cls, chain) {
+  const classRule = sheet.find((rule) => classBranchesOf(rule, cls, chain).length > 0);
+  if (classRule === undefined) return { outranking: [], rootReports: [] };
+  const baseline = {
+    specificity: specificityOf(classBranchesOf(classRule, cls, chain)[0]),
+    index: classRule.index,
+    layer: classRule.layer,
+    startingStyle: classRule.startingStyle,
+  };
+
+  // Ground (a). Every rule carrying the class is the baseline rather than a
+  // competitor: a second class rule is reported by the value cross-check,
+  // which is the claim that actually decides, and calling it an outranking rule
+  // here too would be the same override reported twice. The class rule is found
+  // the way the guard finds it — by the branch, not by the string '.${cls}' —
+  // so this probe cannot disagree with the guard about what the baseline is.
+  //
+  // Note what this does NOT claim: that only the class rule can reach the h1. A
+  // rule that reaches the h1 and LOSES the cascade is silent and correct — '*'
+  // is the standing example, and appending '* { line-height: 2 }' is an
+  // expected-green case. The claim is the one that decides: of the rules that
+  // may reach the h1, the class rule is the only one that may also outrank it
+  // and put a group at a value the h1 is not already at.
+  const outranking = sheet
+    .filter((rule) => classBranchesOf(rule, cls, chain).length === 0)
+    .flatMap((rule) => branchesOf(rule).map((branch) => ({ branch, rule })))
+    .filter(({ branch }) => branchReaches(branch, chain, chain.length - 1))
+    .filter(({ branch, rule }) => beats(
+      {
+        specificity: specificityOf(branch),
+        index: sheet.length,
+        layer: rule.layer,
+        startingStyle: rule.startingStyle,
+      },
+      baseline,
+    ))
+    // The winner, per group, is what makes the restatement exemption decidable
+    // here at all: '#main h1 { margin: 0; margin-top: 24px }' keeps the
+    // longhand and is reported, while '#main h1 { margin: 0 }' restates the
+    // held value and is not — and the guard reaches the same verdict for the
+    // same reason rather than by a different route.
+    .flatMap(({ branch, rule }) => PAGE_TITLE_PROPERTIES
+      .map(({ group, properties }) => (movesTheHeldValue(
+        cascadingWinner(
+          declarations(rule.body).filter((entry) => properties.includes(entry.property)),
+          branch,
+          rule.index,
+        ),
+        group,
+        'h1',
+      ) ? `${branch} ${group}` : null))
+      .filter((one) => one !== null));
+
+  // Ground (b) over the WHOLE sheet rather than the guarded subset, and the
+  // claim is the narrow one: reaching the root is not itself a report — '*'
+  // reaches it and declares box-sizing — a font-size there is. Distinct
+  // branches, because a stylesheet may declare '*' twice and the question is
+  // which SELECTORS can match the root, not how many times one is written. The
+  // winner and the value decision are the guard's, with the root as the
+  // subject, so ':root { all: revert }' and ':root { font: revert }' are silent
+  // on BOTH sides instead of on the guard's side only.
+  const rootReports = [...new Set(sheet.flatMap((rule) => branchesOf(rule)
+    .filter((branch) => !isClassBranch(branch, cls, chain) && branchReaches(branch, chain, 0))
+    .filter((branch) => movesTheHeldValue(
+      cascadingWinner(
+        declarations(rule.body).filter((one) => ROOT_FONT_PROPERTIES.includes(one.property)),
+        branch,
+        rule.index,
+      ),
+      'font-size',
+      'root',
+    ))
+    .map((branch) => `${branch} font-size`)))];
+
+  return { outranking, rootReports };
 }
 
 // The cascade contract is seven tests rather than one. `node --test` reports a
@@ -3092,72 +3391,36 @@ test('nothing in the shipped stylesheet beats the class rule for the page h1', a
   );
 
   // ...which is only a claim worth reading if the sheet is probed rather than
-  // trusted. Every rule of it that declares a guarded property, and every one
-  // that reaches the h1 or the root. A guard that quietly stopped asking about
-  // half the sheet would return [] above just as happily, and this is the
-  // assertion that would notice.
-  //
-  // Note what the h1-side probe does NOT claim: that only the class rule can
-  // reach the h1. A rule that reaches the h1 and LOSES the cascade is silent
-  // and correct — '*' is the standing example, and appending '* { line-height: 2 }'
-  // is an expected-green case. So the claim is the one that decides: of the
-  // rules declaring a guarded property, the class rule is the only one that may
-  // reach the h1 and outrank it.
-  const guarded = new Set(PAGE_TITLE_PROPERTIES.flatMap((entry) => entry.properties));
+  // trusted. Every rule of it, and every one that reaches the h1 or the root. A
+  // guard that quietly stopped asking about half the sheet would return []
+  // above just as happily, and this is the assertion that would notice.
   const sheet = readStylesheet(css, chain);
-  const classRule = sheet.find((rule) => classBranchesOf(rule, cls, chain).length > 0);
-  // Layer rank travels with the branch rather than being read off the rule
-  // afterwards, so the probe asks the same cascade question the guard does and
-  // the two cannot disagree about what the baseline is.
-  const outrankingPageTitle = sheet
-    // Every rule carrying the class is the baseline, not a competitor: a second
-    // .page-title rule is reported by the value cross-check below, which is the
-    // claim that actually decides, and calling it an outranking rule here too
-    // would be the same override reported twice. The class rule is found the
-    // way the guard finds it — by the branch, not by the string '.page-title' —
-    // so this probe cannot disagree with the guard about what the baseline is.
-    .filter((rule) => classBranchesOf(rule, cls, chain).length === 0)
-    .filter((rule) => declarations(rule.body).some((entry) => guarded.has(entry.property)))
-    .flatMap((rule) => branchesOf(rule).map((branch) => ({ branch, rule })))
-    .filter(({ branch }) => branchReaches(branch, chain, chain.length - 1))
-    .filter(({ branch, rule }) => beats(
-      {
-        specificity: specificityOf(branch),
-        index: sheet.length,
-        layer: rule.layer,
-        startingStyle: rule.startingStyle,
-      },
-      {
-        specificity: specificityOf(classBranchesOf(classRule, cls, chain)[0]),
-        index: classRule.index,
-        layer: classRule.layer,
-        startingStyle: classRule.startingStyle,
-      },
-    ))
-    .map(({ branch }) => branch);
-  assert.deepEqual(outrankingPageTitle, [],
-    'of the rules in the shipped sheet that declare a guarded property, no rule but the class rule may reach the h1 and outrank it');
+  const probe = probeStylesheet(sheet, cls, chain);
+  // The h1-side claim is the one that decides, and it is the guard's: reaching
+  // the h1 and LOSING the cascade is silent and correct — '*' is the standing
+  // example, and appending '* { line-height: 2 }' is an expected-green case —
+  // so what the probe rules out is a rule that reaches the h1 AND outranks it
+  // AND puts a group somewhere the h1 is not already. All three, and the third
+  // is the one the old probe could not ask about: it filtered on whether a rule
+  // declared a guarded property somewhere, so it reported '#main h1
+  // { line-height: 1.25 }' as an override of a value the heading is already
+  // held at (BUG-10).
+  assert.deepEqual(probe.outranking, [],
+    'of the rules in the shipped sheet, no rule but the class rule may reach the h1, outrank it, and put a group at a value the h1 is not already at');
   // Ground (b) over the WHOLE sheet rather than the guarded subset, and the
   // claim is the narrow one: reaching the root is not itself a report — '*'
   // reaches it and declares box-sizing — a font-size there is. ':root'
   // and '*' are the two that are provably about the root; ':focus-visible' is
   // here because a pseudo-class is undecidable from static markup, so it MAY
   // match anything, which is the noisy direction the contract deliberately
-  // takes. None of the three declares a font-size, which is what keeps an
-  // ordinary type-scale reset from turning the build red.
-  // Distinct branches: a stylesheet may declare '*' twice, and the question is
-  // which SELECTORS can match the root, not how many times one is written.
+  // takes. None of the three declares a font-size at a value that could set
+  // one, which is what keeps an ordinary type-scale reset from turning the
+  // build red.
   const rootReaching = [...new Set(sheet.flatMap((rule) => branchesOf(rule).filter((branch) => branchReaches(branch, chain, 0))))];
   assert.deepEqual(rootReaching, [':root', '*', ':focus-visible'],
     'the rules in the shipped sheet that may match the document root — the last because an undecidable pseudo-class may');
-  assert.deepEqual(
-    rootReaching.filter((branch) => sheet
-      .filter((rule) => branchesOf(rule).includes(branch))
-      .flatMap((rule) => declarations(rule.body))
-      .some((entry) => entry.property === 'font-size' || entry.property === 'font' || entry.property === 'all')),
-    [],
-    'and not one of them declares font-size, the font shorthand or the all shorthand, so ground (b) fires on nothing in the shipped sheet',
-  );
+  assert.deepEqual(probe.rootReports, [],
+    'and not one of them declares font-size, the font shorthand or the all shorthand at a value that could set the root\'s font-size, so ground (b) fires on nothing in the shipped sheet');
 
   assert.deepEqual(
     bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(override), cls, chain)),
@@ -3187,6 +3450,64 @@ test('nothing in the shipped stylesheet beats the class rule for the page h1', a
   );
 
 });
+
+// BUG-10, the half a green case cannot buy on its own. Every case below that
+// went green with the fix was a case the PROBE went red on, and a fix that
+// answered it by deleting the probe would have gone green identically — the
+// probe's whole claim is exhaustive, so nothing in the guard's verdict would
+// have said anything was missing. So the two are held to each other, on the
+// shipped sheet, for the same appended rule: the verdict the guard must return
+// AND the verdict the probe must return, and the two have to agree — silent
+// together or reporting together.
+//
+// The thirteen no-op spellings are the ones the report names, and each of them
+// is a rule the browser leaves the heading at 22.4px / 28px / 0px on. The last
+// two are real overrides, which is what stops the table from being satisfied by
+// a probe that had stopped asking about the h1 at all: agreeing on nothing is
+// agreement too, and only the two red rows distinguish it from agreement.
+test('BUG-10: the guard and the shipped-sheet probe answer the same question about the same rule', () => {
+  const verdicts = (sheetText) => {
+    const probe = probeStylesheet(readStylesheet(sheetText, chain), cls, chain);
+    return [...new Set([
+      ...outrankingPageTitleDeclarations(sheetText, cls, chain).map((one) => `${one.selector} ${one.group}`),
+      ...probe.outranking,
+      ...probe.rootReports,
+    ])].sort();
+  };
+
+  for (const [extra, expected, claim] of [
+    // The no-op spellings. A restatement of a value the h1 is already held at
+    // moves nothing, in one of the spellings the group is written in, and the
+    // h1 reads 22.4px / 28px / 0px for every one of them in the browser.
+    ['h1[data-testid] { font-size: 1.4rem; }', [], 'it restates the held font-size at (0,1,1) and later in the file'],
+    ['h1[data-testid] { margin: 0; }', [], 'the margin shorthand is one of the spellings the margin-top group is held at'],
+    ['#main h1 { font-size: 1.4rem; }', [], 'the same restatement at (1,0,1), which outranks the class rule outright'],
+    ['#main h1 { line-height: 1.25; }', [], 'and the one the old probe reported on its own, with nothing saying why'],
+    ['#main h1 { margin: 0; }', [], 'the margin spelling, where the group is held at a list rather than one value'],
+    ['#main h1 { margin-top: 0; }', [], 'a longhand of the same property, so the same no-op'],
+    ['#main h1 { margin-block-start: 0; }', [], 'and the logical spelling of it, which is the same property and was reported as though it were not'],
+    ['#main h1 { font-size: 1.4rem !important; }', [], 'importance is the one thing the comparison ignores, because the value settles the same either way'],
+    ['#main h1 { line-height: 1.25 !important; }', [], 'and the same for the group where the cascade keeps the !important declaration itself'],
+    // The removals on the root, in every property they can be written in and
+    // every shape they can be wrapped in. A removal cannot set the root's
+    // font-size, and the shipped root is already at the user-agent default the
+    // class rule's rem is measured against: root 16px and h1 22.4px either way.
+    [':root { all: revert; }', [], 'the one spelling the previous guard exempted, and it is still silent'],
+    [':root { font: revert; }', [], 'the same removal in the font shorthand, which the previous guard REPORTED with a message claiming the h1 moves'],
+    [':root { font-size: revert; }', [], 'and in the longhand, which it also reported'],
+    ['* { all: revert; }', [], 'a universal selector reaches the root, and the same removal is a removal there'],
+    ['@layer base { :root { all: revert; } }', [], 'inside a layer, where the cascade keeps the layered declaration and the word is still a word'],
+    // ...and the two real overrides. Chromium reads 38.4px and 44.8px.
+    ['#main h1 { font-size: 2.4rem; }', ['#main h1 font-size'], 'a real override, so the two must agree on REPORTING it and name the selector'],
+    ['#main h1 { line-height: 2; }', ['#main h1 line-height'], 'and a second one in another group, for the same reason'],
+  ]) {
+    assert.deepEqual(verdicts(`${css}\n${extra}\n`), expected,
+      `the guard and the probe return the same verdict for '${extra}' — ${claim}. `
+      + 'A disagreement here is the drift this table exists to catch, whichever of the two is wrong, and a probe that had stopped '
+      + 'asking about the h1 at all would agree on nothing, which is why the two red rows are in the table too');
+  }
+});
+
 
 test('a rule that reaches the h1 and the root: the two grounds on single rules', async () => {
   // '*' was one case in the previous version of this file, and its message said
@@ -3470,6 +3791,64 @@ test('the class name is a styling decision both ends may move together', async (
 
 });
 
+// BUG-9, in the other direction from the test above. That one is the rename
+// applied to the STYLESHEET and the chain; this one is the same rename applied
+// to the FIXTURES — the class-coupled cases, which today read the class through
+// `cls` and, before the fix, four of them spelled it out instead.
+//
+// Both halves have to be here and they fail in OPPOSITE directions, which is
+// the whole reason neither alone is enough. A fixture pinned to the old name
+// names a class no element carries, which matches nothing, which is silent:
+//   the RED half — 'h1:is(.page-title)' expects a report and gets none, so the
+//   suite goes red on a stylesheet that is correct;
+//   the VACUOUS half — '.page-title::after' expects silence and gets it, and
+//   the suite cannot tell silence-because-a-pseudo-element-styles-a-generated-
+//   box from silence-because-the-selector-matches-nothing. It keeps passing
+//   while testing nothing at all, and it is silent by construction rather than
+//   by accident.
+test('BUG-9: the class-coupled fixtures follow the class, under a coordinated rename', async () => {
+  const RENAMED = 'renamed-away';
+  const renamedChain = pageTitleElement(html.replaceAll(`class="${cls}"`, `class="${RENAMED}"`)).chain;
+  // The sheet is the class rule and the fixture, and NOT the shipped stylesheet
+  // underneath them. What this case is about is whether the FIXTURE names the
+  // class, and a case built on the whole sheet is also about whatever else the
+  // sheet happens to contain: append '#main h1 { font-size: 1.4rem; }' — a
+  // rule that restates the held value and that the guard reports nobody — and
+  // the assertion below went red, because that rule outranks 'h1:is(…)' at
+  // (1,0,1) and takes the winner off it. The decision had been pinned to the
+  // sheet rather than to the fixture, which is the defect this ticket is about
+  // in a place nobody had looked. The shipped sheet is not weakened by being
+  // left out of it: the other cases here, and every case above, read it.
+  const caseSheet = (name, extra) => `.${name} { font-size: 1.4rem; line-height: 1.25; margin: 0; }\n${extra}\n`;
+
+  // The RED half. A fixture pinned to the old name matches nothing, the guard
+  // proves it out, and the case that demands a report is given none.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(caseSheet(RENAMED, `h1:is(.${RENAMED}) { font-size: 2.4rem; }`), RENAMED, renamedChain)),
+    [`h1:is(.${RENAMED}) font-size`],
+    "under a coordinated rename 'h1:is(.page-title)' is still REPORTED, because the argument is the class the renamed h1 carries and 38.4px is what the browser renders. A fixture spelled with the old name matches nothing and this goes red",
+  );
+  // The VACUOUS half, and the reason it is silent stated twice: once as the
+  // verdict, and once as the question the matcher actually asked.
+  assert.equal(isClassBranch(`.${RENAMED}`, RENAMED, renamedChain), true,
+    'the renamed class rule is still found on the renamed chain, so a selector naming that class is not vacuous here');
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(caseSheet(RENAMED, `.${RENAMED}::after { font-size: 2.4rem; }`), RENAMED, renamedChain),
+    [],
+    "and '.page-title::after' is still SILENT, because a pseudo-element styles a generated box rather than the h1 — which is the reason the case is about, and not the reason a selector matching nothing is silent",
+  );
+  assert.equal(branchReaches(`.${RENAMED}::after`, renamedChain, renamedChain.length - 1), false,
+    'and that is decided on the pseudo-element: the class beside it is one the renamed h1 does carry');
+  // The same pair on the shipped class, off the same two rules rather than the
+  // renamed ones, so the two are the same two cases rather than something the
+  // rename introduced.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(caseSheet(cls, `h1:is(.${cls}) { font-size: 2.4rem; }`), cls, chain)),
+    [`h1:is(.${cls}) font-size`],
+    'and the same case on the shipped class, where the two verdicts are identical to the renamed ones',
+  );
+});
+
 test('the value cross-check: the declaration the cascade keeps against the held value', async () => {
   // BUG-2, verbatim. The class rule declared twice with different values
   // satisfied BOTH tests in the previous version — the declaration test read
@@ -3705,7 +4084,7 @@ test('BUG-5: the block at-rules and the layer rank, decided rather than skipped'
   for (const [extra, claim] of [
     ['@layer base { h1 { font-size: 2.4rem; } }', 'a layered NORMAL declaration loses to the unlayered class rule whatever its specificity, so a red build here would be a false alarm'],
     ['@layer base { #main h1 { font-size: 2.4rem; } }', 'and an id in a layer does not buy it back — the layer is settled before the specificity is'],
-    ['@layer base { .page-title { font-size: 2.4rem; } }', "the value cross-check reads the same cascade, so a layered '.page-title' does not make the class rule's own winner 2.4rem"],
+    [`@layer base { .${cls} { font-size: 2.4rem; } }`, `the value cross-check reads the same cascade, so a layered '.${cls}' does not make the class rule's own winner 2.4rem`],
     ['@layer base { h1 { font-size: 1.4rem !important; } } @layer top { h1 { font-size: 2.4rem !important; } }', 'among two layers the EARLIER one wins an !important declaration, so this restates the held value'],
     ['@layer top { h1 { font-size: 1.4rem !important; } } @layer base { h1 { font-size: 2.4rem !important; } }', 'and the same two layers in the other order settle at the same 1.4rem, because base is still the earlier one'],
     ['@layer base { h1 { font-size: 1.4rem !important; } } h1 { font-size: 3rem !important; }', 'a layered !important beats an unlayered !important, so the unlayered 3rem is discarded'],
@@ -3810,8 +4189,8 @@ test('BUG-6: the class rule is the branch that reaches the h1, not the rule that
   // or about an attribute the h1 does not carry was taken for the baseline.
   // Both leave the h1 at 22.4px, so both are silent.
   for (const extra of [
-    '.page-title::after { font-size: 2.4rem; }',
-    '.page-title[data-x] { font-size: 2.4rem; }',
+    `.${cls}::after { font-size: 2.4rem; }`,
+    `.${cls}[data-x] { font-size: 2.4rem; }`,
   ]) {
     assert.deepEqual(
       outrankingPageTitleDeclarations(sheetWith(extra), cls, chain),
@@ -3892,7 +4271,7 @@ test('BUG-7: a pseudo-class is decided, not stripped', async () => {
   for (const [extra, claim] of [
     ['h1:has(> span) { font-size: 2.4rem; }', "':has()' needs descendants an ancestor chain does not carry, so it may match and is reported (this page does not move: 22.4px)"],
     ['h1:hover { font-size: 2.4rem; }', "a state the served markup says nothing about, so it may match and is reported (this page does not move: 22.4px)"],
-    ['h1:is(.page-title) { font-size: 2.4rem; }', "and ':is()' whose argument the h1 DOES carry is a real override: 38.4px"],
+    [`h1:is(.${cls}) { font-size: 2.4rem; }`, "and ':is()' whose argument the h1 DOES carry is a real override: 38.4px"],
   ]) {
     assert.deepEqual(
       bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(extra), cls, chain)),
@@ -4019,6 +4398,71 @@ test('AC-18: a rule that restates the held value moves nothing, and is silent', 
   }
 });
 
+// AC-22, and the edge of this change. 'revert' is a REMOVAL, and the previous
+// version of the guard wrote that as a comparison on one spelling of it —
+// `property === 'all' && declarationText === 'all: revert'` — so the concept
+// was reported three times out of four: ':root { all: revert }' was silent
+// while ':root { font: revert }' and ':root { font-size: revert }' were
+// reported, each with a message asserting as fact that the page h1's font-size
+// 'moves with it, away from font-size: 1.4rem' while the declared value was the
+// word 'revert' and the browser read 22.4px. A guard that exempts one spelling
+// of a concept reports the next spelling.
+//
+// The exemption is a fact about WHERE THE DECLARATION APPLIES, not about the
+// word, and both sides are pinned here because getting it wrong in the
+// permissive direction is a FALSE PASS and getting it wrong in the loud
+// direction is only the false alarm this guard already accepts.
+//
+//   on the ROOT   a removal carries the font-size back toward the user-agent
+//                 default the class rule's rem is already measured against, and
+//                 the shipped root is already there: documentElement 16px and
+//                 h1 22.4px before and after (measured).
+//   on the H1     a removal drops the class rule's OWN declaration and hands
+//                 the element to the user-agent's 'h1 { font-size: 2em }', which
+//                 is 32px on a 16px root (measured). It genuinely moves the
+//                 heading, so it stays reported — and generalising the
+//                 exemption to silence it would be a false pass on 32px.
+test('AC-22: revert is a removal wherever it is written, and only on the document root', async () => {
+  for (const extra of [':root { font: revert; }', ':root { font-size: revert; }']) {
+    const reported = outrankingPageTitleDeclarations(sheetWith(extra), cls, chain);
+    assert.deepEqual(reported, [],
+      `'${extra}' is the same removal in another property, and no message claims the page h1's font-size moves with it — `
+      + 'the declared value is the word revert and the browser reads 22.4px');
+    assert.equal(reported.filter((one) => /moves with it/.test(one.message)).length, 0,
+      'and in particular there is no message of that shape, which is the self-refuting one this closes');
+  }
+  // The h1 side, from all three directions, because silencing either of them is
+  // a false pass rather than a false alarm.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith('#main h1 { all: revert; }'), cls, chain)),
+    ['#main h1 all', '#main h1 all', '#main h1 all'],
+    "the same word on the h1 is REPORTED: it drops the class rule's own declaration and hands the element to the user-agent's "
+    + "'h1 { font-size: 2em }', which is 32px on a 16px root (measured) against 22.4px on the clean tree. The exemption is a fact about the subject, not about the word",
+  );
+  // ...and the exemption is spelled exactly 'revert', so the neighbouring words
+  // stay on the reported side. 'unset' sets every longhand, 'initial' and
+  // 'inherit' set every longhand to something specific, and 'revert-layer' rolls
+  // back to the previous layer rather than removing anything. What each settles
+  // the root to is a renderer this file does not have, and the loud direction is
+  // the one the contract accepts being wrong in.
+  for (const value of ['revert-layer', 'unset', 'initial', 'inherit']) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`:root { all: ${value}; }`), cls, chain)),
+      [`:root all`],
+      `':root { all: ${value} }' is NOT a removal and stays reported, so the exemption does not become the word 'revert' standing in for a family of words`,
+    );
+  }
+  // isRemoval is the rule rather than a spelling, said out loud.
+  for (const value of ['revert', 'REVERT', ' revert ', 'revert !important']) {
+    assert.equal(isRemoval({ property: 'font-size', value, important: value.includes('important') }), true,
+      `'${value.trim()}' is the word revert, with the case, the surrounding space and the importance all stripped off it`);
+  }
+  for (const value of ['revert-layer', 'unset', 'initial', 'inherit', '1.4rem', 'revert 0']) {
+    assert.equal(isRemoval({ property: 'all', value, important: false }), false,
+      `'${value}' is not the word revert, whatever property it is written under`);
+  }
+});
+
 test('ground (b): a font-size on the document root moves the page h1', async () => {
   // Ground (b), reported. These lose the cascade on the element and still move
   // the heading, because the class rule's font-size is in rem. Chromium reads
@@ -4088,7 +4532,7 @@ test('the cascade resolver agrees with CSS on specificity', async () => {
   assert.deepEqual(specificityOf('*'), [0, 0, 0], "'*' is not a type name");
   assert.deepEqual(specificityOf('body'), [0, 0, 1], 'a bare type is one c');
   assert.deepEqual(specificityOf('h1'), [0, 0, 1], 'the h1 type is one c');
-  assert.deepEqual(specificityOf('.page-title'), [0, 1, 0], 'a class is one b');
+  assert.deepEqual(specificityOf(CLASS_VOCABULARY.plain), [0, 1, 0], 'a class is one b');
   assert.deepEqual(specificityOf('.a.b'), [0, 2, 0], 'a compound of two classes is two b');
   assert.deepEqual(specificityOf('[aria-current="page"]'), [0, 1, 0], 'an attribute selector is one b');
   assert.deepEqual(specificityOf('a:hover'), [0, 1, 1], 'a single-colon pseudo-class is a b, not a c');
@@ -4110,7 +4554,7 @@ test('the cascade resolver agrees with CSS on specificity', async () => {
   // the arithmetic after it that dropped them.
   assert.deepEqual(specificityOf('h1:is(.a, .b)'), [0, 1, 1], "':is()' takes its most specific argument, here one b");
   assert.deepEqual(specificityOf(':is(#a, h1)'), [1, 0, 0], "and the id in the argument lifts the whole selector to (1,0,0)");
-  assert.deepEqual(specificityOf(':is(#a, h1.page-title)'), [1, 0, 0], 'the heaviest ARGUMENT is taken, not all of them added: the id outranks the class and the type');
+  assert.deepEqual(specificityOf(CLASS_VOCABULARY.isWithId), [1, 0, 0], 'the heaviest ARGUMENT is taken, not all of them added: the id outranks the class and the type');
   assert.deepEqual(specificityOf(':not(#a)'), [1, 0, 0], "':not()' takes its argument's specificity");
   assert.deepEqual(specificityOf(':where(#a)'), [0, 0, 0], "':where()' contributes nothing, which is the point of it");
   assert.deepEqual(specificityOf('h1:where(.a)'), [0, 0, 1], 'so the type beside it is all that is left');
@@ -4159,7 +4603,7 @@ test('the cascade resolver agrees with CSS on specificity', async () => {
   // PROVABLY NO-MATCH — false, on a proof, and never a throw.
   for (const selector of [
     '.checklist li:not(.x)', 'h1 + p', 'h1 ~ p', '.panel h2', '.app-header h1',
-    '.page-title-extra', '[data-testid="nope"]', 'h1::after', '.page-title::after',
+    REACH_VOCABULARY.longerName, '[data-testid="nope"]', 'h1::after', REACH_VOCABULARY.pseudoElement,
     'h1[data-x="a b"]', 'h1[data-testid="page title"]', 'main > h1[data-x]', 'h1#main',
   ]) {
     assert.equal(reaches(selector), false, `'${selector}' provably cannot match the shipped page h1`);
@@ -4170,7 +4614,7 @@ test('the cascade resolver agrees with CSS on specificity', async () => {
   assert.equal(reaches('body'), false, 'the body is not the page h1: it reaches it by inheritance, and a declaration on the element wins');
   assert.equal(reaches('#main'), false, 'an ancestor id does not match the h1 itself');
   assert.equal(reaches('.panel h2'), false, 'a different element does not match the h1');
-  assert.equal(reaches('.page-title-extra'), false, 'a longer class name is not the class');
+  assert.equal(reaches(REACH_VOCABULARY.longerName), false, 'a longer class name is not the class');
   for (const selector of ['*', 'html', ':root', '[lang]']) {
     assert.equal(reaches(selector, 0), true, `'${selector}' may match the document root`);
   }
@@ -4207,17 +4651,26 @@ test('the cascade guard resolves the page h1 and its chain from the markup', asy
     'nothing between body and main#main is treated as an ancestor of the h1',
   );
 
+  // The styling class, read off a real render rather than written out: every
+  // claim below is about the class the shipped h1 carries, and the two ends of
+  // that link may move together.
+  const shippedClass = pageTitleClass(await renderPage('/', { repositories: freshRepos() }));
+  assert.notEqual(shippedClass, '', 'the shipped h1 does carry a class, so the strip below is not a no-op');
+
   // A raw-text element holds text, not markup. A string inside one carrying the
   // hook is a hijack, and it is silent: the guard would resolve the page h1 to
   // the string's element, the real h1 would no longer be the target, and every
-  // question asked of it would come back with nothing to say.
+  // question asked of it would come back with nothing to say. The class is read
+  // off the shipped h1 rather than written out, so the claim holds under a
+  // coordinated rename — written out, it went RED on a correct rename, which is
+  // the same defect the cascade contract's four fixtures had.
   const hijacked = pageTitleElement(
-    '<html lang="en"><body><main id="main"><h1 class="page-title" data-testid="page-title">Real</h1></main>'
+    `<html lang="en"><body><main id="main"><h1 class="${shippedClass}" data-testid="page-title">Real</h1></main>`
     + "<script>var t = '<h1 data-testid=\"page-title\">fake</h1>';</script></body></html>",
   );
   assert.deepEqual(hijacked.chain.map((one) => one.tag), ['html', 'body', 'main', 'h1'],
     "a hook inside a <script> is text and not an element, so the chain still ends at the h1 the page renders");
-  assert.equal(hijacked.element.classes.includes('page-title'), true,
+  assert.equal(hijacked.element.classes.includes(shippedClass), true,
     'and it is the REAL h1, carrying the class the stylesheet rules on — not the one the script string names');
 
   // With the class gone the guard must rebuild its world rather than keep the
@@ -4225,8 +4678,6 @@ test('the cascade guard resolves the page h1 and its chain from the markup', asy
   // whose h1 simply carries no class, and the class-to-rule link is then the
   // one-sided failure the class tests report. The class is read off the element
   // rather than written out, so this holds under a coordinated rename.
-  const shippedClass = pageTitleClass(await renderPage('/', { repositories: freshRepos() }));
-  assert.notEqual(shippedClass, '', 'the shipped h1 does carry a class, so the strip below is not a no-op');
   const withoutClass = (await renderPage('/', { repositories: freshRepos() })).replace(` class="${shippedClass}"`, '');
   const stripped = pageTitleElement(withoutClass);
   assert.deepEqual(stripped.element.classes, [], 'the h1 carries no class once the stylesheet hook is dropped');
