@@ -737,5 +737,31 @@
       "run": "36229132254",
       "at": "2026-09-26T08:17:47.935Z"
     }
-  }
+  },
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 1,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7",
+      "AC-8",
+      "AC-9",
+      "AC-10"
+    ],
+    "sha": "587cb7da0be84f0d84a4b95fc29fa46c2b71a8b6",
+    "run_id": "36232380827",
+    "work_order_version": 2,
+    "at": "2026-09-26T09:28:17.820Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-1",
+      "title": "The citation guard pins only the first of the two cards.map sites the sweep comment names, so the second can go stale silently"
+    }
+  ]
 }
