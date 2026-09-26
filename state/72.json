@@ -266,6 +266,14 @@
       "attempt": 1,
       "at": "2026-09-26T07:55:17.411Z",
       "digest": "The qa stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "ci",
+      "error_signature": "aaf7c10f0ff936b0",
+      "error_type": "unknown",
+      "attempt": 3,
+      "at": "2026-09-26T08:51:43.768Z",
+      "digest": "The ci stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [],
