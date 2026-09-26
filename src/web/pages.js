@@ -208,10 +208,18 @@ const META_CELLS = {
  * is an arbitrary string — tenants.create takes any string, and nothing the
  * app writes produces a non-canonical one — so it is resolved through the
  * domain's read-time boundary here rather than at each of the eight call
- * sites. A code naming no ISO currency at all falls back to INR, as before.
+ * sites: canonical when it names a currency, verbatim when it names none (so a
+ * bad row's amounts are excluded from the dashboard funnel too), and INR only
+ * for a MISSING row.
+ *
+ * This seam and resolveTenantCurrency in src/api/routes.js are the same rule on
+ * two surfaces — the dashboard tile and GET /v1/metrics both read the same
+ * computeFunnel from the same row — and test/web/pages.test.js asserts they
+ * agree rather than leaving that to a comment.
  */
 function tenantCurrency(tenant) {
-  return canonicalCurrency(tenant?.currency) ?? 'INR';
+  const stored = tenant?.currency;
+  return canonicalCurrency(stored) ?? stored ?? 'INR';
 }
 
 /**
@@ -238,13 +246,16 @@ function tenantCurrency(tenant) {
  * and a renderer that drew a tenant's amounts in the wrong unit over three
  * letters of case would be the bug, not the fix.
  *
- * That also means money()'s own membership guard CANNOT be pinned by a test:
- * every call site has already resolved the code, so a change to this line —
- * in either direction — leaves the suite green. It is kept as defence in depth
- * for a path no current caller takes, not as protection that is being verified.
- * Making the site observable needs the call graph changed (one currency seam,
- * resolved once, with every money() call site unable to pass an unresolved
- * code), which is its own change; see issue #44.
+ * That guard is load-bearing, and reached. tenantCurrency() above passes a
+ * code naming no ISO currency through VERBATIM rather than resolving it away,
+ * so every money() call on every screen for such a tenant arrives here with an
+ * unknown code. Without the membership test, fromMicros(6_000_000_000, 'ZZZ')
+ * throws INVALID_CURRENCY and the page 500s — the exact outcome this guard
+ * exists to prevent. It is covered rather than invisible: the 'ZZZ' tenant
+ * cases in test/web/pages.test.js assert the relabelling, so replacing the
+ * 'INR' fallback below with `currency` turns them red. The knowingly-wrong-unit
+ * trade described above is deliberate and unchanged; this guard is what
+ * implements it.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
