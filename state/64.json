@@ -263,5 +263,180 @@
     ],
     "confidence": 91,
     "confidence_rationale": "High, and higher than v1's 88 because the one objection has been closed by measurement rather than argument. Every number this order asserts was taken on current main or on a prototype of this exact plan: the regression reproduces (202, and metrics 7.2B->8.2B), the fix restores main's semantics in all five currency directions, the new test provably catches the regression by mutation, the pages.js revert is confirmed neutral at 293/293, and AC-7's count is measured at 4 before and 1 after. The residual uncertainty is not about correctness but about scope judgement: I scoped the 8 pre-existing opportunity-row matches out on the grounds that they predate #63, and a human may want them in the same diff."
-  }
+  },
+  "approved_work_order": {
+    "issue": 64,
+    "version": 2,
+    "kind": "bug",
+    "reproduced": true,
+    "understanding": "Four non-blocking review findings left open by #63, filed as one ticket. I re-checked all four against current main (4372b06) before planning them. All four still reproduce, and one is a real behaviour regression on the money path.\n\nFINDING 1 (src/api/routes.js:160) is a genuine regression, not a style objection. The #63 work order claimed a tenant row holding an unknown code ('ZZZ') would still 400, and that only a mis-cased or padded code changes from rejected to accepted. The second claim is false. resolveTenantCurrency() falls back to 'INR' when canonicalCurrency() returns null, so a 'ZZZ' row is compared as if it were INR, and a ZZZ tenant silently ACCEPTS an INR spend event with 202 where main returned 400 CURRENCY_MISMATCH. I re-measured it on current main: seeded DB, tenant_demo UPDATEd to 'ZZZ', POST /v1/events spend INR 1_000_000_000 -> 202 {\"appended\":true}, and GET /v1/metrics spend_micros moves 7_200_000_000 -> 8_200_000_000. The same row with USD still 400s, which is exactly why the existing suite is green: it pins ZZZ+USD and USD+EUR and never ZZZ+INR.\n\nFINDING 2 (test/web/pages.test.js:72) reproduces as described: usdCasingRepos() is a copy of usdRepos() with one field and one id changed, and the file's AC-6 greps still pass, so nothing caught it. It is minor.\n\nFINDING 3 (src/web/pages.js:240) reproduces, and I strengthened the evidence. money()'s own canonicalCurrency() call is unreachable: all six call sites are fed tenantCurrency()'s output. I confirmed by mutation that BOTH candidate reverts leave the suite green — main's exact expression (293/293) and dropping the guard entirely. So money()'s currency handling is not pinnable by any test, which is exactly the shape issue #44 was opened for. What is NOT true is the reviewer's framing that the line is the only unpinnable one: main's own expression is equally unpinnable. The line under discussion is therefore not what makes the site unpinnable; the call graph is.\n\nFINDING 4 (test/web/pages.test.js:99) reproduces: qualifiedCplValue() is a character-for-character lift of the idiom still sitting inline at 374-375, 412-413 and 1076-1077, so four copies of one idiom exist where three did. The opportunityRowMoney() half is real too, but those 8 lazy first-row matches all PREDATE #63 (none of the four helpers existed at ed5aa90) — that duplication is not something this PR introduced, which is why I scope it out below rather than folding it in.\n\nOne correction to v1 of this plan, made because the review caught it and it was the only objection. v1's AC-7 gave `grep -c 'kpi-card[\\s\\S]\\*?Qualified CPL' test/web/pages.test.js` as the way to verify finding 4. That command is broken and always returns 0, so a correct implementation would have been failed by QA. I confirmed the cause and the number on current main before writing this version: the true count of the idiom today is 4, and it is readable from a POSIX tool as `grep -cF 'kpi-card[\\s\\S]*?Qualified CPL'` (or the -P form); I then applied the v1 refactor and measured that same command dropping to 1. AC-7 now names the command that works.",
+    "root_cause": "Finding 1: #63 collapsed two different questions into one function. 'What unit of account should the renderer draw this row in?' legitimately falls back to INR, because a page render must not 500 and must not print a bare code. 'Does this spend event's currency match the tenant's?' must NOT fall back, because a 400 naming the stored code is the only signal an operator gets that the row is wrong. resolveTenantCurrency() serves the first question and was wired into the second, so the read-side fallback silently widened the write path. Findings 2-4 are duplication in the test file and one unreachable guard in pages.js, all introduced by #63.",
+    "approach": "One behaviour fix plus three test/comment cleanups, all in the two files #63 touched.\n\n1. The ingest fix (src/api/routes.js). Split the two questions apart rather than tuning the fallback. Keep resolveTenantCurrency() exactly as it is — it is correct for the read side (GET /v1/metrics) and its doc comment says so. Add a sibling helper for the write side that resolves to null and branches, and point line 160 at it:\n\n  function tenantCurrencyMismatch(row, spendCurrency) {\n    const canonical = canonicalCurrency(row?.currency);\n    return canonical === null ? row.currency !== spendCurrency : canonical !== spendCurrency;\n  }\n\nA stored code that names an ISO currency is compared canonically, so 'usd' and ' USD ' accept the USD spend they name. A stored code that names none is compared VERBATIM, so it never matches a validated spend currency and the existing 400 fires with the stored string in the message and details, exactly as on main. Note that a validated spend currency is always in ISO_CURRENCIES (measurement.js rejects anything else before this point), so the verbatim branch can never accidentally accept: for 'ZZZ' it is always a mismatch. The message and details blocks are untouched, so the operator signal and the existing ZZZ+USD / USD+EUR tests are unaffected.\n\n2. money() (src/web/pages.js:240). Take the reviewer's first option and revert the expression to main's exact form, `formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR'))`, restoring the ISO_CURRENCIES import alongside canonicalCurrency. Then correct the doc comment, which currently makes a claim this change makes false: the paragraph at 222-228 says mis-cased codes render as dollars 'because canonicalCurrency resolves a stored code before the membership test'. After the revert money() no longer resolves anything — tenantCurrency() does, upstream, at every call site. The claim stays TRUE of the render, but the stated mechanism becomes false, so reword it to attribute the case-resolution to the tenantCurrency() seam above and to say plainly that no test can pin money()'s own guard, because every caller has already resolved the code. Do not delete the guard: it is main's line, it keeps a page render from throwing on a code that reaches it by a future path, and deleting it is a strictly larger diff for no reachable behaviour change.\n\n3. The test fixtures. Fold usdCasingRepos() into usdRepos() by giving usdRepos an optional storedCurrency parameter defaulting to 'USD', reusing the single opportunity_id 'opp_usd_expensive', and rewriting the 7 usdCasingRepos(...) call sites to usdRepos(...). The doc comment moves with it. Separately, convert the three inline Qualified CPL extractions (374-375, 412-413, 1076-1077) to qualifiedCplValue(html), which is what makes that extraction actually buy something. Both are pure refactors: no assertion changes, so AC-6's greps and every currency assertion hold as written.\n\nI prototyped all three on current main, ran the full suite, and measured every number this order asserts. The results are in evidence[], including the count AC-7 depends on.",
+    "files": [
+      {
+        "path": "src/api/routes.js",
+        "action": "edit",
+        "change": "Add a `tenantCurrencyMismatch(row, spendCurrency)` helper immediately after `resolveTenantCurrency` (line 70): it calls `canonicalCurrency(row?.currency)`, and returns `row.currency !== spendCurrency` when that is null (compare the STORED string verbatim) and `canonical !== spendCurrency` otherwise. Change the guard at line 160 from `resolveTenantCurrency(existingTenant) !== spendCurrency` to `tenantCurrencyMismatch(existingTenant, spendCurrency)`. Leave the 400's `message` and `details` blocks byte-identical — they must keep reporting the raw stored string. Leave `resolveTenantCurrency` and its call at line 184 (GET /v1/metrics) untouched, and extend its doc comment to say explicitly that its INR fallback is for the READ side only and that the write side deliberately does not use it.",
+        "why": "The read-side fallback (draw something) and the write-side check (reject a mismatch, and name the stored code) are different questions. Wiring the first into the second is what turned a 400 into a silent 202."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "Line 240: revert `formatMoney(fromMicros(micros, canonicalCurrency(currency) ?? 'INR'))` to main's exact `formatMoney(fromMicros(micros, ISO_CURRENCIES.includes(currency) ? currency : 'INR'))`, and restore the import on line 12 to `{ canonicalCurrency, formatMoney, fromMicros, ISO_CURRENCIES }` (canonicalCurrency stays — tenantCurrency() on line 204 still uses it). Then rewrite the money() doc comment paragraph at lines 222-228: it currently claims mis-cased codes render as dollars 'because canonicalCurrency resolves a stored code before the membership test', which this revert makes false of money(). Attribute the case-and-whitespace resolution to the tenantCurrency() seam above instead, and state plainly that money()'s own membership guard cannot be pinned by a test because every call site has already resolved the code through tenantCurrency(). Keep the rest of the comment (the readability guard, the relabelling trade) as it is.",
+        "why": "money()'s canonicalisation is unreachable defence — I confirmed by mutation that reverting it, and separately removing it entirely, both leave 293/293 green. Reverting to main's line is the smaller diff and leaves one currency seam in the file rather than two."
+      },
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "change": "(a) Delete `usdCasingRepos(storedCurrency)` (lines 72-85) and give `usdRepos` (line 52) a second parameter `storedCurrency = 'USD'` used in the `tenants.create` call; reuse the existing single opportunity_id `opp_usd_expensive` in both the outer field and the record, so the create block exists once. Move the mis-cased-row doc comment onto usdRepos and reword its first line to say the optional argument is how a row this app did not write might spell its code. (b) Rewrite all 7 `usdCasingRepos(...)` call sites (lines 1097, 1112, 1125, 1147, 1162, 1175, 1192) to `usdRepos(...)` with the same argument. (c) Replace the three inline two-line Qualified CPL extractions with `qualifiedCplValue(html)`: at 374-375 and 412-413 delete the `cplCard` line and make `const cplText = qualifiedCplValue(html);`; at 1076-1077 delete the `cplTile` line and do the same. Change no assertion and no expected value.",
+        "why": "The 3 inline CPL copies are duplication #63 introduced — that is what makes the new helper buy nothing. The 8 opportunity-row matches predate #63 and are scoped out instead."
+      },
+      {
+        "path": "test/api/events.test.js",
+        "action": "edit",
+        "change": "After the existing 'an unrecognised tenant currency is still a 400 reporting the stored code verbatim' test (line 305), add a test that a tenant row stored as 'ZZZ' REJECTS an INR spend: `tenants.create({ id: 'tenant_odd_inr', name: 'Odd Tenant', currency: 'ZZZ' })`, POST a `spend.observed` of value 1_000_000_000 with `currency: 'INR'`, and assert status 400, `code` CURRENCY_MISMATCH, `message` exactly 'tenant tenant_odd_inr keeps ZZZ; spend in INR was rejected', `details` deepEqual `{ tenant_currency: 'ZZZ', received: 'INR' }`, and that `repositories.rawEvents.count('tenant_odd_inr')` is 0 (a rejected spend writes nothing). Give it a comment naming the review finding it closes and the fact that the existing suite pinned neither direction of the ZZZ case. Change no existing test.",
+        "why": "The ZZZ+INR direction is untested on both branches, which is why CI was green over a behaviour change nobody claimed. Without this test the fix is unpinnable in exactly the way the reviewer described — I confirmed by mutation that this one test alone turns red on the regression."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/api/events.test.js",
+        "action": "edit",
+        "cases": [
+          "a tenant row stored as ZZZ rejects an INR spend with 400 CURRENCY_MISMATCH, the message naming ZZZ verbatim, details {tenant_currency:'ZZZ', received:'INR'}, and no raw event written",
+          "a tenant row stored as ZZZ still rejects a USD spend with 400 CURRENCY_MISMATCH (the pre-existing control, unchanged)",
+          "a tenant row stored as usd still accepts a USD spend with 202 and appended true (the relaxation from #63, unchanged)",
+          "a tenant row stored as usd still rejects a EUR spend with 400 (the other pre-existing control, unchanged)"
+        ]
+      },
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "the seeded INR dashboard still renders its Qualified CPL tile as ₹2,400.00 (unchanged — confirms the pages.js revert is behaviour-neutral)",
+          "a tenant stored as lowercase usd still renders value $6,000.00 and no rupee sign on the opportunity row",
+          "usd, Usd and a padded USD still render byte-identical money",
+          "an unrecognised tenant currency still resolves to the INR fallback and never leaks the raw code to a reader"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "A tenant row whose stored currency is the unknown code 'ZZZ' rejects an INR spend event with 400 CURRENCY_MISMATCH, the message reading 'tenant <id> keeps ZZZ; spend in INR was rejected' and details {tenant_currency: 'ZZZ', received: 'INR'} — the same 400 main returned. The rejected event appends no raw event, and GET /v1/metrics for that tenant reports its spend_micros unchanged.",
+        "how_to_verify": "sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='ZZZ' WHERE id='tenant_demo'\" then POST /v1/events {\"event_id\":\"qa_zzz_inr\",\"event_name\":\"spend.observed\",\"currency\":\"INR\",\"value\":1000000000,\"tenant_id\":\"tenant_demo\",\"occurred_at\":\"<now>\"}. Expect 400 with the body above. GET /v1/metrics?tenant_id=tenant_demo before and after: spend_micros must be the same number both times (7_200_000_000 on a freshly seeded DB).",
+        "source": "TR-1",
+        "verify": "api"
+      },
+      {
+        "id": "AC-2",
+        "check": "A tenant row stored as 'ZZZ' still rejects a USD spend with 400 CURRENCY_MISMATCH naming ZZZ, so the fallback removal narrows only the INR case and does not weaken the pre-existing guard.",
+        "how_to_verify": "With tenant_demo still set to 'ZZZ', POST a spend.observed of 1000000000 with currency USD. Expect 400 and code CURRENCY_MISMATCH with tenant_currency 'ZZZ'.",
+        "source": "TR-1",
+        "verify": "api"
+      },
+      {
+        "id": "AC-3",
+        "check": "A tenant row stored as the mis-cased code 'usd' still ACCEPTS a USD spend with 202 and appended:true, and a row stored as 'usd' still REJECTS a EUR spend with 400. The relaxation #63 introduced for mis-cased and padded codes is untouched by this fix.",
+        "how_to_verify": "sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='usd' WHERE id='tenant_demo'\". POST a USD spend -> 202 {\"appended\":true}. POST a EUR spend -> 400 CURRENCY_MISMATCH with tenant_currency 'usd'. Also POST a USD spend against a row stored as ' USD ' -> 202.",
+        "source": "TR-1",
+        "verify": "api"
+      },
+      {
+        "id": "AC-4",
+        "check": "The dashboard for a tenant whose stored currency is the unknown code 'ZZZ' still renders every amount in rupees and never prints the raw code. The read-side INR fallback is unchanged by this fix: a renderer must draw something rather than 500 or print a bare 'ZZZ'.",
+        "how_to_verify": "sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='ZZZ' WHERE id='tenant_demo'\", then load /. The Qualified CPL tile shows ₹2,400.00 (the seeded value), the page contains no occurrence of the string ZZZ, and no amount renders as a bare micros integer. Reset the row to 'INR' afterwards.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-5",
+        "check": "The seeded INR dashboard still renders its Qualified CPL tile as ₹2,400.00 and shows no bare micros anywhere. The pages.js revert is behaviour-neutral: money() renders identically for every currency any call site can pass it.",
+        "how_to_verify": "npm run sdlc:seed then load / and read the Qualified CPL KPI card's value: ₹2,400.00. Assert the page contains no '7200000000'.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-6",
+        "check": "test/web/pages.test.js carries one USD fixture, not two: the strings 'function usdRepos' and 'function usdCasingRepos' each appear at most once (usdCasingRepos zero times), and 'opp_usd_expensive' still appears exactly twice, so the AC-6 greps from #58 do not move.",
+        "how_to_verify": "node --test test/web/pages.test.js, plus: grep -c 'function usdRepos' test/web/pages.test.js (1), grep -c 'usdCasingRepos' test/web/pages.test.js (0), grep -c 'opp_usd_expensive' test/web/pages.test.js (2).",
+        "verify": "test"
+      },
+      {
+        "id": "AC-7",
+        "check": "The lazy 'kpi-card … Qualified CPL … </div>' extraction appears exactly once in test/web/pages.test.js, inside qualifiedCplValue — the three inline copies the PR left behind are gone, so the helper is the only copy of that idiom.",
+        "how_to_verify": "grep -cF 'kpi-card[\\s\\S]*?Qualified CPL' test/web/pages.test.js must print 1. The literal string is the JavaScript regex source as it appears in the file, so -F (fixed-string) is the correct match mode: the BRE form 'kpi-card[\\s\\S]\\*?Qualified CPL' returns 0 in both states and cannot be used. The case run by CI is the whole qualifiedCplValue-backed set: test/web/pages.test.js must stay at 58 pass / 0 fail, and node --test at 293+ pass / 0 fail.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "npm ci --no-audit --no-fund && npm run sdlc:seed, then npm run sdlc:serve (PORT defaults to 3000, DB_PATH to ./data/app.db). Confirm GET /health is 200.",
+      "Regression check, the finding that matters. sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='ZZZ' WHERE id='tenant_demo'\" (expect changes() = 1). POST /v1/events {\"event_id\":\"qa_zzz_inr\",\"event_name\":\"spend.observed\",\"currency\":\"INR\",\"value\":1000000000,\"tenant_id\":\"tenant_demo\",\"occurred_at\":\"<ISO now>\"} — expect 400 and exactly {\"code\":\"CURRENCY_MISMATCH\",\"message\":\"tenant tenant_demo keeps ZZZ; spend in INR was rejected\",\"details\":{\"tenant_currency\":\"ZZZ\",\"received\":\"INR\"}}. On unfixed main this returns 202, which is the whole ticket.",
+      "AC-2: still holding that row at 'ZZZ', POST the same event with currency USD — expect 400 CURRENCY_MISMATCH, tenant_currency 'ZZZ'.",
+      "AC-1 second half: GET /v1/metrics?tenant_id=tenant_demo before and after the two rejected posts. spend_micros must be identical across all three reads (7_200_000_000 on a freshly seeded DB). A number that moved by 1_000_000_000 means a rejected event was appended.",
+      "AC-4: with tenant_demo still at 'ZZZ', load / in the browser. The Qualified CPL card reads ₹2,400.00, the page contains no 'ZZZ', and no amount shows a bare micros integer. This proves the read-side fallback survived the ingest fix.",
+      "AC-3: sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='usd' WHERE id='tenant_demo'\". POST a USD spend -> 202 {\"receipt\":…,\"appended\":true,\"duplicate\":false}. POST a EUR spend -> 400 CURRENCY_MISMATCH with tenant_currency 'usd'. Then reset the row to 'INR'.",
+      "AC-5: reset tenant_demo to 'INR', reload /. Qualified CPL reads ₹2,400.00 and the page contains no '7200000000'.",
+      "Widen past the script: load /opportunities, /journal, /experiments and /approvals at ?state=empty, ?state=ideal, ?state=partial, ?state=loading and ?state=error, and ?meta_error=quota and ?meta_error=revoked on /. Every amount on every screen must carry a currency symbol, and no screen may show '₹NaN', 'undefined', a bare micros integer, or a raw stored code.",
+      "AC-6 and AC-7: run the greps named in those criteria — note AC-7's is `grep -cF 'kpi-card[\\s\\S]*?Qualified CPL' test/web/pages.test.js`, which must print 1 (it prints 4 before the fix). Then node --test — the full suite must be 293+ pass / 0 fail, and test/web/pages.test.js 58 pass / 0 fail.",
+      "Independent check, not a substitute for the above: read src/api/routes.js and confirm the ingest guard calls tenantCurrencyMismatch, that resolveTenantCurrency is used only by GET /v1/metrics, and that the 400's message and details still interpolate existingTenant.currency (the raw stored string) rather than any resolved value."
+    ],
+    "risks": [
+      "The ingest fix narrows an accept to a reject. A caller currently posting INR spend to a tenant row whose stored currency is an unknown code will start receiving 400 where it received 202. That is the intended restoration of main's behaviour and is the ticket's whole point, but it is a visible API change: the sender must fix the tenant row. Nothing in this repo posts such an event — only the QA repro and this ticket's own test do — so blast radius is a real operator with a bad row, who now gets the 400 that tells them so.",
+      "The metrics read side deliberately keeps its INR fallback, so a 'ZZZ' tenant's dashboard and its ingest now disagree by design: the screen draws rupees while the API refuses to add to them. This asymmetry was already acknowledged in #63's unknowns and is unchanged here, but it is the thing most likely to look like a new bug to the next reader. The resolveTenantCurrency doc comment must say so explicitly, and AC-1/AC-4 pin both halves so neither can drift alone.",
+      "Reverting money() to main's exact-membership expression is behaviour-neutral today but restores a guard that is equally unpinnable — I measured that main's line is invisible to the whole suite just as the canonicalCurrency line is. The fix for that is a call-graph change (fewer currency seams), not a line change, and is out of scope here. The doc comment must therefore not claim the guard is tested; it is defence in depth for a path no current caller takes.",
+      "Both routes.js and pages.js are on the money path, and this diff touches four files across two of them. The pages.js change is a comment and a one-line revert verified neutral by mutation, but it is the kind of edit a reviewer should read rather than skim.",
+      "The test-file refactors change no assertion, but they do rewrite 7 fixture call sites and 3 extractions. If any expected value was quietly relying on the duplicated block, the suite catches it immediately — that is the point of running it, and AC-6/AC-7 pin the shape as well as the behaviour."
+    ],
+    "out_of_scope": [
+      "The 8 remaining lazy first-row `class=\"opportunity-row\"` matches in test/web/pages.test.js (lines 92, 687, 712, 739, 762, 794, 984, 1062, 1099, 1194, 1234), and the opportunityRowMoney() helper that partially lifts one of them. The reviewer notes this as a smaller cousin of the ticket's own finding 2, but every one of those matches predates #63 — none of the four helpers existed at ed5aa90 — so this is pre-existing duplication rather than something this PR introduced, and it would ship on its own if this ticket did not exist. Folding them into a rowHtml(html, id) helper is a reasonable follow-up; it is not this fix's to carry.",
+      "Making money()'s currency guard actually pinnable. That needs the call graph changed (one currency seam, resolved once, with every money() call site unable to pass an unresolved code), which is a design change to pages.js rather than a line edit. Out of scope for a follow-up-to-a-follow-up; worth its own ticket given #44's history.",
+      "Any change to canonicalCurrency() in src/domain/money.js, to computeFunnel() in src/domain/measurement.js, or to the read-side resolveTenantCurrency fallback. The read side is correct as it stands and AC-4 pins it.",
+      "Tenant currency validation at write time — rejecting a bad code at tenants.create rather than tolerating it and 400ing on the mismatch. That is a different contract change to a different layer, and it would break the existing tests that legitimately create 'ZZZ' and 'usd' rows through tenants.create."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Accept the fallback-to-INR behaviour deliberately: keep routes.js as #63 left it, state the write-path widening in the work order as intended, and add the ZZZ+INR case to test/api/events.test.js pinning 202 as the new expected status.",
+        "rejected_because": "The reviewer is right that this is the honest form of the other option, but it changes what bad data means at ingest, and nothing asked for that change. The issue's own leading finding describes the 400 as the only signal an operator gets that the row is wrong. Deliberately removing an error signal is a product decision, and no decision was recorded in plan/brief.md — so the restoration of main's semantics is the choice that needs no one's permission."
+      },
+      {
+        "approach": "Keep canonicalCurrency() in money() and document it in the doc comment as deliberate defence-in-depth that no test can pin.",
+        "rejected_because": "Also offered by the reviewer, but it keeps a currency site in this file that the repo's own history (#44, and commit 48a1d51) treats as a defect when nothing can catch it, and the guard is unreachable: I confirmed by mutation that both reverts leave 293/293 green, so the protection is not protecting anything. The smaller honest diff reverts to main's line and says in the comment that the guard is unpinnable."
+      },
+      {
+        "approach": "Delete money()'s currency guard entirely, so fromMicros throws on an unresolvable code and the file has exactly one currency seam.",
+        "rejected_because": "Also green on mutation (293/293), so it is tempting — but it is a strictly larger behaviour change than the revert, it discards main's protection against a page render 500ing on a code that reaches money() by some future path, and it buys no reachable behaviour today. Not worth carrying in a follow-up ticket."
+      },
+      {
+        "approach": "Keep usdCasingRepos() and usdRepos() as two helpers, and just add a comment explaining why the currency could not be parameterised.",
+        "rejected_because": "It could be parameterised — the two bodies differ in exactly one field and one id — and the ticket exists to remove this duplication. A comment explaining a duplication is not a fix for it."
+      },
+      {
+        "approach": "Split this issue into a bug ticket (finding 1) and a chore ticket (findings 2-4).",
+        "rejected_because": "Considered seriously, since finding 1 is a behaviour regression and the rest are test-file cleanups. Rejected because the route already assigned a single debug→implement→review→qa chain to this issue, all four findings were raised by one review of one PR, and they touch one overlapping pair of files. The split would cost a second full cycle for a change whose non-behavioural half is three mechanical refactors that the same reviewer will want to see resolved alongside the finding that prompted them."
+      }
+    ],
+    "assumptions": [
+      "The ZZZ tenant row is reachable in production only by raw SQL or a legacy import, since tenants.create is never called with an unknown code by anything this repo writes. Both the reviewer's repro and my own used sqlite3 UPDATE. The fix therefore changes behaviour for a bad-data path, not a live one.",
+      "metrics.js validation runs before the currency guard, so a spend currency reaching line 156 is always a member of ISO_CURRENCIES. That is what makes the verbatim-compare branch safe: an unknown stored code can never accidentally match it. measurement.js:136 enforces this and I did not change it."
+    ],
+    "unknowns": [
+      "Whether any operator outside this repo has a tenant row holding an unknown currency code and is currently posting spend into it successfully. If so, they will start seeing 400s after this lands. Nothing in the repo can tell us; the 400 names the code, so the fix is self-explaining to whoever hits it, but it is worth a release note.",
+      "The eight pre-existing opportunity-row matches left in place are a real duplication debt in the same file this ticket touches. I scoped them out on the grounds that they predate #63; a human may reasonably disagree and want them folded into the same change, which would be a small extra edit to test/web/pages.test.js and no production code."
+    ],
+    "evidence": [
+      "THE ONE OBJECTION TO v1 IS RESOLVED, and the number it asked for is measured. v1's AC-7 told QA to run `grep -c 'kpi-card[\\s\\S]\\*?Qualified CPL' test/web/pages.test.js` and expect 1. Run verbatim on current main it prints 0, and it prints 0 under -E as well, because in a POSIX BRE `[\\s\\S]` is a bracket expression over {backslash, s, S} and `\\*?` is a literal asterisk plus a quantifier. The idiom really does appear 4 times today (test/web/pages.test.js:99 inside qualifiedCplValue, and inline at 374, 412 and 1076), so the criterion's intent was right and only the command was broken. The fixed command reads the same number from a POSIX tool: `grep -cF 'kpi-card[\\s\\S]*?Qualified CPL' test/web/pages.test.js` prints 4 on current main, and `grep -cP` agrees.",
+      "AC-7's TARGET NUMBER MEASURED AFTER THE REFACTOR. I applied the v1 test-file refactor (fold usdCasingRepos into usdRepos; convert the 3 inline CPL extractions to qualifiedCplValue(html)) and re-ran the same fixed command: it prints 1. The criterion is therefore satisfiable, and its before/after is 4 -> 1.",
+      "FINDING 1 REPRODUCED on current main (4372b06): seeded DB, sqlite3 UPDATE tenants SET currency='ZZZ' WHERE id='tenant_demo', POST /v1/events {event_name:'spend.observed', currency:'INR', value:1000000000} -> 202 {\"receipt\":\"qa_zzz_inr\",\"appended\":true,\"duplicate\":false}. GET /v1/metrics?tenant_id=tenant_demo -> spend_micros 8_200_000_000 (7_200_000_000 seeded + the 1_000_000_000 that should have been rejected). The same row with currency USD -> 400 as expected, which is why the existing suite is green.",
+      "COMPARISON against unmodified main (ed5aa90), where line 160 read `existingTenant.currency !== spendCurrency` verbatim: the identical ZZZ+INR post returns 400 {\"code\":\"CURRENCY_MISMATCH\",\"message\":\"tenant tenant_demo keeps ZZZ; spend in INR was rejected\",\"details\":{\"tenant_currency\":\"ZZZ\",\"received\":\"INR\"}}. So the reviewer's claim that this is a regression introduced by #63 is confirmed, not merely plausible.",
+      "FIX PROTOTYPED and verified before planning, all five currency directions against a freshly seeded DB and a server started on the patched code: ZZZ+INR -> 400 with the message and details above, byte-identical to main; ZZZ+USD -> 400; 'usd'+USD -> 202; 'usd'+EUR -> 400; ' USD '+USD -> 202. Full suite with the fix: 293 tests, 293 pass, 0 fail.",
+      "THE NEW TEST CATCHES THE REGRESSION. Re-applying the mutation (guard pointed back at resolveTenantCurrency, i.e. ZZZ treated as INR) turns the new ZZZ+INR test red on its own — 'not ok 19 - an unrecognised tenant currency is not silently treated as INR on ingest', 19 pass / 1 fail in test/api/events.test.js — while the pre-existing direction tests stay green. That is the gap the review identified, now closed.",
+      "FINDING 3 CONFIRMED, and the reviewer's evidence understates it. Reverting money() to main's exact expression (and restoring the ISO_CURRENCIES import): 293/293 green. Additionally, removing money()'s currency guard entirely is also 293/293 green. So money()'s currency handling is unpinnable in both directions — it is the call graph, not the choice of expression, that makes the site invisible. Reverting to main's line is therefore a readability and honesty change, not a robustness one, and the doc comment must not claim otherwise.",
+      "FINDING 2 CONFIRMED by count: test/web/pages.test.js contains 'function usdRepos' once (line 52) and 'function usdCasingRepos' once (line 72), with the two create blocks differing only in the currency field and the opportunity_id ('opp_usd_expensive' x2 vs 'opp_usd_casing' x2). All four AC-6 greps from #58 still print their required numbers today. After the v1 refactor, measured: 'function usdRepos' 1, 'usdCasingRepos' 0, 'opp_usd_expensive' 2, 'opp_usd_casing' 0, and the suite is still 293/293 with test/web/pages.test.js at 58/58.",
+      "FINDING 4 CONFIRMED by count: the lazy 'kpi-card … Qualified CPL … </div>' extraction appears 4 times in test/web/pages.test.js — once inside qualifiedCplValue (99) and three times inline (374, 412, 1076). Separately, 'function usdRepos', 'function usdCasingRepos', opportunityRowMoney and qualifiedCplValue all appear 0 times at ed5aa90, confirming every one of the four helpers is new in #63 — which is why the 3 inline CPL copies are in scope and the 8 opportunity-row matches are not.",
+      "READ SIDE UNCHANGED, verified end to end on the patched build: with tenant_demo set to 'ZZZ', the dashboard's Qualified CPL tile renders ₹2,400.00, the string 'ZZZ' appears 0 times in the document, and no amount renders as a bare micros integer. With the row reset to 'INR' the same page renders ₹2,400.00 with 0 occurrences of '7200000000'. AC-4 and AC-5 rest on this and it is unaffected by the routes.js change.",
+      "BASELINE NOTE: node --test reports 7 failing files on a clean checkout until `npm ci` has run, because express is not installed. Every measurement above was taken after `npm ci`, against a 293-test green baseline that I re-confirmed on the restored clean tree before writing this order."
+    ],
+    "confidence": 91,
+    "confidence_rationale": "High, and higher than v1's 88 because the one objection has been closed by measurement rather than argument. Every number this order asserts was taken on current main or on a prototype of this exact plan: the regression reproduces (202, and metrics 7.2B->8.2B), the fix restores main's semantics in all five currency directions, the new test provably catches the regression by mutation, the pages.js revert is confirmed neutral at 293/293, and AC-7's count is measured at 4 before and 1 after. The residual uncertainty is not about correctness but about scope judgement: I scoped the 8 pre-existing opportunity-row matches out on the grounds that they predate #63, and a human may want them in the same diff."
+  },
+  "approved_too_high": false
 }
