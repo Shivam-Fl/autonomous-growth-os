@@ -144,7 +144,10 @@
       }
     ]
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "test/web/pages.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
