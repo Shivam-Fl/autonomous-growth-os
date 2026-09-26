@@ -12,16 +12,15 @@
     "qa": 0
   },
   "attempt_run": null,
-  "halted": null,
   "pending": {
     "stage": "root-cause",
     "rework": null,
     "requested_at_head": null,
     "qa_run": "36198231105",
     "from": "qa",
-    "pr": "62",
+    "pr": 62,
     "work_order_version": 1,
-    "at": "2026-09-25T22:54:40.270Z"
+    "at": "2026-09-26T07:11:08.750Z"
   },
   "work_order": {
     "issue": 61,
@@ -305,7 +304,7 @@
       "action": "-> planning"
     }
   ],
-  "resume_at": "root-cause",
+  "resume_at": null,
   "flow_plan": {
     "kind": "feature",
     "confidence": 85,
@@ -320,7 +319,7 @@
     },
     "decided_at": "2026-09-25T22:10:10.406Z"
   },
-  "stopped_at": "root-cause",
+  "stopped_at": null,
   "dispatched_stage": "root-cause",
   "validated_from": "plan",
   "validated_at": "2026-09-25T22:25:52.630Z",
