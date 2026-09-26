@@ -22,6 +22,20 @@ const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals']
 // plain text.
 const H1_HOOK = /<h1[^>]*\bdata-testid="page-title"[^>]*>[^<]*<\/h1>/;
 
+// The skip link's target, as a heading-hierarchy matcher. Hoisted beside
+// H1_HOOK for the same reason and with the same rule: the id is load-bearing,
+// because the assertion below is only about the landmark the skip link points
+// at, and issue #46 relaxed it past the requirement #52 relied on. Issue #61
+// restores it and pins both the acceptances and the rejections, so a second
+// relaxation cannot pass the 25 shells for the wrong reason again.
+//
+// The attribute is asked for with \s, not \b. \b asserts a word boundary and
+// '-' is not a word character, so \bid="main" also matched the tail of
+// data-id="main" — a landmark the skip link does not target, on a page whose
+// href="#main" resolved to nothing, with the whole suite green. Every matcher
+// in this file's guard family asks for its attribute the same way.
+const mainOf = (html) => /<main\b[^>]*\sid="main"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
+
 function freshRepos() {
   const dir = mkdtempSync(join(tmpdir(), 'pages-'));
   const db = openDatabase(join(dir, 'app.db'));
@@ -181,7 +195,6 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
   };
   // Headings in document order, as levels: h1 .. h6.
   const levelsOf = (html) => [...html.matchAll(/<h([1-6])\b[^>]*>/g)].map(([, level]) => Number(level));
-  const mainOf = (html) => /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
   const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
 
   for (const route of ROUTES) {
@@ -211,18 +224,30 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
 // carries tabindex="-1" — programmatically focusable, still out of the tab
 // sequence — or activating the skip link scrolls to #main and leaves focus on
 // <body>, putting the keyboard user back in the header it promises to skip.
+//
+// Each attribute is asked for with \s rather than \b, and the reason is the
+// same as in mainOf above: '-' is a non-word character, so \bid="main" also
+// matched data-id="main", \btabindex="-1" matched data-tabindex="-1", and the
+// class and href clauses matched data-class and data-href. Every capture here
+// begins immediately after the tag name, so a real attribute always has
+// whitespace before it and a data-* spelling never does.
 const skipLinkFocusesMain = (html) => {
-  const mainAttrs = /<main\b([^>]*)>/.exec(html)?.[1] ?? '';
+  const main = /<main\b([^>]*)>/.exec(html);
+  const mainAttrs = main?.[1] ?? '';
   // Find the link by its target rather than by position, so the brand and the
   // nav are not depended on to sort before it.
-  const skipAttrs = [...html.matchAll(/<a\b([^>]*)>/g)]
-    .map(([, attrs]) => attrs)
-    .find((attrs) => /\bhref="#main"/.test(attrs));
+  const skip = [...html.matchAll(/<a\b([^>]*)>/g)]
+    .find(([, attrs]) => /\shref="#main"/.test(attrs));
   return Boolean(
-    /\bid="main"/.test(mainAttrs) &&
-    /\btabindex="-1"/.test(mainAttrs) &&
-    skipAttrs !== undefined &&
-    /\bclass="[^"]*\bskip-link\b[^"]*"/.test(skipAttrs)
+    /\sid="main"/.test(mainAttrs) &&
+    /\stabindex="-1"/.test(mainAttrs) &&
+    skip !== undefined &&
+    /\sclass="[^"]*\bskip-link\b[^"]*"/.test(skip[1]) &&
+    // Every clause above is asked of a tag in isolation, so a link sitting
+    // BELOW </main> satisfies all of them and the bypass is destroyed. The
+    // bypass is document order, so compare the two offsets. Last in the chain,
+    // so main.index is never read on a null match.
+    skip.index < main.index
   );
 };
 
@@ -249,6 +274,13 @@ test('the skip link targets a focusable main landmark on every route and state',
     skipLinkFocusesMain('<a class="skip-link" href="#main" lang="en">Skip to content</a><main id="main" lang="en" tabindex="-1"></main>'),
     'a third attribute on either tag is tolerated'
   );
+  // The order pin below is deliberately on the link-before-main relation and
+  // not on the link being the document's first element, so the brand and the
+  // nav may still sort ahead of it.
+  assert.ok(
+    skipLinkFocusesMain('<header>brand nav</header><a class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'brand and nav may sort before the skip link'
+  );
 
   // What the lock protects, one failure mode at a time.
   assert.ok(
@@ -263,6 +295,46 @@ test('the skip link targets a focusable main landmark on every route and state',
     !skipLinkFocusesMain('<a href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
     'a link to #main that is not the skip link is not the bypass'
   );
+  // The defect issue #61 exists for: every clause above holds for a link that
+  // sits BELOW </main>, because each one is asked of the tag in isolation. The
+  // bypass is the document order, and nothing above compares the two offsets.
+  assert.ok(
+    !skipLinkFocusesMain('<main id="main" tabindex="-1"></main><a class="skip-link" href="#main">Skip to content</a>'),
+    'a skip link after </main> is not a bypass, however well-formed it is'
+  );
+
+  // Issue #61 BUG-2: a required attribute that appears only inside a data-*
+  // attribute is not the attribute. \b asserts a word boundary and '-' is not a
+  // word character, so each of these used to satisfy the guard that was written
+  // to require it. A <main data-id="main"> is not the skip link's target — the
+  // served page had getElementById('main') === null and Enter on the link left
+  // focus on the link itself — while the suite stayed green.
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main data-id="main" tabindex="-1"></main>'),
+    'data-id="main" is not id="main", so the landmark is not the skip link target'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main id="main" data-tabindex="-1"></main>'),
+    'data-tabindex="-1" is not tabindex="-1", so the landmark is not focusable'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a data-class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'data-class="skip-link" is not the styling class, so this is not the bypass'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" data-href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'data-href="#main" is not href="#main", so the link targets nothing'
+  );
+
+  // The order clause reads main.index, so a document with no <main> or no <a>
+  // has to answer false rather than throw.
+  assert.equal(
+    skipLinkFocusesMain('<a class="skip-link" href="#main">S</a>'), false, 'no main landmark is not a bypass'
+  );
+  assert.equal(
+    skipLinkFocusesMain('<main id="main" tabindex="-1"></main>'), false, 'no link at all is not a bypass'
+  );
+  assert.equal(skipLinkFocusesMain(''), false, 'an empty document is not a bypass');
 });
 
 // The other end of the same link: the one line that stops the skip link's focus
@@ -274,6 +346,54 @@ test('the #main focus suppression still carries the declaration the skip target 
   const rule = /#main:focus\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule, 'src/web/styles.css defines a #main:focus rule');
   assert.match(rule[1], /outline:\s*none\s*;/, 'the focused landmark paints no ring');
+});
+
+// The other end of that same rule, in the mode that strips author colours:
+// Chromium honours `outline: none` under forced-colors and substitutes no
+// system colour of its own, while every other focusable element keeps its
+// ring. Without the carve-out, <main> would be the one focusable thing on the
+// page with no indicator, at the exact moment a forced-colors user needs to
+// know the bypass ran. The default-mode suppression above is not the thing
+// under test; this asserts only that the mode gets one back.
+test('the #main focus suppression is restored inside forced-colors so the landmark is not the one focusable thing with no indicator', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const carveOut = /@media\s*\(forced-colors:\s*active\)\s*\{[^@]*?#main:focus\s*\{([^}]*)\}/.exec(css);
+  assert.ok(carveOut, 'src/web/styles.css restores the focus ring inside @media (forced-colors: active)');
+  assert.match(
+    carveOut[1], /outline:\s*2px\s+solid\s+CanvasText\s*;/,
+    'the carve-out paints a system colour, so it survives the mode'
+  );
+
+  // Source order is the whole mechanism, and nothing else in the suite names
+  // it: both selectors are 1,1,0, so the carve-out wins ONLY by coming after
+  // the bare rule. Moved above it, the landmark goes back to painting no
+  // indicator. The test above goes red under that reordering, but at a
+  // property it is not about, so the ordering is named here directly.
+  const bareRuleAt = css.search(/#main:focus\s*\{/);
+  assert.ok(bareRuleAt !== -1, 'src/web/styles.css defines the bare #main:focus rule');
+  assert.ok(
+    carveOut.index > bareRuleAt,
+    'the forced-colors carve-out is declared AFTER the bare #main:focus rule, at equal specificity'
+  );
+});
+
+// mainOf decides which landmark the heading-hierarchy assertion above reads,
+// so its id requirement is load-bearing: relaxed, the assertion would be
+// satisfied by some other <main> and the 25 shells would still pass. Issue
+// #61 restores it and pins both the acceptances and the rejections, so a
+// second relaxation cannot go unnoticed again.
+test('the main matcher still requires id="main" on the landmark it captures', () => {
+  assert.equal(mainOf('<main id="main"><h1>Command dashboard</h1></main>'), '<h1>Command dashboard</h1>', 'the shipped markup matches');
+  assert.equal(mainOf('<main id="main" tabindex="-1"><h1>X</h1></main>'), '<h1>X</h1>', 'the tabindex #52 added still matches');
+  assert.equal(mainOf('<main tabindex="-1" id="main"><h1>X</h1></main>'), '<h1>X</h1>', 'attribute order is not pinned');
+  assert.equal(mainOf('<main tabindex="-1" id="main" lang="en"><h1>X</h1></main>'), '<h1>X</h1>', 'a fourth attribute is tolerated');
+
+  assert.equal(mainOf('<main><h1>X</h1></main>'), '', 'a main with no id is not the skip link target');
+  assert.equal(mainOf('<main id="other"><h1>X</h1></main>'), '', 'another id is not the skip link target');
+  assert.equal(
+    mainOf('<main data-id="main"><h1>X</h1></main>'), '',
+    'data-id="main" is not id="main" (issue #61: \b matched the tail of the data-* spelling)'
+  );
 });
 
 // The matcher above was relaxed on purpose (issue #46), so it is pinned here
@@ -944,6 +1064,61 @@ function draftHarness({ fields = {}, stored = {} } = {}) {
   return { fields: made, listeners, storage };
 }
 
+// A minimal DOM for the error shell, for the claim issue #61 exists to lock:
+// nothing holds keyboard focus before the user has pressed a key (AC-5). It
+// records focus() calls rather than faking document.activeElement, because the
+// property under test is the side effect on the document, not a value read
+// back out of a stub. The panel, its own <h2> and the retry inside it are the
+// whole shell; the retry is also what the ?state= strip is driven from.
+function errorShellHarness({ panel = true, heading = 'Replay evaluation failed for scenario replay-tracking-outage', retryHref = '/journal', href = 'http://localhost:3000/journal?state=error' } = {}) {
+  const focused = [];
+  const navigated = [];
+  const listeners = new Map();
+  const liveRegion = { textContent: '' };
+  const retry = {
+    dataset: { action: 'retry', retryHref },
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    focus() {
+      focused.push('BUTTON[data-action=retry]');
+    },
+  };
+  const errorPanel = {
+    querySelector: (selector) => (selector === 'h2' && heading ? { textContent: heading } : null),
+  };
+  globalThis.document = {
+    title: 'Decision journal · Autonomous Growth OS',
+    body: { dataset: { state: 'error' } },
+    getElementById: (id) => (id === 'live-region' ? liveRegion : null),
+    querySelectorAll: (selector) => (selector === '[data-action="retry"]' && panel ? [retry] : []),
+    // Agnostic about how the panel is addressed, and that is the whole point.
+    // A real querySelector searches the whole tree, so the descendant selector
+    // '.panel-error [data-action="retry"]' resolves to the retry INSIDE the
+    // panel. A stub that answers only the exact string '.panel-error' returns
+    // null for that selector — and the pre-fix client.js, which asked only that
+    // descendant question, then records no focus call at all, so the test below
+    // passes green against the very defect it was written for.
+    querySelector: (selector) => {
+      if (!panel || !selector.includes('.panel-error')) {
+        return null;
+      }
+      return selector.includes('[data-action="retry"]') ? retry : errorPanel;
+    },
+    addEventListener: () => {},
+  };
+  globalThis.window = {
+    localStorage: { getItem: () => null, setItem: () => {} },
+    location: { origin: 'http://localhost:3000', href, replace: (to) => navigated.push(to) },
+  };
+  return {
+    focused,
+    liveRegion,
+    navigated,
+    click: () => listeners.get('click')(),
+  };
+}
+
 let clientLoad = 0;
 async function loadClient() {
   clientLoad += 1;
@@ -978,6 +1153,93 @@ test('typed composer fields are saved to localStorage and restored on the next l
     assert.equal(restored.opp_exp_draft_title, 'Exact-intent search deserves more budget');
     assert.equal(restored.opp_exp_draft_thesis, 'Qualified CPL should fall because intent is narrower.');
     assert.equal(restored.opp_exp_draft_cap, '500000000');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// Issue #61 BUG-1, the runtime half of a guarantee the rest of this file only
+// checks as document order. client.js used to focus the failing panel's retry
+// action on load, so on every error shell document.activeElement was already
+// BUTTON[data-action=retry] before the user pressed anything and the first Tab
+// continued from there — the skip link was never the first stop. Nothing else
+// here could see it: every other guard in this file reads an HTML string, and
+// this is a script side effect. Asserted on the error shell AND on a shell
+// with no panel at all, so the claim is "nothing takes focus", not "the panel
+// takes less of it".
+test('a fresh load focuses nothing on the error shell, so the first Tab reaches the skip link', async () => {
+  try {
+    const errorShell = errorShellHarness();
+    await loadClient();
+    assert.deepEqual(errorShell.focused, [], 'no focus is taken before the user presses a key');
+
+    const noPanel = errorShellHarness({ panel: false });
+    await loadClient();
+    assert.deepEqual(noPanel.focused, [], 'and a shell with no error panel takes no focus either');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// What the load-time focus was standing in for. On a region-level failure
+// (?meta_error=quota) body data-state is still 'ideal', so the page-state
+// announcement names nothing that failed and the failure was announced
+// nowhere. Locked as a contract of its own: without it, deleting the focus
+// would have left a failed page that says nothing. Both halves — what failed
+// and what to do about it — and the copy is the panel's own <h2>, which
+// docs/ui.md already requires the panel to state, so it cannot drift.
+test('an error panel is announced through the live region, by name and with a next action', async () => {
+  try {
+    const errorShell = errorShellHarness();
+    await loadClient();
+    assert.match(
+      errorShell.liveRegion.textContent,
+      /Replay evaluation failed for scenario replay-tracking-outage/,
+      'the live region names the failure the panel itself names'
+    );
+    assert.match(
+      errorShell.liveRegion.textContent,
+      /Use Retry to try again\./,
+      'and points at the Retry action'
+    );
+
+    // The defensive half of the new branch: a panel that ever stops rendering
+    // an <h2> degrades to a generic sentence rather than throwing on load.
+    const headingless = errorShellHarness({ heading: null });
+    await loadClient();
+    assert.equal(
+      headingless.liveRegion.textContent,
+      'This page failed to load Use Retry to try again.',
+      'a panel with no heading still announces, and does not throw'
+    );
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// The behaviour the autofocus displaced, minus the focus steal: the retry is
+// still wired, still announces, and still reloads the route with the ?state=
+// preview override stripped so the user lands on the real page. Both sources of
+// the target are exercised, because the button carries data-retry-href and a
+// shell that does not falls back to the current location.
+test('the wired retry still announces and still reloads the route with the preview override stripped', async () => {
+  try {
+    const fromHref = errorShellHarness();
+    await loadClient();
+    fromHref.click();
+    assert.deepEqual(fromHref.navigated, ['/journal']);
+    assert.equal(fromHref.liveRegion.textContent, 'Retrying…');
+
+    const fromLocation = errorShellHarness({ retryHref: '' });
+    await loadClient();
+    fromLocation.click();
+    assert.deepEqual(
+      fromLocation.navigated, ['/journal'],
+      'with no data-retry-href the current location is used and ?state= is stripped'
+    );
   } finally {
     delete globalThis.document;
     delete globalThis.window;

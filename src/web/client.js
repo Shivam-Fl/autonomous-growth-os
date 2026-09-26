@@ -37,11 +37,23 @@
     });
   });
 
-  // An error panel moves focus to its retry action, so keyboard users are not
-  // left at the top of a page whose data just failed to load.
-  var failedRetry = document.querySelector('.panel-error [data-action="retry"]');
-  if (failedRetry) {
-    failedRetry.focus();
+  // No focus is taken here, on purpose. Focusing the failing panel's retry
+  // action parked the keyboard deep in the document before the user had pressed
+  // anything, so the first Tab after a fresh load continued from there and the
+  // skip link was never the first stop (issue #61, AC-1). The focus was also
+  // standing in for an announcement that did not exist: on a region-level
+  // failure such as ?meta_error=quota the body state is still 'ideal', so the
+  // live region named nothing that had failed. Announce the panel's own
+  // heading instead — docs/ui.md requires the panel to state what failed, so
+  // the announcement cannot drift from the page — read defensively so a shell
+  // without an <h2> degrades to a generic sentence rather than throwing.
+  var failedPanel = document.querySelector('.panel-error');
+  if (failedPanel) {
+    var failedHeading = failedPanel.querySelector('h2');
+    var failure = failedHeading && failedHeading.textContent
+      ? failedHeading.textContent.trim()
+      : 'This page failed to load';
+    announce(failure + ' Use Retry to try again.');
   }
 
   // The hypothesis composer (issue #22): every field persists to localStorage
