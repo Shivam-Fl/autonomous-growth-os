@@ -681,6 +681,11 @@
       "prior_signatures": [
         "plan:unknown:cf147870ae4ffcc2"
       ]
+    },
+    "triage": {
+      "verdict": "repair",
+      "diagnosis": "A real test defect in the project's own code, not an environment or framework problem. The failing assertion is test/web/pages.test.js:1779, inside the test 'the approval action row can shrink, and the selectors below have something to match' (test 465 of the ci-verify 'Unit tests' step): assert.match(html, /<li class=\"approval-card\">/). That regex demands the card's opening <li> end immediately after the class attribute, but src/web/pages.js:1043 renders it as `<li class=\"approval-card\" data-testid=\"approval-card\" data-approval-card data-approval-id=\"...\" data-tenant-id=\"...\">`. Both the markup and the test were changed in the same commit (632153e, which added data-approval-card/data-approval-id/data-tenant-id to the card and a `data-testid` for counting), and the test's exact-tag regex was not relaxed to match. So the assertion tests the tag's exact attribute list rather than the thing it means: that a pending approval renders an .approval-card for the CSS pins to match. The other three assertions in the test — the .approval-actions flex-wrap pin, the input min-width floor, and the button/reason-input counts — all pass; only the card probe is stale. The fix is one line: match the class with a trailing attribute allowance, /<li class=\"approval-card\"[^>]*>/, which passes against the shipped render (verified locally: 72 pass, 0 fail). The attributes must not be removed to make the test pass — client.js:255 looks the card up with closest('[data-approval-card]'), and test/web/approvals.test.js, test/data/seed.test.js and this test's own comment all depend on them. Do not rerun: this is deterministic, it will fail identically on the next attempt, and occurrence count is 1 with no prior ci signature (the only prior signature is `plan:unknown:cf147870ae4ffcc2`, a different stage).",
+      "evidence": "failed-run.log:3258 `not ok 465 - the approval action row can shrink, and the selectors below have something to match`; :3260 `location: '/home/runner/work/autonomous-growth-os/autonomous-growth-os/test/web/pages.test.js:2945:1'`; :3262 `error: 'a pending approval renders the card the pins above are about'`; :3264 `code: 'ERR_ASSERTION'`, `failureType: 'testCodeFailure'`. The reported step at :3460 (`Fail if any check failed` / `exit 1`) is only the wrapper. The actual HTML in the log at :3272-3275 shows `<li class=\"approval-card\" data-testid=\"approval-card\" data-approval-card data-approval-id=... data-tenant-id=...>`, which the anchored regex cannot match. Reproduced at the failing tree: `node --test test/web/pages.test.js` -> `not ok 68` (same test, same message), `# pass 71 # fail 1`; with the regex relaxed to /<li class=\"approval-card\"[^>]*>/ -> `# pass 72 # fail 0`. Source of the mismatch: test/web/pages.test.js:1779 vs src/web/pages.js:1043; both last touched in commit 632153e."
     }
   },
   "triage_history": [
@@ -691,6 +696,14 @@
       "confidence": 90,
       "diagnosis": "The plan stage chose mode=review, and in that mode the workflow never runs the plan reviewer, so publish then fails for want of a verdict. plan-strategy.mjs:126-146 found root-cause's revised work order on the ledger (validated_from=root-cause, validated_at=22:01:16, validated_ac_changes=AC-3/AC-4), restored it as work-order.json and set mode=review. The plan job's condition is `mode == 'single' || mode == 'council'` (.github/workflows/sdlc-plan.yml:140), so the planner was correctly skipped. Th",
       "run": "36194614924"
+    },
+    {
+      "at": "2026-09-26T08:34:30.661Z",
+      "stage": "ci",
+      "verdict": "repair",
+      "confidence": 97,
+      "diagnosis": "A real test defect in the project's own code, not an environment or framework problem. The failing assertion is test/web/pages.test.js:1779, inside the test 'the approval action row can shrink, and the selectors below have something to match' (test 465 of the ci-verify 'Unit tests' step): assert.match(html, /<li class=\"approval-card\">/). That regex demands the card's opening <li> end immediately after the class attribute, but src/web/pages.js:1043 renders it as `<li class=\"approval-card\" data-te",
+      "run": "36230032791"
     }
   ],
   "rejected_artifacts": {
