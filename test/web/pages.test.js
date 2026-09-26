@@ -2965,7 +2965,7 @@ test('the approval action row can shrink, and the selectors below have something
   // The render is what makes the two pins facts about the page rather than
   // about the file: until this, no test had ever rendered an approval card.
   const html = await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-approval-actions-') });
-  assert.match(html, /<li class="approval-card">/, 'a pending approval renders the card the pins above are about');
+  assert.match(html, /<li class="approval-card"[^>]*>/, 'a pending approval renders the card the pins above are about');
   const row = /<form class="approval-actions"[\s\S]*?<\/form>/.exec(html)?.[0];
   assert.ok(row, 'and the action row inside it');
   assert.equal((row.match(/<button /g) ?? []).length, 2, 'the row holds the Approve and Reject buttons the flex-wrap pin is about');
