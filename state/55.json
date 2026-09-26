@@ -807,7 +807,29 @@
         "detail": "Scope: the diff adds two guard capabilities the work order did not ask for, in the one area it explicitly fenced off — 'Change nothing about how a rule is turned into declarations or how specificity is compared' (approach §7) and 'the shorthand-to-group reporting' as the whole of what was to change. They are the functional-pseudo-class specificity model (:is/:not take their heaviest argument, :where takes nothing) and `all` in all three PAGE_TITLE_PROPERTIES groups. Both close real silent passes, so I am not recommending either be dropped — the point is that they arrived unrequested, in a diff whose work order says they were not in it.\n\n`test/web/pages.test.js:1855`\n\nEvidence: `compoundSpecificity` (2218-2242) recurses into `pseudoArgument`, and `pseudoArgument` (2246) plus `heavier` (2193) exist only for that recursion; nothing in the work order's files[0].change, tests[] or acceptance list mentions a functional pseudo-class or :where(). The effect is real: `':is(#a, h1) { line-height: 2; }'` and `':not(#a) { line-height: 2; }'` appended to src/web/styles.css are reported (the id in the argument makes the selector (1,0,0) against the class rule's (0,1,0)), and `':where(#a) { line-height: 2; }'` is silent — both asserted at 3136-3147. The `all` entries are new strings in PAGE_TITLE_PROPERTIES at 1856-1858; the work order's own list of guarded properties is font-size, line-height, margin, margin-top, margin-block, margin-block-start (evidence[5]), with `font` named in approach §7 and no mention of `all`. The effect is real too: `'h1[data-testid=\"page-title\"] { all: unset }'` renders at 16px and is now reported (2781-2785). Neither addition breaks anything — the head is 480 pass / 0 fail — and both are the right direction, the one the contract says is the safe one to be wrong in.\n\nFix: No code change required. Record the two additions in the work order (or in the commit message) as found during implementation, with the silent pass each closes, so a later reader does not read them as part of the approved change and so the work order's §7 'change nothing about specificity' line stops contradicting the code. If the guard's vocabulary is going to grow, the work order's own risk[5] — 'a change to the guard's vocabulary is a change to a guard and belongs in its own commit with its own pinned cases' — is the rule to follow, and the PR head is now a single squashed commit, so that separation is no longer visible in the history."
       }
     ],
-    "pr": "59"
+    "pr": "59",
+    "qa": [
+      {
+        "id": "BUG-9",
+        "severity": "minor",
+        "title": "The 25-shell test's 'exactly one h1' assertion is unpinned, so it can be deleted with the suite green",
+        "area": "test/web/pages.test.js, 25-shell test",
+        "expected": "A deletion is caught, as it is for the neighbouring H1_HOOK call site that 'the production h1 assertion goes through H1_HOOK' pins on its own message.",
+        "actual": "Deleting 'assert.equal(levels.filter((level) => level === 1).length, 1, `${where}: exactly one h1`)' and changing nothing else leaves 81 pass / 0 fail, exit 0. The assertion exists on origin/main (line 206 of that file) and this PR adds a pin beside it but not for the count, so the 'exactly one h1' half of AC-6 loses its automated check without any test objecting. The behaviour is correct today — I confirmed one h1 per document on all 25 shells in the browser — so this is a coverage hole in the guard family, not a product defect.",
+        "repro": [
+          "Check out d923294 and run npm ci --no-audit --no-fund.",
+          "In test/web/pages.test.js, delete the line 'assert.equal(levels.filter((level) => level === 1).length, 1, `${where}: exactly one h1`);' from the test 'every route renders exactly one h1 that opens the hierarchy, in every state'.",
+          "Run node --test: 81 pass, 0 fail, exit 0 — including 'the production h1 assertion goes through H1_HOOK', which is still there and still passes.",
+          "Restore the file with git checkout -- test/web/pages.test.js"
+        ],
+        "suspected_cause": "The pinning test at test/web/pages.test.js:1608 anchors on the single literal 'the h1 carries the page-title' + ' hook' and asserts it is found exactly once. It has no second anchor for the h1-count assertion, so only that one line is protected.",
+        "reproducible": "always",
+        "introduced_by_pr": false,
+        "evidence": [
+          "qa-evidence/t19-unpinned-h1-count.txt"
+        ]
+      }
+    ]
   },
   "qa": {
     "verdict": "fail",
