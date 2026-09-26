@@ -247,6 +247,14 @@
       "attempt": 3,
       "at": "2026-09-25T22:02:31.721Z",
       "digest": "The plan stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "ci",
+      "error_signature": "68b1040e301f64ef",
+      "error_type": "unknown",
+      "attempt": 2,
+      "at": "2026-09-26T08:32:16.658Z",
+      "digest": "The ci stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [
