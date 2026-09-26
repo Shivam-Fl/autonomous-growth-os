@@ -18,7 +18,7 @@
   "touch_paths": [],
   "acceptance": [],
   "planned_route": [],
-  "on_complete": null,
+  "on_complete": "comment-only",
   "artifacts": {},
   "failure_history": [],
   "review_history": [],
@@ -30,6 +30,23 @@
       "at": "2026-09-26T16:38:52.130Z",
       "agent": "intake",
       "action": "-> planning"
+    },
+    {
+      "at": "2026-09-26T16:40:57.887Z",
+      "agent": "router",
+      "action": "route  (model, confidence 75)"
     }
-  ]
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "investigation",
+    "confidence": 75,
+    "matched_rule": null,
+    "gates": {
+      "plan_approval": false,
+      "merge_approval": false
+    },
+    "councils": {},
+    "decided_at": "2026-09-26T16:40:57.886Z"
+  }
 }
