@@ -17,7 +17,16 @@
     "run": "36210682516"
   },
   "halted": null,
-  "pending": null,
+  "pending": {
+    "stage": "implement",
+    "rework": null,
+    "requested_at_head": null,
+    "qa_run": null,
+    "from": null,
+    "pr": null,
+    "work_order_version": 1,
+    "at": "2026-09-26T02:34:56.136Z"
+  },
   "work_order": {
     "issue": 71,
     "version": 1,
@@ -274,7 +283,7 @@
     "decided_at": "2026-09-26T01:53:02.882Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan",
+  "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-09-26T02:16:38.739Z",
   "validated_ac_changes": [],
