@@ -71,6 +71,20 @@ function usdRepos(storedCurrency = 'USD') {
   return repos;
 }
 
+/** A seeded database with one pending approval in the queue. Nothing in the
+ * product writes approval.requested — grep finds exactly one hit, the read at
+ * src/web/pages.js:924 — so the card that .approval-actions and .approval-card
+ * describe is reached here through the repository layer. Before this, no test
+ * rendered an approval card at all, so both selectors were pinned against a
+ * page that had never shown one. */
+function pendingApprovalRepos(prefix) {
+  const repos = seededRepos(prefix);
+  repos.rawEvents.append(validatedEnvelope('tenant_demo', 'evt_pages_approval_1', 'approval.requested', {
+    name: 'Raise budget', status: 'pending', impact: 'high', downside: 'low', expires: '2026-10-25T08:00:00.000Z',
+  }));
+  return repos;
+}
+
 /** Every formatted amount on the first opportunity row, in render order, so
  * one render's money can be compared against another's directly instead of by
  * eye. The em-dash is a legitimate value here — that is the case a genuine
@@ -1396,30 +1410,127 @@ test('the narrow layout still carries the two declarations it depends on', () =>
 // Issue #67: the other half of the same constraint, pinned in the same
 // deliberate style and for the same reason — a stylesheet is not observable
 // from a rendered page, and the browser check that would catch this is not in
-// CI. `overflow-wrap: anywhere` on the three card lists is what keeps a long
+// CI. `overflow-wrap: anywhere` on the four card lists is what keeps a long
 // unbreakable name inside its own card instead of scrolling the page sideways.
 //
-// Written in the every-match form from the start, so it does not carry the
-// blind spot it is being added next to: every rule in the file is collected and
-// checked, which is what catches a second rule declaring overflow-wrap and
-// quietly overriding the first.
-test('the card lists still carry the wrap that keeps an unbreakable name inside its own card', () => {
+// #71 findings 2, 3 and 5. The pin this replaces asserted on a substring of
+// the rule's raw text, so a class renamed to .opportunity-roww satisfied it,
+// and counted every overflow-wrap rule in the file, so a .page-footer rule
+// that cannot override the card rule failed it. Three changes: exact compound
+// match instead of substring, comments stripped before parsing (a comment has
+// no braces, so prose naming a class was being swallowed into the selector),
+// and the "no later override" check scoped to rules that touch a card class
+// instead of counted across the file.
+//
+// #71 finding 2, other end: the class list is checked against the markup the
+// server actually renders. The stylesheet half of this test cannot tell a
+// selector that matches a rendered element from one that matches nothing, so
+// each class is also required in the HTML of the route that renders it.
+test('the card lists still carry the wrap that keeps an unbreakable name inside its own card', async () => {
+  const CARD_CLASSES = ['.experiment-card', '.opportunity-row', '.approval-card', '.learning-card'];
   const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  // Comments carry no braces, so a class named only in prose would otherwise be
+  // swallowed into the selector group and satisfy the assertion below.
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const rules = [...stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .map((match, index) => ({ selector: match[1].trim(), body: match[2], index }))
+    .filter((rule) => /overflow-wrap\s*:/.test(rule.body));
 
-  const wrapping = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-    .filter(([, , body]) => /overflow-wrap\s*:/.test(body));
-  assert.equal(wrapping.length, 1,
-    'exactly one rule in src/web/styles.css declares overflow-wrap, so a second one cannot override it');
+  const card = rules.find((rule) => rule.selector.split(',').some((part) => CARD_CLASSES.includes(part.trim())));
+  assert.ok(card, 'src/web/styles.css declares overflow-wrap on the card lists');
 
-  for (const cls of ['experiment-card', 'opportunity-row', 'approval-card']) {
-    assert.ok(wrapping.some(([, selector]) => selector.includes(`.${cls}`)),
-      `the overflow-wrap rule covers .${cls}, the card lists that render free-text names outside a .table-scroll region`);
-  }
+  // Exact compound match, not a substring: '.opportunity-roww' and '.opportunity-row-old'
+  // both contain '.opportunity-row', and a `*` descendant states nothing the bare
+  // class does not, because overflow-wrap is inherited.
+  assert.deepEqual(card.selector.split(',').map((part) => part.trim()).sort(), [...CARD_CLASSES].sort(),
+    `the wrap rule covers exactly these four classes as bare selectors — a renamed or dropped class matches nothing in the page: ${JSON.stringify(CARD_CLASSES)}`);
 
-  const [, , body] = wrapping[0];
-  const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+  const values = [...card.body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
   assert.deepEqual(values, ['anywhere'],
     'the wrap is anywhere and not break-word: break-word creates the break opportunity but leaves the intrinsic min-content width alone, so a grid track floored at min-content still sizes to the whole string');
+
+  // Scoped to the card classes, so a rule that cannot override them does not turn
+  // the suite red — appending `.page-footer { overflow-wrap: anywhere; }` must pass.
+  for (const later of rules.filter((rule) => rule.index > card.index)) {
+    const touched = later.selector.split(',').map((part) => part.trim()).filter((part) => CARD_CLASSES.includes(part));
+    assert.deepEqual(touched, [],
+      `a later rule re-declares overflow-wrap on ${touched.join(', ')}, which overrides the card rule it is meant to protect`);
+  }
+
+  // #71 finding 2, closed: a selector that matches nothing in a real page is the
+  // one mistake the stylesheet half cannot see. Each class is required in the HTML
+  // of the route that renders it, so renaming a class on the page fails here even
+  // though the stylesheet and CARD_CLASSES would both still say the old name.
+  const seeded = seededRepos('pages-card-wrap-');
+  const markup = {
+    '.experiment-card': await renderPage('/experiments', { repositories: seeded }),
+    '.opportunity-row': await renderPage('/opportunities', { repositories: seeded }),
+    '.learning-card': await renderPage('/opportunities', { repositories: seeded }),
+    '.approval-card': await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-card-wrap-approvals-') }),
+  };
+  for (const cls of CARD_CLASSES) {
+    // The markup carries the class name without the dot, and split on
+    // whitespace so a renamed class (learning-item, learning-cardw) is a
+    // different token rather than a substring of this one.
+    const tokens = new Set([...markup[cls].matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+    assert.ok(tokens.has(cls.slice(1)),
+      `the page still renders ${cls} as its own class, so the wrap rule's selector has something to match`);
+  }
+});
+
+// #71 finding 1: the wrap rule fixes the name but not the card. .approval-actions
+// was a nowrap flex row holding an <input> at its ~234px intrinsic width, so the
+// row floored the card at ~389px and .approval-card is a grid item, so the page
+// overflowed anyway — with a short name. overflow-wrap cannot reach either, so
+// the two declarations it takes are pinned here for the same reason as the ones
+// above, and the render proves both selectors have a card to match.
+test('the approval action row can shrink, and the selectors below have something to match', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+
+  const rows = [...css.matchAll(/\.approval-actions\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(rows.length > 0, 'src/web/styles.css defines a .approval-actions rule');
+  rows.forEach((body, i) => {
+    const values = [...body.matchAll(/flex-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['wrap'], `.approval-actions rule ${i + 1} must declare flex-wrap: wrap and nothing else, or the reason input and the two buttons cannot share a narrow card; it declared ${JSON.stringify(values)}`);
+  });
+
+  const inputs = [...css.matchAll(/\.approval-actions input\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(inputs.length > 0, 'src/web/styles.css styles the approval reason input');
+  inputs.forEach((body, i) => {
+    assert.match(body, /min-width\s*:\s*0\s*;/, `the reason input rule ${i + 1} declares min-width: 0, or the input's ~234px intrinsic width floors the card and the page overflows again`);
+  });
+
+  // The render is what makes the two pins facts about the page rather than
+  // about the file: until this, no test had ever rendered an approval card.
+  const html = await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-approval-actions-') });
+  assert.match(html, /<li class="approval-card">/, 'a pending approval renders the card the pins above are about');
+  const row = /<form class="approval-actions"[\s\S]*?<\/form>/.exec(html)?.[0];
+  assert.ok(row, 'and the action row inside it');
+  assert.equal((row.match(/<button /g) ?? []).length, 2, 'the row holds the Approve and Reject buttons the flex-wrap pin is about');
+  assert.match(row, /<input id="reason-/, 'and the reason input the min-width pin is about');
+});
+
+// #71 finding 6: the header shows tenants.list()[0].name, and src/api/routes.js
+// auto-creates an unknown tenant with name = the request's tenant_id, so that
+// name is the request's free text verbatim. .header-status is a flex row and the
+// span's automatic minimum floored the header at the whole token — 1495px of
+// scrollWidth at every width from 320 to 414. Not decoration, and the render
+// below is what makes the selector a fact about the page.
+test('the header wraps a tenant name as long as the id that created it', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const names = [...css.matchAll(/\.tenant-name\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(names.length > 0, 'src/web/styles.css defines a .tenant-name rule');
+  names.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['anywhere'], `.tenant-name rule ${i + 1} must declare overflow-wrap: anywhere and nothing else; it declared ${JSON.stringify(values)}`);
+  });
+
+  const long = `tenant_${'a'.repeat(130)}`;
+  const repos = freshRepos();
+  repos.tenants.create({ id: long, name: long, currency: 'INR' });
+  const html = await renderPage('/', { repositories: repos });
+  const shown = /data-testid="tenant-name">([^<]*)</.exec(html)?.[1];
+  assert.equal(shown, long, 'the header renders the whole tenant name; it wraps, it is not truncated');
 });
 
 // The other half of the same fix. Lifting the floor stops one wide table from
