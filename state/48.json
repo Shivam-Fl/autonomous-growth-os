@@ -360,7 +360,8 @@
         ],
         "suspected_cause": "The fix lifts the automatic minimum on #main's direct children only (#main > * { min-width: 0 }). The floor itself is unchanged one level down, on the nested grids: .experiment-list and .approval-list are display: grid (src/web/styles.css:346-353), so their items keep an automatic minimum of min-content, and a card whose widest child is an unbreakable string sizes the track. .opportunity-list is not a grid at all, so its overflow comes from an ordinary block child refusing to break. This is the limit the work order's own risks entry describes ('overflow-wrap was deliberately NOT added ... a future unbreakable string wider than its container would still overflow its box'); the change is not expected to have fixed it, and does not. Confirmed pre-existing by measurement, not inference: the same fixture on the base-commit server overflows too (597px), and the PR does not touch .experiment-list, .opportunity-list or any overflow-wrap declaration."
       }
-    ]
+    ],
+    "filed": 67
   },
   "qa": {
     "verdict": "pass",
