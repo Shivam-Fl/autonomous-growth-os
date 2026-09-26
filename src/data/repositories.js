@@ -720,6 +720,349 @@ function createEvaluationRepository(db) {
   };
 }
 
+// The safety slice (issue #20). Six repositories behind the same contract as
+// the thirteen above: every statement binds tenant_id, JSON-bearing rows go
+// through a private shape(), and a table's mutability is decided in db.js —
+// approvals and kill_switches are mutable working state, capabilities,
+// action_records and guardian_incidents are append-only on the verbs their
+// triggers name.
+
+// APPROVALS. Mutable working state, like opportunities: deciding an approval
+// rewrites its status in place, so the table carries no immutability trigger.
+// 'lapsed' is never STORED — it is derived from expires_at by
+// isPendingApproval in src/domain/approvals.js, so there is one predicate
+// rather than a status string two writers have to agree on.
+function createApprovalRepository(db) {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO approvals
+      (tenant_id, approval_id, action_class, action, resource, constraints, impact, downside,
+       evidence_refs, expires_at, status, reason, decided_by, decided_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+  );
+  const selectOne = db.prepare(
+    'SELECT * FROM approvals WHERE tenant_id = ? AND approval_id = ?',
+  );
+  const selectAll = db.prepare(
+    'SELECT * FROM approvals WHERE tenant_id = ? ORDER BY status, expires_at, approval_id',
+  );
+  const updateDecision = db.prepare(
+    'UPDATE approvals SET status = ?, reason = ?, decided_by = ?, decided_at = ? WHERE tenant_id = ? AND approval_id = ?',
+  );
+  const updateSeedReset = db.prepare(
+    "UPDATE approvals SET status = 'pending', expires_at = ?, reason = NULL, decided_by = NULL, decided_at = NULL WHERE tenant_id = ? AND approval_id = ?",
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    return {
+      ...row,
+      constraints: parseJson(row.constraints, {}),
+      evidence_refs: parseJson(row.evidence_refs, []),
+    };
+  }
+
+  return {
+    /** Idempotent by fixed id (apv_), like opportunities.create: a second
+     * write of the same fixture is a no-op and reports {created:false}. */
+    create({ tenant_id: tenantId, approval_id: approvalId, action_class: actionClass, action, resource, constraints, impact, downside, evidence_refs: evidenceRefs, expires_at: expiresAt, status = 'pending' }) {
+      const result = insert.run(
+        tenantId, approvalId, actionClass, action, resource, JSON.stringify(constraints ?? {}),
+        impact, downside, JSON.stringify(evidenceRefs ?? []), expiresAt, status, utcNow(),
+      );
+      return { created: result.changes > 0, ...this.get(tenantId, approvalId) };
+    },
+
+    get(tenantId, approvalId) {
+      return shape(selectOne.get(tenantId, approvalId));
+    },
+
+    /** Deterministic order (status, expires_at, approval_id) so the queue
+     * renders identically twice in a row. */
+    list(tenantId) {
+      return selectAll.all(tenantId).map(shape);
+    },
+
+    /** The ONE update that changes an approval's status. approve, reject and
+     * the seed's restore all route through here, so no second writer exists. */
+    decide(tenantId, approvalId, { status, reason = null, actor = null, decided_at: decidedAt = null }) {
+      updateDecision.run(status, reason, actor, decidedAt, tenantId, approvalId);
+      return this.get(tenantId, approvalId);
+    },
+
+    /** Put a seeded row back to 'pending' with a fresh stamp. The QA reset
+     * needs a pending row again and this is the only writer of that
+     * transition besides decide — it exists so a re-run of the same script is
+     * a re-approval rather than a dead end. */
+    resetToSeed(tenantId, approvalId, { expires_at: expiresAt }) {
+      updateSeedReset.run(expiresAt, tenantId, approvalId);
+      return this.get(tenantId, approvalId);
+    },
+  };
+}
+
+// CAPABILITIES. Append-only on both verbs, so the only write is this insert.
+// capability_id is generated per issuance, never fixed, which is why a
+// re-approval after a reset can issue a second capability for one nonce.
+function createCapabilityRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO capabilities (tenant_id, capability_id, envelope, issued_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+  );
+  const selectOne = db.prepare(
+    'SELECT tenant_id, capability_id, envelope, issued_at, expires_at FROM capabilities WHERE tenant_id = ? AND capability_id = ?',
+  );
+  const selectForTenant = db.prepare(
+    'SELECT tenant_id, capability_id, envelope, issued_at, expires_at FROM capabilities WHERE tenant_id = ? ORDER BY issued_at DESC, capability_id LIMIT ?',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    return { ...row, envelope: parseJson(row.envelope, {}) };
+  }
+
+  return {
+    create({ tenant_id: tenantId, capability_id: capabilityId, envelope, expires_at: expiresAt }) {
+      const result = insert.run(tenantId, capabilityId, JSON.stringify(envelope), utcNow(), expiresAt);
+      return { created: result.changes > 0, ...this.get(tenantId, capabilityId) };
+    },
+
+    get(tenantId, capabilityId) {
+      return shape(selectOne.get(tenantId, capabilityId));
+    },
+
+    listForTenant(tenantId, { limit = 200 } = {}) {
+      return selectForTenant.all(tenantId, limit).map(shape);
+    },
+  };
+}
+
+// ACTION_RECORDS. The receipts. UNIQUE (tenant_id, nonce) is what makes a
+// second delivery of one capability impossible, so appended:false IS the
+// duplicate signal and getByNonce is the dedupe read every caller shares.
+function createActionRecordRepository(db) {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO action_records
+      (tenant_id, receipt_id, approval_id, capability_id, nonce, action_class, action, resource,
+       requested, reported, reconciliation, drift, maturity_at_decision, band_at_decision, actor, executed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectOne = db.prepare(
+    'SELECT * FROM action_records WHERE tenant_id = ? AND receipt_id = ?',
+  );
+  const selectByNonce = db.prepare(
+    'SELECT * FROM action_records WHERE tenant_id = ? AND nonce = ?',
+  );
+  const selectForTenant = db.prepare(
+    'SELECT * FROM action_records WHERE tenant_id = ? ORDER BY executed_at, receipt_id LIMIT ?',
+  );
+  const selectByApproval = db.prepare(
+    'SELECT * FROM action_records WHERE tenant_id = ? AND approval_id = ? ORDER BY executed_at, receipt_id',
+  );
+  const deleteByNonces = db.prepare(
+    'DELETE FROM action_records WHERE tenant_id = ? AND nonce IN (SELECT value FROM json_each(?))',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    return {
+      ...row,
+      requested: parseJson(row.requested, {}),
+      reported: parseJson(row.reported, {}),
+    };
+  }
+
+  return {
+    /** Append-only: the UNIQUE nonce is what makes a second append impossible,
+     * so {appended:false} means the receipt already exists. */
+    append({ tenant_id: tenantId, receipt_id: receiptId, approval_id: approvalId = null, capability_id: capabilityId = null, nonce, action_class: actionClass, action, resource, requested, reported, reconciliation, drift, maturity_at_decision: maturityAtDecision = null, band_at_decision: bandAtDecision = null, actor, executed_at: executedAt }) {
+      const result = insert.run(
+        tenantId, receiptId, approvalId, capabilityId, nonce, actionClass, action, resource,
+        JSON.stringify(requested ?? {}), JSON.stringify(reported ?? {}), reconciliation, drift,
+        maturityAtDecision, bandAtDecision, actor, executedAt,
+      );
+      return { appended: result.changes > 0, receipt_id: receiptId };
+    },
+
+    /** THE dedupe read: the executor calls it before it touches a provider. */
+    getByNonce(tenantId, nonce) {
+      return shape(selectByNonce.get(tenantId, nonce));
+    },
+
+    get(tenantId, receiptId) {
+      return shape(selectOne.get(tenantId, receiptId));
+    },
+
+    /** The executed-receipts panel's source. Callers filter to rows carrying
+     * a non-null approval_id: a receipt minted by POST /v1/actions/execute has
+     * approval_id NULL, belongs to no queue row, and must not sit in a panel
+     * that counts decisions taken on this queue. */
+    listForTenant(tenantId, { limit = 200 } = {}) {
+      return selectForTenant.all(tenantId, limit).map(shape);
+    },
+
+    listByApproval(tenantId, approvalId) {
+      return selectByApproval.all(tenantId, approvalId).map(shape);
+    },
+
+    /** The one delete in this otherwise delete-free surface. Its only caller
+     * in the repository is scripts/seed.js --reset-approvals, which must clear
+     * a seeded receipt so the next run of the same QA script can approve the
+     * same approval again. The predicate is a nonce LIST built by calling
+     * kernel.decisionNonce over the seeded approval ids — never a prefix
+     * match, which could disagree with the value the approve path stores. */
+    purgeSeeded(tenantId, nonces) {
+      if (!Array.isArray(nonces) || nonces.length === 0) {
+        return 0;
+      }
+      return deleteByNonces.run(tenantId, JSON.stringify(nonces)).changes;
+    },
+  };
+}
+
+// KILL_SWITCHES. Mutable: a freeze is raised and cleared, not rewritten.
+// Every query binds tenant_id, so a 'global' freeze is a row OWNED BY the
+// tenant that raised it — never a '' sentinel row no reader would look for.
+function createKillSwitchRepository(db) {
+  const upsertFreeze = db.prepare(
+    `INSERT INTO kill_switches
+      (tenant_id, scope, scope_id, kind, active, frozen_at, frozen_by, reason, re_enabled_at, re_enabled_by)
+     VALUES (?, ?, ?, ?, 1, ?, ?, ?, NULL, NULL)
+     ON CONFLICT (tenant_id, scope, scope_id)
+     DO UPDATE SET kind = excluded.kind, active = 1, frozen_at = excluded.frozen_at,
+                   frozen_by = excluded.frozen_by, reason = excluded.reason,
+                   re_enabled_at = NULL, re_enabled_by = NULL`,
+  );
+  // An upsert rather than a bare UPDATE so a re-enable is idempotent and always
+  // leaves exactly one row for the scope: the count it reports is a count of
+  // rows now CLEARED, never of transitions, so a reset prints a number that is
+  // the same whether or not a freeze was live when it ran.
+  const upsertReEnable = db.prepare(
+    `INSERT INTO kill_switches
+      (tenant_id, scope, scope_id, kind, active, frozen_at, frozen_by, reason, re_enabled_at, re_enabled_by)
+     VALUES (?, ?, ?, NULL, 0, NULL, NULL, NULL, ?, ?)
+     ON CONFLICT (tenant_id, scope, scope_id)
+     DO UPDATE SET active = 0, re_enabled_at = excluded.re_enabled_at, re_enabled_by = excluded.re_enabled_by`,
+  );
+  const selectActive = db.prepare(
+    'SELECT tenant_id, scope, scope_id, kind, active, frozen_at, frozen_by, reason, re_enabled_at, re_enabled_by FROM kill_switches WHERE tenant_id = ? AND scope = ? AND scope_id = ? AND active = 1',
+  );
+  // EVERY active row for the tenant, whatever its scope. The scope filter is
+  // the load-bearing part: a UNION over only the global and tenant disjuncts
+  // silently drops a provider- or campaign-scoped row — and the demo's own
+  // freeze defaults to ('provider','meta_ads') — so the row the write side
+  // reports as frozen would be invisible to the banner, to GET /v1/guardian
+  // and to every other reader.
+  const selectActiveForTenant = db.prepare(
+    'SELECT tenant_id, scope, scope_id, kind, active, frozen_at, frozen_by, reason, re_enabled_at, re_enabled_by FROM kill_switches WHERE tenant_id = ? AND active = 1 ORDER BY scope, scope_id',
+  );
+  const selectForTenant = db.prepare(
+    'SELECT tenant_id, scope, scope_id, kind, active, frozen_at, frozen_by, reason, re_enabled_at, re_enabled_by FROM kill_switches WHERE tenant_id = ? ORDER BY scope, scope_id',
+  );
+
+  return {
+    /** ON CONFLICT, so a re-trigger raises the SAME row rather than appending a
+     * second active one that a later re-enable could not clear. */
+    upsertFreeze({ tenant_id: tenantId, scope, scope_id: scopeId, kind, reason, actor, frozen_at: frozenAt }) {
+      upsertFreeze.run(tenantId, scope, scopeId, kind, frozenAt, actor, reason);
+      return this.listForTenant(tenantId).find((row) => row.scope === scope && row.scope_id === scopeId) ?? null;
+    },
+
+    reEnable(tenantId, scope, scopeId, { actor, at }) {
+      upsertReEnable.run(tenantId, scope, scopeId, at ?? utcNow(), actor);
+      return this.listForTenant(tenantId).find((row) => row.scope === scope && row.scope_id === scopeId) ?? null;
+    },
+
+    /** The kernel's read-only port: one indexed row read, no list, no write. */
+    isActive(tenantId, scope, scopeId) {
+      return selectActive.get(tenantId, scope, scopeId) !== undefined;
+    },
+
+    activeFor(tenantId) {
+      return selectActiveForTenant.all(tenantId);
+    },
+
+    listForTenant(tenantId) {
+      return selectForTenant.all(tenantId);
+    },
+  };
+}
+
+// GUARDIAN_INCIDENTS. Append-only on both verbs: an incident is never
+// updated, because current state is the join with the kill switch and an
+// incident row that could be edited would be a second, worse source of truth.
+function createGuardianIncidentRepository(db) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO guardian_incidents (tenant_id, incident_id, kind, details, frozen_at, detected_by) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  // frozen_at then incident_id: two incidents can share a frozen_at (both
+  // frozen in the same millisecond), and the id is the documented tiebreak the
+  // banner's "newest incident" read relies on.
+  const selectForTenant = db.prepare(
+    'SELECT tenant_id, incident_id, kind, details, frozen_at, detected_by FROM guardian_incidents WHERE tenant_id = ? ORDER BY frozen_at DESC, incident_id DESC LIMIT ?',
+  );
+
+  function shape(row) {
+    return { ...row, details: parseJson(row.details, {}) };
+  }
+
+  return {
+    append({ tenant_id: tenantId, incident_id: incidentId, kind, details, frozen_at: frozenAt, detected_by: detectedBy }) {
+      const result = insert.run(tenantId, incidentId, kind, JSON.stringify(details ?? {}), frozenAt, detectedBy);
+      return { appended: result.changes > 0, id: incidentId };
+    },
+
+    listForTenant(tenantId, { limit = 20 } = {}) {
+      return selectForTenant.all(tenantId, limit).map(shape);
+    },
+  };
+}
+
+// TRUST_LEDGER. Mutable upsert, one row per class: that single row is what
+// makes the posture the page renders and the posture the gate enforces the
+// same claim rather than two derivations of different data.
+function createTrustLedgerRepository(db) {
+  const upsert = db.prepare(
+    `INSERT OR REPLACE INTO trust_ledger
+      (tenant_id, action_class, evaluated, correct, needless, downside_penalties, pinned, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectOne = db.prepare(
+    'SELECT tenant_id, action_class, evaluated, correct, needless, downside_penalties, pinned, updated_at FROM trust_ledger WHERE tenant_id = ? AND action_class = ?',
+  );
+  const selectForTenant = db.prepare(
+    'SELECT tenant_id, action_class, evaluated, correct, needless, downside_penalties, pinned, updated_at FROM trust_ledger WHERE tenant_id = ? ORDER BY action_class',
+  );
+
+  function shape(row) {
+    if (!row) {
+      return null;
+    }
+    return { ...row, pinned: row.pinned === 1 };
+  }
+
+  return {
+    upsert(tenantId, { action_class: actionClass, evaluated, correct, needless, downside_penalties: downsidePenalties = 0, pinned = false, updated_at: updatedAt }) {
+      upsert.run(tenantId, actionClass, evaluated, correct, needless, downsidePenalties, pinned ? 1 : 0, updatedAt ?? utcNow());
+      return this.get(tenantId, actionClass);
+    },
+
+    /** The ONE row a class's posture is derived from, or null when the class
+     * has no evidence at all — which trust.postureFor answers fail-closed. */
+    get(tenantId, actionClass) {
+      return shape(selectOne.get(tenantId, actionClass));
+    },
+
+    listForTenant(tenantId) {
+      return selectForTenant.all(tenantId).map(shape);
+    },
+  };
+}
+
 export function createRepositories(db) {
   return {
     tenants: createTenantRepository(db),
@@ -735,6 +1078,12 @@ export function createRepositories(db) {
     opportunities: createOpportunityRepository(db),
     experiments: createExperimentRepository(db),
     evaluations: createEvaluationRepository(db),
+    approvals: createApprovalRepository(db),
+    capabilities: createCapabilityRepository(db),
+    actionRecords: createActionRecordRepository(db),
+    killSwitches: createKillSwitchRepository(db),
+    guardianIncidents: createGuardianIncidentRepository(db),
+    trustLedger: createTrustLedgerRepository(db),
   };
 }
 

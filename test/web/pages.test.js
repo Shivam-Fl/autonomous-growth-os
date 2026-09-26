@@ -22,6 +22,20 @@ const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals']
 // plain text.
 const H1_HOOK = /<h1[^>]*\bdata-testid="page-title"[^>]*>[^<]*<\/h1>/;
 
+// The skip link's target, as a heading-hierarchy matcher. Hoisted beside
+// H1_HOOK for the same reason and with the same rule: the id is load-bearing,
+// because the assertion below is only about the landmark the skip link points
+// at, and issue #46 relaxed it past the requirement #52 relied on. Issue #61
+// restores it and pins both the acceptances and the rejections, so a second
+// relaxation cannot pass the 25 shells for the wrong reason again.
+//
+// The attribute is asked for with \s, not \b. \b asserts a word boundary and
+// '-' is not a word character, so \bid="main" also matched the tail of
+// data-id="main" — a landmark the skip link does not target, on a page whose
+// href="#main" resolved to nothing, with the whole suite green. Every matcher
+// in this file's guard family asks for its attribute the same way.
+const mainOf = (html) => /<main\b[^>]*\sid="main"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
+
 function freshRepos() {
   const dir = mkdtempSync(join(tmpdir(), 'pages-'));
   const db = openDatabase(join(dir, 'app.db'));
@@ -68,6 +82,20 @@ function usdRepos(storedCurrency = 'USD') {
       value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
     },
   });
+  return repos;
+}
+
+/** A seeded database with one pending approval in the queue. Nothing in the
+ * product writes approval.requested — grep finds exactly one hit, the read at
+ * src/web/pages.js:924 — so the card that .approval-actions and .approval-card
+ * describe is reached here through the repository layer. Before this, no test
+ * rendered an approval card at all, so both selectors were pinned against a
+ * page that had never shown one. */
+function pendingApprovalRepos(prefix) {
+  const repos = seededRepos(prefix);
+  repos.rawEvents.append(validatedEnvelope('tenant_demo', 'evt_pages_approval_1', 'approval.requested', {
+    name: 'Raise budget', status: 'pending', impact: 'high', downside: 'low', expires: '2026-10-25T08:00:00.000Z',
+  }));
   return repos;
 }
 
@@ -167,7 +195,6 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
   };
   // Headings in document order, as levels: h1 .. h6.
   const levelsOf = (html) => [...html.matchAll(/<h([1-6])\b[^>]*>/g)].map(([, level]) => Number(level));
-  const mainOf = (html) => /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
   const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
 
   for (const route of ROUTES) {
@@ -197,18 +224,30 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
 // carries tabindex="-1" — programmatically focusable, still out of the tab
 // sequence — or activating the skip link scrolls to #main and leaves focus on
 // <body>, putting the keyboard user back in the header it promises to skip.
+//
+// Each attribute is asked for with \s rather than \b, and the reason is the
+// same as in mainOf above: '-' is a non-word character, so \bid="main" also
+// matched data-id="main", \btabindex="-1" matched data-tabindex="-1", and the
+// class and href clauses matched data-class and data-href. Every capture here
+// begins immediately after the tag name, so a real attribute always has
+// whitespace before it and a data-* spelling never does.
 const skipLinkFocusesMain = (html) => {
-  const mainAttrs = /<main\b([^>]*)>/.exec(html)?.[1] ?? '';
+  const main = /<main\b([^>]*)>/.exec(html);
+  const mainAttrs = main?.[1] ?? '';
   // Find the link by its target rather than by position, so the brand and the
   // nav are not depended on to sort before it.
-  const skipAttrs = [...html.matchAll(/<a\b([^>]*)>/g)]
-    .map(([, attrs]) => attrs)
-    .find((attrs) => /\bhref="#main"/.test(attrs));
+  const skip = [...html.matchAll(/<a\b([^>]*)>/g)]
+    .find(([, attrs]) => /\shref="#main"/.test(attrs));
   return Boolean(
-    /\bid="main"/.test(mainAttrs) &&
-    /\btabindex="-1"/.test(mainAttrs) &&
-    skipAttrs !== undefined &&
-    /\bclass="[^"]*\bskip-link\b[^"]*"/.test(skipAttrs)
+    /\sid="main"/.test(mainAttrs) &&
+    /\stabindex="-1"/.test(mainAttrs) &&
+    skip !== undefined &&
+    /\sclass="[^"]*\bskip-link\b[^"]*"/.test(skip[1]) &&
+    // Every clause above is asked of a tag in isolation, so a link sitting
+    // BELOW </main> satisfies all of them and the bypass is destroyed. The
+    // bypass is document order, so compare the two offsets. Last in the chain,
+    // so main.index is never read on a null match.
+    skip.index < main.index
   );
 };
 
@@ -235,6 +274,13 @@ test('the skip link targets a focusable main landmark on every route and state',
     skipLinkFocusesMain('<a class="skip-link" href="#main" lang="en">Skip to content</a><main id="main" lang="en" tabindex="-1"></main>'),
     'a third attribute on either tag is tolerated'
   );
+  // The order pin below is deliberately on the link-before-main relation and
+  // not on the link being the document's first element, so the brand and the
+  // nav may still sort ahead of it.
+  assert.ok(
+    skipLinkFocusesMain('<header>brand nav</header><a class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'brand and nav may sort before the skip link'
+  );
 
   // What the lock protects, one failure mode at a time.
   assert.ok(
@@ -249,6 +295,46 @@ test('the skip link targets a focusable main landmark on every route and state',
     !skipLinkFocusesMain('<a href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
     'a link to #main that is not the skip link is not the bypass'
   );
+  // The defect issue #61 exists for: every clause above holds for a link that
+  // sits BELOW </main>, because each one is asked of the tag in isolation. The
+  // bypass is the document order, and nothing above compares the two offsets.
+  assert.ok(
+    !skipLinkFocusesMain('<main id="main" tabindex="-1"></main><a class="skip-link" href="#main">Skip to content</a>'),
+    'a skip link after </main> is not a bypass, however well-formed it is'
+  );
+
+  // Issue #61 BUG-2: a required attribute that appears only inside a data-*
+  // attribute is not the attribute. \b asserts a word boundary and '-' is not a
+  // word character, so each of these used to satisfy the guard that was written
+  // to require it. A <main data-id="main"> is not the skip link's target — the
+  // served page had getElementById('main') === null and Enter on the link left
+  // focus on the link itself — while the suite stayed green.
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main data-id="main" tabindex="-1"></main>'),
+    'data-id="main" is not id="main", so the landmark is not the skip link target'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main id="main" data-tabindex="-1"></main>'),
+    'data-tabindex="-1" is not tabindex="-1", so the landmark is not focusable'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a data-class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'data-class="skip-link" is not the styling class, so this is not the bypass'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" data-href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'data-href="#main" is not href="#main", so the link targets nothing'
+  );
+
+  // The order clause reads main.index, so a document with no <main> or no <a>
+  // has to answer false rather than throw.
+  assert.equal(
+    skipLinkFocusesMain('<a class="skip-link" href="#main">S</a>'), false, 'no main landmark is not a bypass'
+  );
+  assert.equal(
+    skipLinkFocusesMain('<main id="main" tabindex="-1"></main>'), false, 'no link at all is not a bypass'
+  );
+  assert.equal(skipLinkFocusesMain(''), false, 'an empty document is not a bypass');
 });
 
 // The other end of the same link: the one line that stops the skip link's focus
@@ -260,6 +346,54 @@ test('the #main focus suppression still carries the declaration the skip target 
   const rule = /#main:focus\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule, 'src/web/styles.css defines a #main:focus rule');
   assert.match(rule[1], /outline:\s*none\s*;/, 'the focused landmark paints no ring');
+});
+
+// The other end of that same rule, in the mode that strips author colours:
+// Chromium honours `outline: none` under forced-colors and substitutes no
+// system colour of its own, while every other focusable element keeps its
+// ring. Without the carve-out, <main> would be the one focusable thing on the
+// page with no indicator, at the exact moment a forced-colors user needs to
+// know the bypass ran. The default-mode suppression above is not the thing
+// under test; this asserts only that the mode gets one back.
+test('the #main focus suppression is restored inside forced-colors so the landmark is not the one focusable thing with no indicator', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const carveOut = /@media\s*\(forced-colors:\s*active\)\s*\{[^@]*?#main:focus\s*\{([^}]*)\}/.exec(css);
+  assert.ok(carveOut, 'src/web/styles.css restores the focus ring inside @media (forced-colors: active)');
+  assert.match(
+    carveOut[1], /outline:\s*2px\s+solid\s+CanvasText\s*;/,
+    'the carve-out paints a system colour, so it survives the mode'
+  );
+
+  // Source order is the whole mechanism, and nothing else in the suite names
+  // it: both selectors are 1,1,0, so the carve-out wins ONLY by coming after
+  // the bare rule. Moved above it, the landmark goes back to painting no
+  // indicator. The test above goes red under that reordering, but at a
+  // property it is not about, so the ordering is named here directly.
+  const bareRuleAt = css.search(/#main:focus\s*\{/);
+  assert.ok(bareRuleAt !== -1, 'src/web/styles.css defines the bare #main:focus rule');
+  assert.ok(
+    carveOut.index > bareRuleAt,
+    'the forced-colors carve-out is declared AFTER the bare #main:focus rule, at equal specificity'
+  );
+});
+
+// mainOf decides which landmark the heading-hierarchy assertion above reads,
+// so its id requirement is load-bearing: relaxed, the assertion would be
+// satisfied by some other <main> and the 25 shells would still pass. Issue
+// #61 restores it and pins both the acceptances and the rejections, so a
+// second relaxation cannot go unnoticed again.
+test('the main matcher still requires id="main" on the landmark it captures', () => {
+  assert.equal(mainOf('<main id="main"><h1>Command dashboard</h1></main>'), '<h1>Command dashboard</h1>', 'the shipped markup matches');
+  assert.equal(mainOf('<main id="main" tabindex="-1"><h1>X</h1></main>'), '<h1>X</h1>', 'the tabindex #52 added still matches');
+  assert.equal(mainOf('<main tabindex="-1" id="main"><h1>X</h1></main>'), '<h1>X</h1>', 'attribute order is not pinned');
+  assert.equal(mainOf('<main tabindex="-1" id="main" lang="en"><h1>X</h1></main>'), '<h1>X</h1>', 'a fourth attribute is tolerated');
+
+  assert.equal(mainOf('<main><h1>X</h1></main>'), '', 'a main with no id is not the skip link target');
+  assert.equal(mainOf('<main id="other"><h1>X</h1></main>'), '', 'another id is not the skip link target');
+  assert.equal(
+    mainOf('<main data-id="main"><h1>X</h1></main>'), '',
+    'data-id="main" is not id="main" (issue #61: \b matched the tail of the data-* spelling)'
+  );
 });
 
 // The matcher above was relaxed on purpose (issue #46), so it is pinned here
@@ -930,6 +1064,61 @@ function draftHarness({ fields = {}, stored = {} } = {}) {
   return { fields: made, listeners, storage };
 }
 
+// A minimal DOM for the error shell, for the claim issue #61 exists to lock:
+// nothing holds keyboard focus before the user has pressed a key (AC-5). It
+// records focus() calls rather than faking document.activeElement, because the
+// property under test is the side effect on the document, not a value read
+// back out of a stub. The panel, its own <h2> and the retry inside it are the
+// whole shell; the retry is also what the ?state= strip is driven from.
+function errorShellHarness({ panel = true, heading = 'Replay evaluation failed for scenario replay-tracking-outage', retryHref = '/journal', href = 'http://localhost:3000/journal?state=error' } = {}) {
+  const focused = [];
+  const navigated = [];
+  const listeners = new Map();
+  const liveRegion = { textContent: '' };
+  const retry = {
+    dataset: { action: 'retry', retryHref },
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    focus() {
+      focused.push('BUTTON[data-action=retry]');
+    },
+  };
+  const errorPanel = {
+    querySelector: (selector) => (selector === 'h2' && heading ? { textContent: heading } : null),
+  };
+  globalThis.document = {
+    title: 'Decision journal · Autonomous Growth OS',
+    body: { dataset: { state: 'error' } },
+    getElementById: (id) => (id === 'live-region' ? liveRegion : null),
+    querySelectorAll: (selector) => (selector === '[data-action="retry"]' && panel ? [retry] : []),
+    // Agnostic about how the panel is addressed, and that is the whole point.
+    // A real querySelector searches the whole tree, so the descendant selector
+    // '.panel-error [data-action="retry"]' resolves to the retry INSIDE the
+    // panel. A stub that answers only the exact string '.panel-error' returns
+    // null for that selector — and the pre-fix client.js, which asked only that
+    // descendant question, then records no focus call at all, so the test below
+    // passes green against the very defect it was written for.
+    querySelector: (selector) => {
+      if (!panel || !selector.includes('.panel-error')) {
+        return null;
+      }
+      return selector.includes('[data-action="retry"]') ? retry : errorPanel;
+    },
+    addEventListener: () => {},
+  };
+  globalThis.window = {
+    localStorage: { getItem: () => null, setItem: () => {} },
+    location: { origin: 'http://localhost:3000', href, replace: (to) => navigated.push(to) },
+  };
+  return {
+    focused,
+    liveRegion,
+    navigated,
+    click: () => listeners.get('click')(),
+  };
+}
+
 let clientLoad = 0;
 async function loadClient() {
   clientLoad += 1;
@@ -964,6 +1153,93 @@ test('typed composer fields are saved to localStorage and restored on the next l
     assert.equal(restored.opp_exp_draft_title, 'Exact-intent search deserves more budget');
     assert.equal(restored.opp_exp_draft_thesis, 'Qualified CPL should fall because intent is narrower.');
     assert.equal(restored.opp_exp_draft_cap, '500000000');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// Issue #61 BUG-1, the runtime half of a guarantee the rest of this file only
+// checks as document order. client.js used to focus the failing panel's retry
+// action on load, so on every error shell document.activeElement was already
+// BUTTON[data-action=retry] before the user pressed anything and the first Tab
+// continued from there — the skip link was never the first stop. Nothing else
+// here could see it: every other guard in this file reads an HTML string, and
+// this is a script side effect. Asserted on the error shell AND on a shell
+// with no panel at all, so the claim is "nothing takes focus", not "the panel
+// takes less of it".
+test('a fresh load focuses nothing on the error shell, so the first Tab reaches the skip link', async () => {
+  try {
+    const errorShell = errorShellHarness();
+    await loadClient();
+    assert.deepEqual(errorShell.focused, [], 'no focus is taken before the user presses a key');
+
+    const noPanel = errorShellHarness({ panel: false });
+    await loadClient();
+    assert.deepEqual(noPanel.focused, [], 'and a shell with no error panel takes no focus either');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// What the load-time focus was standing in for. On a region-level failure
+// (?meta_error=quota) body data-state is still 'ideal', so the page-state
+// announcement names nothing that failed and the failure was announced
+// nowhere. Locked as a contract of its own: without it, deleting the focus
+// would have left a failed page that says nothing. Both halves — what failed
+// and what to do about it — and the copy is the panel's own <h2>, which
+// docs/ui.md already requires the panel to state, so it cannot drift.
+test('an error panel is announced through the live region, by name and with a next action', async () => {
+  try {
+    const errorShell = errorShellHarness();
+    await loadClient();
+    assert.match(
+      errorShell.liveRegion.textContent,
+      /Replay evaluation failed for scenario replay-tracking-outage/,
+      'the live region names the failure the panel itself names'
+    );
+    assert.match(
+      errorShell.liveRegion.textContent,
+      /Use Retry to try again\./,
+      'and points at the Retry action'
+    );
+
+    // The defensive half of the new branch: a panel that ever stops rendering
+    // an <h2> degrades to a generic sentence rather than throwing on load.
+    const headingless = errorShellHarness({ heading: null });
+    await loadClient();
+    assert.equal(
+      headingless.liveRegion.textContent,
+      'This page failed to load Use Retry to try again.',
+      'a panel with no heading still announces, and does not throw'
+    );
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// The behaviour the autofocus displaced, minus the focus steal: the retry is
+// still wired, still announces, and still reloads the route with the ?state=
+// preview override stripped so the user lands on the real page. Both sources of
+// the target are exercised, because the button carries data-retry-href and a
+// shell that does not falls back to the current location.
+test('the wired retry still announces and still reloads the route with the preview override stripped', async () => {
+  try {
+    const fromHref = errorShellHarness();
+    await loadClient();
+    fromHref.click();
+    assert.deepEqual(fromHref.navigated, ['/journal']);
+    assert.equal(fromHref.liveRegion.textContent, 'Retrying…');
+
+    const fromLocation = errorShellHarness({ retryHref: '' });
+    await loadClient();
+    fromLocation.click();
+    assert.deepEqual(
+      fromLocation.navigated, ['/journal'],
+      'with no data-retry-href the current location is used and ?state= is stripped'
+    );
   } finally {
     delete globalThis.document;
     delete globalThis.window;
@@ -1426,30 +1702,164 @@ test('the narrow layout still carries the two declarations it depends on', () =>
 // Issue #67: the other half of the same constraint, pinned in the same
 // deliberate style and for the same reason — a stylesheet is not observable
 // from a rendered page, and the browser check that would catch this is not in
-// CI. `overflow-wrap: anywhere` on the three card lists is what keeps a long
+// CI. `overflow-wrap: anywhere` on the four card lists is what keeps a long
 // unbreakable name inside its own card instead of scrolling the page sideways.
 //
-// Written in the every-match form from the start, so it does not carry the
-// blind spot it is being added next to: every rule in the file is collected and
-// checked, which is what catches a second rule declaring overflow-wrap and
-// quietly overriding the first.
-test('the card lists still carry the wrap that keeps an unbreakable name inside its own card', () => {
+// #71 findings 2, 3 and 5. The pin this replaces asserted on a substring of
+// the rule's raw text, so a class renamed to .opportunity-roww satisfied it,
+// and counted every overflow-wrap rule in the file, so a .page-footer rule
+// that cannot override the card rule failed it. Three changes: exact compound
+// match instead of substring, comments stripped before parsing (a comment has
+// no braces, so prose naming a class was being swallowed into the selector),
+// and the "no later override" check scoped to rules that touch a card class
+// instead of counted across the file.
+//
+// #71 finding 2, other end: the class list is checked against the markup the
+// server actually renders. The stylesheet half of this test cannot tell a
+// selector that matches a rendered element from one that matches nothing, so
+// each class is also required in the HTML of the route that renders it.
+test('the card lists still carry the wrap that keeps an unbreakable name inside its own card', async () => {
+  const CARD_CLASSES = ['.experiment-card', '.opportunity-row', '.approval-card', '.learning-card'];
   const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  // Comments carry no braces, so a class named only in prose would otherwise be
+  // swallowed into the selector group and satisfy the assertion below.
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const rules = [...stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .map((match, index) => ({ selector: match[1].trim(), body: match[2], index }))
+    .filter((rule) => /overflow-wrap\s*:/.test(rule.body));
 
-  const wrapping = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-    .filter(([, , body]) => /overflow-wrap\s*:/.test(body));
-  assert.equal(wrapping.length, 1,
-    'exactly one rule in src/web/styles.css declares overflow-wrap, so a second one cannot override it');
+  const card = rules.find((rule) => rule.selector.split(',').some((part) => CARD_CLASSES.includes(part.trim())));
+  assert.ok(card, 'src/web/styles.css declares overflow-wrap on the card lists');
 
-  for (const cls of ['experiment-card', 'opportunity-row', 'approval-card']) {
-    assert.ok(wrapping.some(([, selector]) => selector.includes(`.${cls}`)),
-      `the overflow-wrap rule covers .${cls}, the card lists that render free-text names outside a .table-scroll region`);
-  }
+  // Exact compound match, not a substring: '.opportunity-roww' and '.opportunity-row-old'
+  // both contain '.opportunity-row', and a `*` descendant states nothing the bare
+  // class does not, because overflow-wrap is inherited.
+  assert.deepEqual(card.selector.split(',').map((part) => part.trim()).sort(), [...CARD_CLASSES].sort(),
+    `the wrap rule covers exactly these four classes as bare selectors — a renamed or dropped class matches nothing in the page: ${JSON.stringify(CARD_CLASSES)}`);
 
-  const [, , body] = wrapping[0];
-  const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+  const values = [...card.body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
   assert.deepEqual(values, ['anywhere'],
     'the wrap is anywhere and not break-word: break-word creates the break opportunity but leaves the intrinsic min-content width alone, so a grid track floored at min-content still sizes to the whole string');
+
+  // Scoped to the card classes, so a rule that cannot override them does not turn
+  // the suite red — appending `.page-footer { overflow-wrap: anywhere; }` must pass.
+  for (const later of rules.filter((rule) => rule.index > card.index)) {
+    const touched = later.selector.split(',').map((part) => part.trim()).filter((part) => CARD_CLASSES.includes(part));
+    assert.deepEqual(touched, [],
+      `a later rule re-declares overflow-wrap on ${touched.join(', ')}, which overrides the card rule it is meant to protect`);
+  }
+
+  // #71 finding 2, closed: a selector that matches nothing in a real page is the
+  // one mistake the stylesheet half cannot see. Each class is required in the HTML
+  // of the route that renders it, so renaming a class on the page fails here even
+  // though the stylesheet and CARD_CLASSES would both still say the old name.
+  const seeded = seededRepos('pages-card-wrap-');
+  const markup = {
+    '.experiment-card': await renderPage('/experiments', { repositories: seeded }),
+    '.opportunity-row': await renderPage('/opportunities', { repositories: seeded }),
+    '.learning-card': await renderPage('/opportunities', { repositories: seeded }),
+    '.approval-card': await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-card-wrap-approvals-') }),
+  };
+  for (const cls of CARD_CLASSES) {
+    // The markup carries the class name without the dot, and split on
+    // whitespace so a renamed class (learning-item, learning-cardw) is a
+    // different token rather than a substring of this one.
+    const tokens = new Set([...markup[cls].matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+    assert.ok(tokens.has(cls.slice(1)),
+      `the page still renders ${cls} as its own class, so the wrap rule's selector has something to match`);
+  }
+});
+
+// #71 finding 1: the wrap rule fixes the name but not the card. .approval-actions
+// was a nowrap flex row holding an <input> at its ~234px intrinsic width, so the
+// row floored the card at ~389px and .approval-card is a grid item, so the page
+// overflowed anyway — with a short name. overflow-wrap cannot reach either, so
+// the two declarations it takes are pinned here for the same reason as the ones
+// above, and the render proves both selectors have a card to match.
+//
+// #71 BUG-1: the first version of this pin required min-width: 0, which is the
+// declaration that broke the field. flex: 1 is basis 0%, so with the automatic
+// minimum removed the input is the row's only shrinkable item and took the whole
+// deficit: 59px at a 414px viewport, six characters, against 232px on the base
+// commit. The pin below states the property that is actually wanted — a readable
+// floor — rather than the one that happened to fix the overflow.
+test('the approval action row can shrink, and the selectors below have something to match', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+
+  const rows = [...css.matchAll(/\.approval-actions\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(rows.length > 0, 'src/web/styles.css defines a .approval-actions rule');
+  rows.forEach((body, i) => {
+    const values = [...body.matchAll(/flex-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['wrap'], `.approval-actions rule ${i + 1} must declare flex-wrap: wrap and nothing else, or the reason input and the two buttons cannot share a narrow card; it declared ${JSON.stringify(values)}`);
+  });
+
+  const inputs = [...css.matchAll(/\.approval-actions input\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(inputs.length > 0, 'src/web/styles.css styles the approval reason input');
+  inputs.forEach((body, i) => {
+    const widths = [...body.matchAll(/min-width\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(widths.length, 1, `the reason input rule ${i + 1} declares exactly one min-width, or which one wins is a matter of order; it declared ${JSON.stringify(widths)}`);
+    const floor = /^(\d+(?:\.\d+)?)(ch|rem|px)$/.exec(widths[0]);
+    assert.ok(floor, `the reason input rule ${i + 1} floors the field at a readable width in ch, rem or px, not at a keyword or a percentage it cannot be measured against; it declared ${JSON.stringify(widths[0])}`);
+    assert.ok(Number(floor[1]) >= 12, `the reason input rule ${i + 1} floors the field at 12 characters or more, or it collapses to six characters of what a human is typing: at a 414px viewport min-width: 0 measured 59px against this rule's 16ch; it declared ${JSON.stringify(widths[0])}`);
+  });
+
+  // The render is what makes the two pins facts about the page rather than
+  // about the file: until this, no test had ever rendered an approval card.
+  const html = await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-approval-actions-') });
+  assert.match(html, /<li class="approval-card">/, 'a pending approval renders the card the pins above are about');
+  const row = /<form class="approval-actions"[\s\S]*?<\/form>/.exec(html)?.[0];
+  assert.ok(row, 'and the action row inside it');
+  assert.equal((row.match(/<button /g) ?? []).length, 2, 'the row holds the Approve and Reject buttons the flex-wrap pin is about');
+  assert.match(row, /<input id="reason-/, 'and the reason input the min-width pin is about');
+});
+
+// #71 BUG-2: the same free-text class of defect on a fifth surface. The wrap
+// rule is scoped to four server-rendered card lists, and the journal decision
+// drawer renders the same stored free text — evidence_refs, memory_refs,
+// policy_decision_id, worst_reasonable_case — by a different route, client.js
+// filling #journal-drawer-body from GET /v1/decisions/:id. Nothing rendered it
+// in any test, so nothing measured it: with 120-character unbreakable values
+// the body laid out 1229px inside 271px at a 320px viewport, and the page only
+// stayed the right width because #journal-drawer is position: fixed and so is
+// left out of document scroll width. The text was reachable by scrolling the
+// drawer sideways, which its overflow-y: auto makes overflow-x: auto.
+//
+// Unlike the card rule this one cannot be cross-checked against rendered
+// markup: the drawer body is empty in the server's HTML by design, so there is
+// no render in which the selector is known to match. That gap is the reason
+// the pin is a declaration pin and is worth stating rather than hiding.
+test('the journal decision drawer wraps the stored free text it is filled with', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const bodies = [...css.matchAll(/\.journal-drawer-body\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(bodies.length > 0, 'src/web/styles.css defines a .journal-drawer-body rule');
+  bodies.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['anywhere'],
+      `.journal-drawer-body rule ${i + 1} declares overflow-wrap: anywhere and nothing else, or a decision's stored refs scroll the drawer sideways instead of wrapping inside it: with 120-character unbreakable values the body measured 1229px of scrollWidth against 271px of clientWidth at a 320px viewport; it declared ${JSON.stringify(values)}`);
+  });
+});
+
+// #71 finding 6: the header shows tenants.list()[0].name, and src/api/routes.js
+// auto-creates an unknown tenant with name = the request's tenant_id, so that
+// name is the request's free text verbatim. .header-status is a flex row and the
+// span's automatic minimum floored the header at the whole token — 1495px of
+// scrollWidth at every width from 320 to 414. Not decoration, and the render
+// below is what makes the selector a fact about the page.
+test('the header wraps a tenant name as long as the id that created it', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const names = [...css.matchAll(/\.tenant-name\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(names.length > 0, 'src/web/styles.css defines a .tenant-name rule');
+  names.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['anywhere'], `.tenant-name rule ${i + 1} must declare overflow-wrap: anywhere and nothing else; it declared ${JSON.stringify(values)}`);
+  });
+
+  const long = `tenant_${'a'.repeat(130)}`;
+  const repos = freshRepos();
+  repos.tenants.create({ id: long, name: long, currency: 'INR' });
+  const html = await renderPage('/', { repositories: repos });
+  const shown = /data-testid="tenant-name">([^<]*)</.exec(html)?.[1];
+  assert.equal(shown, long, 'the header renders the whole tenant name; it wraps, it is not truncated');
 });
 
 // The other half of the same fix. Lifting the floor stops one wide table from
