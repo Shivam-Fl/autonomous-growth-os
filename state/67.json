@@ -178,7 +178,11 @@
     ],
     "debate_summary": "v1 of this plan was rejected with one objection, and this is v2 answering it. The reviewer found that qa_script step 7 stated two opposite expectations for the same measurement in consecutive sentences: 'Every one of those should now read 278>278' contradicted both the sentence before it and AC-2, and the reviewer measured the correct post-change state to be 755>278 and 494/519/363/620/450>278. The blanket-rule defect the sentence was describing is the failure, not the target.\n\nWhat changed: the third sentence of qa step 7 now reads that a reading of 278>278 on any of those regions is the failure to catch, with the reason it still has to be checked deliberately (it leaves AC-1 green). Nothing else in that step changed, and AC-2 - which was already consistent with the measured truth - now names 278>278 explicitly as the failure as well, so the two agree in both directions.\n\nWhile re-measuring the suite on this tree I found two more places where the work order's own numbers contradicted each other, of the same kind the reviewer caught: qa step 1 expected 297 pass across `node --test` while AC-4 expected 62 pass in test/web/pages.test.js, but the plan adds one test and both files were measured before the change at 297 and 61 - so the post-change figures are 298 and 62, and 297 was wrong. qa step 5 listed six pre-change overflow numbers 'across the same nine' combinations, which cannot be read as a mapping. Both are corrected here, and the correction is stated in approach and in assumptions so no downstream stage has to reconcile them. I have left the approach, the files, the tests and the other six acceptance criteria exactly as v1 had them, since the reviewer raised no objection to any of them."
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/web/styles.css",
+    "test/web/pages.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
