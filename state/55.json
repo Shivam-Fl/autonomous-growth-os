@@ -1207,8 +1207,8 @@
     ]
   },
   "qa": {
-    "verdict": "fail",
-    "introduced_bugs": 1,
+    "verdict": "pass",
+    "introduced_bugs": 0,
     "ac_ids": [
       "AC-1",
       "AC-2",
@@ -1233,19 +1233,15 @@
       "AC-21",
       "AC-22",
       "AC-23",
-      "AC-24"
+      "AC-24",
+      "AC-25"
     ],
-    "sha": "1a3741e494a44097c7cd6cdd93488de32b6b5532",
-    "run_id": "36257676967",
-    "work_order_version": 5,
-    "at": "2026-09-26T17:29:49.805Z"
+    "sha": "96c51343d62f80b83e699f3611ffee9311f5b937",
+    "run_id": "36262062936",
+    "work_order_version": 6,
+    "at": "2026-09-26T18:35:09.533Z"
   },
-  "qa_open_bugs": [
-    {
-      "id": "BUG-13",
-      "title": "Half the shipped-stylesheet probe can be deleted for free: no assertion requires probeStylesheet to report a root-font-size override"
-    }
-  ],
+  "qa_open_bugs": [],
   "failure_packet": {
     "issue": 55,
     "pr": 59,
