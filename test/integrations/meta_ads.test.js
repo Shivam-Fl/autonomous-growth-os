@@ -10,16 +10,18 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import {
+  ACTION_WRITES,
   GRAPH_API_VERSION,
   META_ERROR_CODES,
   READ_METHODS,
+  WRITE_METHODS,
   sortById,
   validateAd,
   validateAdSet,
   validateCampaign,
   validateInsight,
 } from '../../src/integrations/meta_ads/index.js';
-import { FIXTURE_SYNCED_AT, FakeMetaAdsProvider, implementsReadInterface } from '../../src/integrations/meta_ads/fake.js';
+import { FIXTURE_SYNCED_AT, FakeMetaAdsProvider, implementsReadInterface, implementsWriteInterface } from '../../src/integrations/meta_ads/fake.js';
 import { LiveMetaAdsProvider } from '../../src/integrations/meta_ads/live.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -393,4 +395,156 @@ test('row validators reject non-objects and wrong types without casting', () => 
   assert.equal(validateAd({ id: 'd1', ad_set_id: 'a1', name: 'n', status: 'ACTIVE' }).ok, true);
   assert.equal(validateInsight({ id: 'i1', campaign_id: 'c1', spend_micros: 4_000_000_000, impressions: 90_000, clicks: 1_200 }).ok, true);
   assert.equal(validateInsight({ id: 'i1', campaign_id: 'c1', spend_micros: '4000', impressions: 90_000, clicks: 1_200 }).ok, false, 'money arrives as an integer or not at all');
+});
+
+// The WRITE interface (issue #20). The fake is the only implementation in this
+// slice, and these cases pin the three properties the executor's reconciliation
+// depends on: a write applies to the caller's own copy and nothing else, a
+// refusal is the SAME envelope the reads use, and the deterministic sort every
+// read promises survives a write.
+
+test('the fake implements every method of the typed write interface, and the live one is not required to', async () => {
+  assert.deepEqual([...WRITE_METHODS], ['setCampaignStatus', 'updateAdSetBudget', 'updateCampaignCreative', 'createCampaign']);
+  const fake = new FakeMetaAdsProvider();
+  assert.ok(implementsWriteInterface(fake), 'the fake implements the full write interface');
+  for (const method of WRITE_METHODS) {
+    assert.equal(typeof fake[method], 'function', `fake implements ${method}`);
+  }
+  // live.js is a later slice: the write interface is TYPED, and requiring a
+  // method nothing calls would be inventing a requirement rather than
+  // checking one.
+  const live = liveProvider(singleStatusStub(200, { data: [] }));
+  assert.equal(typeof live.setCampaignStatus, 'undefined', 'the live provider carries no write surface yet');
+
+  // Every action the contract registers resolves to a method that exists, and
+  // every method resolves back from one — the map is the executor's only
+  // lookup, so a dangling entry would be a signed action with no write.
+  assert.deepEqual(Object.keys(ACTION_WRITES).length, WRITE_METHODS.length);
+  for (const [action, method] of Object.entries(ACTION_WRITES)) {
+    assert.ok(WRITE_METHODS.includes(method), `${action} maps to a rostered method (${method})`);
+    assert.equal(typeof fake[method], 'function', method);
+  }
+});
+
+test('quota and revoked permission refuse every WRITE with the same envelope the reads use', async () => {
+  const cases = [
+    ['quota', META_ERROR_CODES.QUOTA, true],
+    ['revoked', META_ERROR_CODES.PERMISSION, false],
+  ];
+  const calls = {
+    setCampaignStatus: () => ({ campaignId: 'campaign_001', status: 'PAUSED' }),
+    updateAdSetBudget: () => ({ adSetId: 'adset_001', deltaMicros: 40_000_000 }),
+    updateCampaignCreative: () => ({ campaignId: 'campaign_001', name: 'Brand — RSA B' }),
+    createCampaign: () => ({ name: 'Retargeting — new region' }),
+  };
+  for (const [mode, code, retryable] of cases) {
+    const provider = new FakeMetaAdsProvider({ failureMode: mode });
+    for (const method of WRITE_METHODS) {
+      const result = await provider[method](calls[method]());
+      assert.equal(result.ok, false, `${mode}: ${method} refuses`);
+      assert.equal(result.error.code, code, `${mode}: ${method}`);
+      assert.equal(result.error.retryable, retryable, `${mode}: ${method}`);
+      assert.equal(result.error.details.simulated, true, `${mode}: ${method}`);
+      assert.deepEqual(Object.keys(result.error).sort(), ['code', 'details', 'message', 'retryable'], `${mode}: ${method}`);
+    }
+    // The guard runs before any state is touched, so a refused write leaves
+    // nothing half-applied and nothing recorded...
+    assert.equal(provider.lastWrite(), null, `${mode}: no write was recorded`);
+    // ...and the reads carry the identical envelope, which is what lets the
+    // executor handle one failure shape for the whole interface.
+    const after = await provider.listCampaigns();
+    assert.equal(after.ok, false, `${mode}: the read is refused too`);
+    assert.equal(after.error.code, code, `${mode}: reads and writes agree`);
+    assert.equal(after.error.retryable, retryable, `${mode}: and on the retryable flag`);
+  }
+});
+
+test('a write applies to THIS instance only, and every read reflects it', async () => {
+  const provider = new FakeMetaAdsProvider();
+  const bystander = new FakeMetaAdsProvider();
+
+  const paused = await provider.setCampaignStatus({ campaignId: 'campaign_001', status: 'PAUSED' });
+  assert.equal(paused.ok, true);
+  assert.equal(paused.data.requested.status, 'PAUSED');
+  assert.equal(paused.data.reported.status, 'PAUSED', 'the write reports back what it applied');
+  assert.equal(provider.lastWrite().action, 'set_campaign_status');
+
+  const mine = await provider.listCampaigns();
+  assert.equal(mine.data.find((row) => row.id === 'campaign_001').status, 'PAUSED');
+  // The re-read is what the executor reconciles against, so it must show the
+  // write and the by-id sort must still hold with the new state in it.
+  assert.deepEqual(mine.data.map((row) => row.id), [...mine.data.map((row) => row.id)].sort());
+
+  const theirs = await bystander.listCampaigns();
+  assert.equal(theirs.data.find((row) => row.id === 'campaign_001').status, 'ACTIVE', 'no write leaks between instances');
+  assert.equal(bystander.lastWrite(), null);
+
+  const budget = await provider.updateAdSetBudget({ adSetId: 'adset_001', deltaMicros: 40_000_000 });
+  assert.equal(budget.ok, true);
+  const adSets = await provider.listAdSets();
+  assert.equal(adSets.data.find((row) => row.id === 'adset_001').daily_budget_micros, 540_000_000, 'the fixture budget plus 40,000,000, in integer micros');
+  assert.deepEqual(adSets.data.map((row) => row.id), [...adSets.data.map((row) => row.id)].sort());
+  assert.equal((await bystander.listAdSets()).data.find((row) => row.id === 'adset_001').daily_budget_micros, 500_000_000);
+
+  // A creative refresh renames the ads under the campaign's ad sets, and
+  // reports which ones it touched.
+  const creative = await provider.updateCampaignCreative({ campaignId: 'campaign_001', name: 'Brand — RSA B' });
+  assert.equal(creative.ok, true);
+  assert.deepEqual(creative.data.reported.ads, ['ad_001']);
+  assert.equal((await provider.listAds()).data.find((row) => row.id === 'ad_001').name, 'Brand — RSA B');
+  assert.equal((await bystander.listAds()).data.find((row) => row.id === 'ad_001').name, 'Brand — RSA A', 'and the bystander still holds its own fixture name');
+
+  const created = await provider.createCampaign({ name: 'Retargeting — new region' });
+  assert.equal(created.ok, true);
+  assert.equal(created.data.reported.status, 'PAUSED', 'a new campaign is never born ACTIVE');
+  const afterCreate = await provider.listCampaigns();
+  assert.deepEqual(afterCreate.data.map((row) => row.id), [...afterCreate.data.map((row) => row.id)].sort(), 'the sort survives a new row');
+});
+
+test('updateAdSetBudget refuses a negative or non-integer delta, and the write is refused too', async () => {
+  const provider = new FakeMetaAdsProvider();
+  for (const delta of [-1, 1.5, '400', null, undefined, Number.NaN, Infinity, 2 ** 53]) {
+    const result = await provider.updateAdSetBudget({ adSetId: 'adset_001', deltaMicros: delta });
+    assert.equal(result.ok, false, String(delta));
+    assert.equal(result.error.code, META_ERROR_CODES.NETWORK);
+    assert.ok(result.error.message.includes('delta_micros must be a non-negative safe integer'), result.error.message);
+    assert.ok('delta_micros' in result.error.details, 'the refusal names the field it refused on');
+  }
+  // A refused write is not a recorded write, and the budget is untouched.
+  assert.equal(provider.lastWrite(), null);
+  assert.equal((await provider.listAdSets()).data.find((row) => row.id === 'adset_001').daily_budget_micros, 500_000_000);
+  // Zero is a legal no-op delta: integer money, not a positive-only field.
+  assert.equal((await provider.updateAdSetBudget({ adSetId: 'adset_001', deltaMicros: 0 })).ok, true);
+  assert.equal((await provider.listAdSets()).data.find((row) => row.id === 'adset_001').daily_budget_micros, 500_000_000);
+});
+
+test('every write refuses a resource that does not exist, rather than inventing one', async () => {
+  const provider = new FakeMetaAdsProvider();
+  const cases = [
+    ['setCampaignStatus', () => provider.setCampaignStatus({ campaignId: 'campaign_999', status: 'PAUSED' })],
+    ['updateAdSetBudget', () => provider.updateAdSetBudget({ adSetId: 'adset_999', deltaMicros: 1 })],
+    ['updateCampaignCreative', () => provider.updateCampaignCreative({ campaignId: 'campaign_999', name: 'x' })],
+  ];
+  for (const [method, call] of cases) {
+    const result = await call();
+    assert.equal(result.ok, false, method);
+    assert.equal(result.error.code, META_ERROR_CODES.NETWORK, method);
+  }
+  // A campaign with no creative under it is a different refusal again: there is
+  // nothing to refresh, and pretending otherwise would write a name to nothing.
+  // No fixture campaign is in that state, so the case is driven by taking the
+  // creative away rather than by inventing a campaign.
+  const bare = new FakeMetaAdsProvider();
+  bare.state.ads = [];
+  const noCreative = await bare.updateCampaignCreative({ campaignId: 'campaign_001', name: 'x' });
+  assert.equal(noCreative.ok, false);
+  assert.ok(noCreative.error.message.includes('holds no creative to refresh'), noCreative.error.message);
+
+  // The status vocabulary is closed on the fake exactly as the validator is on
+  // the live side, so a signed constraint cannot set a status Meta has no such
+  // state for.
+  const bad = await provider.setCampaignStatus({ campaignId: 'campaign_001', status: 'SLEEPING' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.details.status, 'SLEEPING');
+  assert.equal(provider.lastWrite(), null);
 });

@@ -9,9 +9,12 @@
 import { META_ERROR_CODES } from '../integrations/meta_ads/index.js';
 import { DECISION_CLASSES, calibrationReport } from '../domain/decisions.js';
 import { computeFunnel, coverageOf, dataThrough, maturityFor, policyBand, staleAgeHours } from '../domain/measurement.js';
-import { formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
+import { canonicalCurrency, formatMoney, fromMicros, ISO_CURRENCIES } from '../domain/money.js';
 import { isReadableComponent } from '../domain/opportunities.js';
 import { gateForRetrieval, EVIDENCE_TYPE_TIERS } from '../memory/learnings.js';
+import { ACTION_CLASSES } from '../policy/kernel.js';
+import { POSTURE_LABELS, postureFor } from '../policy/trust.js';
+import { partitionApprovals } from '../domain/approvals.js';
 
 const OVERRIDES = new Set(['empty', 'ideal', 'loading', 'partial', 'error']);
 const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals'];
@@ -38,7 +41,7 @@ export function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function layout({ route, state, title, tenantName, content }) {
+function layout({ route, state, title, tenantName, content, announcement = '' }) {
   const nav = [
     ['/', 'Dashboard'],
     ['/journal', 'Decision journal'],
@@ -73,8 +76,8 @@ function layout({ route, state, title, tenantName, content }) {
 <span class="tenant-name" id="tenant-name" data-testid="tenant-name">${escapeHtml(tenantName)}</span>
 </div>
 </header>
-<div id="live-region" class="visually-hidden" aria-live="polite" role="status"></div>
-<main id="main">
+<div id="live-region" class="visually-hidden" aria-live="polite" role="status">${escapeHtml(announcement)}</div>
+<main id="main" tabindex="-1">
 ${heading}
 ${content}
 </main>
@@ -91,6 +94,16 @@ function panel({ kind = '', title, body, testid }) {
 <h2>${escapeHtml(title)}</h2>
 ${body}
 </section>`;
+}
+
+/** Wraps a table in the scroll region its column may not fit, so a table wider
+ * than #main's column scrolls inside its own box instead of the page. The
+ * region takes focus and carries an accessible name because a scroll container
+ * that cannot be focused cannot be scrolled by keyboard outside Chromium: the
+ * columns past the right edge would be unreachable rather than merely
+ * off-screen. */
+function tableRegion(label, table) {
+  return `<div class="table-scroll" tabindex="0" role="region" aria-label="${escapeHtml(label)}">${table}</div>`;
 }
 
 function emptyState({ title, message, action, testid }) {
@@ -116,18 +129,99 @@ function skeletonRows(count, className = 'skeleton-row') {
   return `<div class="skeleton-stack" aria-hidden="true">${Array.from({ length: count ?? 3 }, () => `<div class="skeleton ${className}"></div>`).join('')}</div>`;
 }
 
-export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null, filters = null } = {}) {
+/**
+ * The freeze banner, composed for EVERY route so a hold is visible on /, on
+ * /journal and on /approvals from one call rather than from three separate
+ * panels that could disagree.
+ *
+ * The first line is a CORRECTNESS requirement, not a nicety: renderPage
+ * resolves its tenant through firstTenant, which is null on an empty store,
+ * and every existing page test renders all five routes in all five states
+ * against a null-tenant repository. A `tenant.id` dereference here would throw
+ * inside renderPage rather than inside a page body, which the page loop does
+ * not catch — so it would redden every page test, not just the approvals one.
+ *
+ * With a tenant it renders only while a switch is active, and reads
+ * activeFor — every scope for the tenant — so the provider-scoped row the demo
+ * writes is the row that shows the banner.
+ */
+function guardianBanner(repositories, tenant) {
+  if (!tenant) {
+    return '';
+  }
+  const active = repositories.killSwitches?.activeFor?.(tenant.id) ?? [];
+  if (active.length === 0) {
+    return '';
+  }
+  const rows = active.map((row) => `${row.scope} ${row.scope_id} — ${row.kind}`).join('; ');
+  return `<div class="banner banner-warn" role="status" data-testid="guardian-banner">Automation is frozen (${escapeHtml(rows)}). Approve nothing until a human re-enables it.</div>`;
+}
+
+/**
+ * The sentence a decision hand-off announces, and the panel it paints.
+ *
+ * It is SERVER-rendered because the outcome has to survive a navigation: a
+ * client.js that painted a receipt into the page it then reloaded destroyed
+ * the receipt before the browser composited a frame of it, so the outcome
+ * travels in the URL instead and is painted here, where the operator is
+ * looking. Both halves of the copy come from the response the decision POST
+ * actually made — the receipt id and the reconciliation are the same strings
+ * the receipt row holds.
+ *
+ * Every value is escaped on the way in, a receipt id is rendered only when it
+ * is a real one, and an absent or unrecognised decision renders nothing at
+ * all: the panel is a normal page again the moment the parameters are gone.
+ */
+function decisionResult(decision) {
+  if (!decision) {
+    return { panel: '', announcement: '' };
+  }
+  if (decision.decision === 'approved') {
+    // No receipt id, no receipt: the sentence exists to name it, so a
+    // parameter set that carries none renders nothing rather than a sentence
+    // with a hole in it.
+    if (typeof decision.receipt !== 'string' || decision.receipt.length === 0) {
+      return { panel: '', announcement: '' };
+    }
+    const sentence = `Executed. Receipt ${decision.receipt}. Reconciliation: ${decision.reconciliation ?? 'unknown'}.`;
+    return {
+      announcement: sentence,
+      panel: `<div data-testid="approval-toast"><p>${escapeHtml(sentence)}</p></div>`,
+    };
+  }
+  if (decision.decision === 'rejected') {
+    const sentence = `Rejected. ${decision.approval ?? ''} will not run.`;
+    return {
+      announcement: sentence,
+      panel: `<div data-testid="approval-rejected"><p>${escapeHtml(sentence)}</p></div>`,
+    };
+  }
+  return { panel: '', announcement: '' };
+}
+
+export async function renderPage(route, { repositories, override = null, metaProvider = null, metaError = null, filters = null, decision = null } = {}) {
   if (!ROUTES.includes(route)) {
     throw new Error(`unknown page route ${route}`);
   }
   const state = resolveState(route, override, repositories);
   const tenant = firstTenant(repositories);
-  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError, filters });
+  const content = await PAGES[route](state, { repositories, tenant, metaProvider, metaError, filters, decision });
   // The header must never disagree with the body: chrome follows the effective
   // (post-override) state, so ?state=empty reads 'No connected account' even
   // when the store holds a tenant.
   const tenantName = state === 'empty' ? 'No connected account' : tenant ? tenant.name : 'No connected account';
-  return layout({ route, state, title: TITLES[route], tenantName, content });
+  const banner = guardianBanner(repositories, tenant);
+  const decided = decisionResult(decision);
+  return layout({
+    route,
+    state,
+    title: TITLES[route],
+    tenantName,
+    // The live region carries the decision sentence, so the announcement
+    // survives the navigation instead of dying with the page that made it.
+    announcement: decided.announcement,
+    content: banner ? `${banner}\n${content}` : content,
+  });
 }
 
 const TITLES = {
@@ -194,20 +288,58 @@ const META_CELLS = {
 };
 
 /**
+ * The one place in this file that reads a tenant row's currency. A stored code
+ * is an arbitrary string — tenants.create takes any string, and nothing the
+ * app writes produces a non-canonical one — so it is resolved through the
+ * domain's read-time boundary here rather than at each of the eight call
+ * sites: canonical when it names a currency, verbatim when it names none (so a
+ * bad row's amounts are excluded from the dashboard funnel too), and INR only
+ * for a MISSING row.
+ *
+ * This seam and resolveTenantCurrency in src/api/routes.js are the same rule on
+ * two surfaces — the dashboard tile and GET /v1/metrics both read the same
+ * computeFunnel from the same row — and test/web/pages.test.js asserts they
+ * agree rather than leaving that to a comment.
+ */
+function tenantCurrency(tenant) {
+  const stored = tenant?.currency;
+  return canonicalCurrency(stored) ?? stored ?? 'INR';
+}
+
+/**
  * The one money renderer in this file, over the repo's currency-aware
  * formatter, so every amount on every screen agrees with the dashboard's
  * Qualified CPL. Two guards keep a page strictly safer than the hand-rolled
  * rupee version it replaces: a value the domain's readability rule rejects
- * degrades to the em-dash (today's ₹NaN), and a currency outside
- * ISO_CURRENCIES falls back to INR rather than throwing — tenants.create
- * accepts any string, so an unknown code is bad data, and a page render must
- * not 500 on it. That fallback is a relabelling, not a pass-through: a currency
- * this build cannot render is drawn as INR, so a tenant whose stored currency
- * is bad data reads its amounts in rupees rather than in its own code. That is
- * a deliberate choice — the alternative, printing the bare code ('ZZZ 1,000.00'),
- * puts a mislabelled-but-honest amount in front of a reader; this puts a
+ * degrades to the em-dash (today's ₹NaN), and a currency naming no ISO
+ * 4217 code at all falls back to INR rather than throwing — a page render
+ * must not 500 on bad data. That fallback is a relabelling, not a
+ * pass-through: a currency this build cannot render is drawn as INR, so a
+ * tenant whose stored currency is bad data reads its amounts in rupees
+ * rather than in its own code. That is a deliberate choice — the
+ * alternative, printing the bare code ('ZZZ 1,000.00'), puts a
+ * mislabelled-but-honest amount in front of a reader; this puts a
  * correctly-formatted amount whose unit is the repo default. The trade is
  * knowingly wrong-unit over knowingly unformatted.
+ *
+ * The fallback is for a code that names no currency, NOT for a code spelled
+ * differently: 'usd', 'Usd' and ' USD ' are the same unit of account as 'USD'
+ * and render as dollars, because every call site reaches money() through the
+ * tenantCurrency() seam above, which resolves a stored code before this
+ * membership test ever runs. Mis-casing a currency is not a currency error,
+ * and a renderer that drew a tenant's amounts in the wrong unit over three
+ * letters of case would be the bug, not the fix.
+ *
+ * That guard is load-bearing, and reached. tenantCurrency() above passes a
+ * code naming no ISO currency through VERBATIM rather than resolving it away,
+ * so every money() call on every screen for such a tenant arrives here with an
+ * unknown code. Without the membership test, fromMicros(6_000_000_000, 'ZZZ')
+ * throws INVALID_CURRENCY and the page 500s — the exact outcome this guard
+ * exists to prevent. It is covered rather than invisible: the 'ZZZ' tenant
+ * cases in test/web/pages.test.js assert the relabelling, so replacing the
+ * 'INR' fallback below with `currency` turns them red. The knowingly-wrong-unit
+ * trade described above is deliberate and unchanged; this guard is what
+ * implements it.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
@@ -226,9 +358,9 @@ function metaTable(collection, title, headers, rows, currency) {
   const cells = META_CELLS[collection];
   const body = rows.length === 0
     ? `<p class="empty-copy">No ${escapeHtml(title.toLowerCase())} in the last good sync.</p>`
-    : `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
+    : tableRegion(`${title} table`, `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>
 ${rows.map((row) => `<tr>${cells(row, currency).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
-</tbody></table>`;
+</tbody></table>`);
   return panel({
     title: `${title} · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
     body,
@@ -323,10 +455,10 @@ ${panel({
     const age = tenant && through ? `${staleAgeHours(nowIso, through)}h ago` : 'unknown';
     return `<div class="banner banner-warn" role="status">Provider data is stale — last good sync ${escapeHtml(through ?? 'unknown')} (${escapeHtml(age)})</div>
 ${kpiStrip(state, { repositories, tenant, stale: true })}
-${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
+${await metaRegions({ metaProvider, metaError, currency: tenantCurrency(tenant) })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
-${guardianPanel(state)}`;
+${guardianPanel(state, { repositories, tenant })}`;
   }
 
   if (!tenant || state === 'empty') {
@@ -343,10 +475,10 @@ ${guardianPanel(state)}`;
   }
 
   return `${kpiStrip(state, { repositories, tenant })}
-${await metaRegions({ metaProvider, metaError, currency: tenant?.currency ?? 'INR' })}
+${await metaRegions({ metaProvider, metaError, currency: tenantCurrency(tenant) })}
 ${decisionFeed(state, { repositories, tenant })}
 ${experimentsPanel(state, { repositories, tenant })}
-${guardianPanel(state)}`;
+${guardianPanel(state, { repositories, tenant })}`;
 }
 
 function maturityBadge(maturity) {
@@ -374,7 +506,7 @@ function kpiStrip(state, { repositories, tenant }) {
   const rows = repositories.rawEvents.listByTypes(tenant.id, ['spend.observed', 'lead_qualified']);
   // Same tenant-currency exclusion GET /v1/metrics applies (routes.js): the
   // tenant row's currency leaves foreign-currency legacy spend out of the sum.
-  const funnel = computeFunnel(rows, tenant.currency ?? 'INR');
+  const funnel = computeFunnel(rows, tenantCurrency(tenant));
   const coverage = coverageOf(rows);
   const through = dataThrough(rows);
   const nowIso = new Date().toISOString();
@@ -387,7 +519,7 @@ function kpiStrip(state, { repositories, tenant }) {
     // as every other amount on every other screen: integer micros divided,
     // formatted without floats, em-dash while the volume is zero (money()'
     // safe-integer guard).
-    kpiCard('Qualified CPL', money(cpl, tenant.currency ?? 'INR'), maturity, through),
+    kpiCard('Qualified CPL', money(cpl, tenantCurrency(tenant)), maturity, through),
     kpiCard('Qualified volume', String(funnel.qualified_volume), maturity, through),
     kpiCard('Maturity coverage', coverage.toFixed(2), maturity, through),
   ];
@@ -410,7 +542,7 @@ function decisionFeed(state, { repositories, tenant }) {
     title: `Decision feed · ${decisions.length} row${decisions.length === 1 ? '' : 's'}`,
     body: decisions.length === 0
       ? `<p class="empty-copy">No decisions recorded yet. Decisions appear here once shadow mode starts.</p>`
-      : `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`,
+      : tableRegion('Decision feed table', `<table><thead><tr><th>When</th><th>Action class</th><th>Expected</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`),
   });
 }
 
@@ -434,10 +566,22 @@ function experimentsPanel(state, { repositories, tenant }) {
   });
 }
 
-function guardianPanel(state) {
+/**
+ * Live from the incident log, so a freeze that has been cleared still leaves
+ * the record that it happened. The no-incidents branch keeps the sentence the
+ * seeded-but-unfrozen demo renders, which is the branch existing tests match.
+ */
+function guardianPanel(state, { repositories, tenant }) {
+  const incidents = tenant ? repositories.guardianIncidents.listForTenant(tenant.id, { limit: 10 }) : [];
+  const body = incidents.length === 0
+    ? `<p class="empty-copy">No guardian incidents in the last 24 hours.</p>`
+    : `<ul class="incident-list">${incidents.map((row) => `<li class="incident-row" data-testid="guardian-incident" data-incident-id="${escapeHtml(row.incident_id)}">
+<strong>${escapeHtml(row.kind)}</strong>
+<span>${escapeHtml(row.frozen_at)} · ${escapeHtml(row.details?.reason ?? 'frozen')}</span>
+</li>`).join('')}</ul>`;
   return panel({
     title: 'Guardian incidents',
-    body: `<p class="empty-copy">No guardian incidents in the last 24 hours.</p>`,
+    body,
   });
 }
 
@@ -477,9 +621,9 @@ function decisionsOf(repositories, tenant) {
 function journalTable(rows, filters) {
   const body = rows.length === 0
     ? `<p class="empty-copy">No decisions match the current filters. Widen the class or status filter, or clear both, to see the full journal.</p>`
-    : `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
+    : tableRegion('Decision journal table', `<table><thead><tr><th><span class="visually-hidden">Open</span></th><th>When</th><th>Action class</th><th>Selected</th><th>Expected</th><th>Matured</th><th>Status</th></tr></thead><tbody>
 ${rows.map(journalRow).join('')}
-</tbody></table>`;
+</tbody></table>`);
   return panel({
     title: `Decision journal · ${rows.length} row${rows.length === 1 ? '' : 's'}`,
     body,
@@ -741,7 +885,7 @@ function opportunities(state, { repositories, tenant }) {
   if (state === 'partial') {
     return `<div class="banner banner-warn" role="status">Some experiment arms await maturity — scores shown are provisional until conversions mature.</div>
 ${researchObservations(repositories, tenant)}
-${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenant?.currency ?? 'INR')}`;
+${rankedList(ranked, 'No opportunities scored yet; the research pass has not produced any provisional bets.', tenantCurrency(tenant))}`;
   }
 
   if (state === 'empty' || ranked.length === 0) {
@@ -755,7 +899,7 @@ ${emptyState({
   }
 
   return `${researchObservations(repositories, tenant)}
-${rankedList(ranked, '', tenant?.currency ?? 'INR')}`;
+${rankedList(ranked, '', tenantCurrency(tenant))}`;
 }
 
 const STATE_BADGES = {
@@ -830,7 +974,7 @@ ${panel({
     title: 'Running experiments',
     body: cards.length === 0
       ? `<p class="empty-copy">No experiments running, so no arms await maturity.</p>`
-      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
+      : `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenantCurrency(tenant))).join('')}</ul>`,
   })}
 ${hypothesisComposer()}`;
   }
@@ -846,18 +990,127 @@ ${hypothesisComposer()}`;
 
   return panel({
     title: `Running experiments · ${cards.length}`,
-    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenant?.currency ?? 'INR')).join('')}</ul>`,
+    body: `<ul class="experiment-list">${cards.map((card) => experimentCard(card, tenantCurrency(tenant))).join('')}</ul>`,
   }) + hypothesisComposer();
 }
 
-const AUTONOMY_POSTURE = [
-  ['Budget change', 'approval required', 'spend moves are high downside'],
-  ['Campaign status change', 'autonomous under micro-limits', 'reversible, small blast radius'],
-  ['Creative refresh', 'shadow', 'creative changes are being evaluated before authority'],
-  ['New campaign launch', 'approval required', 'irreversible structure change'],
-];
+/**
+ * The Why column, ONE exported const keyed by class slug, so the strings the
+ * acceptance criterion quotes and the strings the page renders are the same
+ * strings. noEvidence is the copy for a class with no trust row at all — the
+ * branch a tenant with no ledger, and a database with no tenant, both take.
+ */
+export const AUTONOMY_WHY = Object.freeze({
+  'campaign-status': 'Reversible, small blast radius, capped at 50,000,000 micros of change.',
+  'budget-change': 'Spend moves are high downside, so they stay capped and always ask a human.',
+  'creative-refresh': 'Creative changes are being evaluated before authority, so this runs in shadow.',
+  'new-geography': 'Policy only: this slice can never write it, whatever the evidence says.',
+  'campaign-launch': 'An irreversible structure change; no evidence has earned it autonomy.',
+});
 
-function approvals(state, { repositories, tenant }) {
+const NO_EVIDENCE_WHY = 'No trust evidence yet, so a human approves every action of this class.';
+
+function postureTable(repositories, tenant) {
+  // The row for a class is null with no tenant, and a class with no row is
+  // held to approval-required — the fail-closed reading, and the one that
+  // keeps the table rendering on a null-tenant database.
+  const rows = ACTION_CLASSES.map((entry) => {
+    const row = tenant ? repositories.trustLedger.get(tenant.id, entry.action_class) : null;
+    const posture = postureFor(entry.action_class, row, entry, row?.pinned ?? false);
+    return `<tr data-testid="posture-row-${escapeHtml(entry.action_class)}">
+<td>${escapeHtml(entry.action_class)}</td>
+<td>${escapeHtml(POSTURE_LABELS[posture])}</td>
+<td>${escapeHtml(row ? AUTONOMY_WHY[entry.action_class] : NO_EVIDENCE_WHY)}</td>
+</tr>`;
+  }).join('');
+  return `<section class="panel" data-testid="posture-table">
+<h2>Autonomy posture by action class</h2>
+${tableRegion('Autonomy posture by action class table', `<table><thead><tr><th>Action class</th><th>Posture</th><th>Why</th></tr></thead><tbody>
+${rows}
+</tbody></table>`)}
+</section>`;
+}
+
+/**
+ * The pending card. Every one of its decision controls carries BOTH
+ * data-approval-id and data-tenant-id ON THE CONTROL, never on an ancestor,
+ * because client.js reads them from event.currentTarget with no closest()
+ * walk: a control carrying neither produces a request with no approval id and
+ * a 404 that looks like a bad row. The <li> carries the same two attributes
+ * plus data-approval-card for the reason input's lookup, and a test to count.
+ */
+function approvalCard(row) {
+  return `<li class="approval-card" data-testid="approval-card" data-approval-card data-approval-id="${escapeHtml(row.approval_id)}" data-tenant-id="${escapeHtml(row.tenant_id)}">
+<strong>${escapeHtml(row.impact ?? row.approval_id)}</strong>
+<span>${escapeHtml(row.action_class)} · ${escapeHtml(row.action)} · impact ${escapeHtml(row.impact ?? '—')} · downside ${escapeHtml(row.downside ?? '—')} · expires ${escapeHtml(row.expires_at ?? '—')}</span>
+<form class="approval-actions" data-approval>
+<label class="visually-hidden" for="reason-${escapeHtml(row.approval_id)}">Reason</label>
+<input id="reason-${escapeHtml(row.approval_id)}" name="reason" placeholder="Reason">
+<button type="button" class="button" data-action="approve-decision" data-approval-id="${escapeHtml(row.approval_id)}" data-tenant-id="${escapeHtml(row.tenant_id)}">Approve</button>
+<button type="button" class="button button-secondary" data-action="reject-decision" data-approval-id="${escapeHtml(row.approval_id)}" data-tenant-id="${escapeHtml(row.tenant_id)}">Reject</button>
+</form>
+</li>`;
+}
+
+/**
+ * Executed receipts, driven by action_records and FILTERED to rows carrying a
+ * non-null approval_id. The filter is load-bearing: a receipt minted by
+ * POST /v1/actions/execute has approval_id NULL, is not in the
+ * --reset-approvals purge list, and would otherwise sit in a panel that counts
+ * decisions taken on THIS queue and make a rerun of the QA script's
+ * "zero executed receipts" line false on its second pass. Autonomous
+ * executions are still audited, in audit_events.
+ *
+ * The receipt id, action class, reconciliation and drift are all read from
+ * the receipt row, which is the only place they exist.
+ */
+function executedPanel(repositories, tenant) {
+  const receipts = tenant
+    ? repositories.actionRecords.listForTenant(tenant.id, { limit: 50 })
+      .filter((receipt) => receipt.approval_id !== null && receipt.approval_id !== undefined)
+    : [];
+  if (receipts.length === 0) {
+    return '';
+  }
+  const rows = receipts.map((receipt) => {
+    const approval = repositories.approvals.get(tenant.id, receipt.approval_id);
+    return `<li class="receipt-row" data-testid="executed-receipt" data-approval-id="${escapeHtml(receipt.approval_id)}" data-tenant-id="${escapeHtml(receipt.tenant_id)}">
+<strong>${escapeHtml(receipt.receipt_id)}</strong>
+<span>${escapeHtml(approval?.action_class ?? receipt.action_class)} · reconciliation ${escapeHtml(receipt.reconciliation ?? 'unknown')} · drift ${escapeHtml(receipt.drift ?? 'none')} · ${escapeHtml(receipt.executed_at)}</span>
+<button type="button" class="button button-secondary" data-action="re-decide" data-approval-id="${escapeHtml(receipt.approval_id)}" data-tenant-id="${escapeHtml(receipt.tenant_id)}">Re-decide</button>
+</li>`;
+  }).join('');
+  return panel({
+    kind: 'panel-executed',
+    title: `Executed receipts · ${receipts.length}`,
+    body: `<ul class="receipt-list">${rows}</ul>`,
+    testid: 'approval-executed',
+  });
+}
+
+/** Lapsed rows carry NO control of any kind: the decision window has closed. */
+function lapsedPanel(lapsed) {
+  if (lapsed.length === 0) {
+    return '';
+  }
+  const rows = lapsed.map((row) => `<li class="lapsed-row" data-testid="lapsed-row" data-approval-id="${escapeHtml(row.approval_id)}" data-tenant-id="${escapeHtml(row.tenant_id)}">
+<strong>${escapeHtml(row.approval_id)}</strong>
+<span>${escapeHtml(row.action_class)} · expired ${escapeHtml(row.expires_at)}</span>
+</li>`).join('');
+  return panel({
+    kind: 'panel-lapsed',
+    title: `Lapsed approvals · ${lapsed.length}`,
+    body: `<ul class="lapsed-list">${rows}</ul>`,
+    testid: 'approval-lapsed',
+  });
+}
+
+function approvals(state, { repositories, tenant, decision = null }) {
+  // The decision hand-off is rendered HERE, inside the result region client.js
+  // writes into, so the server-painted sentence and a client-painted one land
+  // in the same place and cannot stack up.
+  const result = decisionResult(decision);
+  const decided = result.panel;
   if (state === 'loading') {
     return panel({ title: 'Loading approval queue', body: skeletonRows(3, 'skeleton-card') });
   }
@@ -866,54 +1119,45 @@ function approvals(state, { repositories, tenant }) {
     return errorPanel({
       failed: {
         title: 'Approval action failed',
-        detail: 'The last approval action could not be completed: reconciliation against provider state is still unknown (check: reconciliation).',
+        detail: 'The approval store could not be read (source: approval store). No approval was decided and no receipt was written.',
       },
-      stillTrue: 'the affected item stays pending and nothing was executed.',
+      stillTrue: 'the pending queue, the executed receipts and the lapsed items are unchanged.',
       retryHref: '/approvals',
     });
   }
 
-  const pending = eventsOf(repositories, tenant, 'approval.requested')
-    .filter((event) => event.payload.status !== 'approved');
-  const posture = `<section class="panel">
-<h2>Autonomy posture by action class</h2>
-<table><thead><tr><th>Action class</th><th>Posture</th><th>Why</th></tr></thead><tbody>
-${AUTONOMY_POSTURE.map(([actionClass, posture, why]) => `<tr><td>${escapeHtml(actionClass)}</td><td>${escapeHtml(posture)}</td><td>${escapeHtml(why)}</td></tr>`).join('')}
-</tbody></table>
-</section>`;
+  const nowIso = new Date().toISOString();
+  const rows = tenant ? repositories.approvals.list(tenant.id) : [];
+  const { pending, lapsed } = partitionApprovals(rows, { nowIso });
+  const posture = postureTable(repositories, tenant);
 
-  if (state === 'empty' || (pending.length === 0 && state === 'ideal')) {
-    return `${emptyState({
-      title: 'No pending approvals',
-      message: 'Emptiness here is healthy: it means the system is operating inside the autonomy it has earned, and nothing needs a human yes or no.',
-      testid: 'approvals-empty',
-    })}
-${posture}`;
-  }
+  const regions = [
+    pending.length > 0
+      ? panel({
+        kind: 'panel-queue',
+        title: `Pending approvals · ${pending.length}`,
+        body: `<ul class="approval-list">${pending.map(approvalCard).join('')}</ul>`,
+        testid: 'approval-queue',
+      })
+      : '',
+    pending.length === 0
+      ? emptyState({
+        title: 'No pending approvals',
+        message: 'Emptiness here is healthy: it means the system is operating inside the autonomy it has earned, and nothing needs a human yes or no.',
+        testid: 'approvals-empty',
+      })
+      : '',
+    executedPanel(repositories, tenant),
+    lapsedPanel(lapsed),
+    posture,
+  ].join('\n');
 
   if (state === 'partial') {
     return `<div class="banner banner-warn" role="status">Expired approvals are shown as lapsed instead of vanishing.</div>
-${panel({
-    title: 'Lapsed approvals',
-    body: `<p class="empty-copy">One approval expired without a decision and is kept here for the audit trail.</p>
-<a class="button" href="/approvals?state=error">Retry the lapsed item</a>`,
-  })}
-${posture}`;
+<div data-testid="approval-decision-result">${decided}</div>
+${regions}`;
   }
 
-  const queue = pending.map((event) => `<li class="approval-card">
-<strong>${escapeHtml(event.payload.name ?? 'Approval')}</strong>
-<span>impact ${escapeHtml(event.payload.impact ?? '—')} · downside ${escapeHtml(event.payload.downside ?? '—')} · expires ${escapeHtml(event.payload.expires ?? '—')}</span>
-<form class="approval-actions" data-approval>
-<label class="visually-hidden" for="reason-${escapeHtml(event.event_id)}">Reason</label>
-<input id="reason-${escapeHtml(event.event_id)}" name="reason" placeholder="Reason">
-<button type="button" class="button" data-action="approve">Approve</button>
-<button type="button" class="button button-secondary" data-action="reject">Reject</button>
-</form>
-</li>`).join('');
-  return `${panel({
-    title: `Pending approvals · ${pending.length}`,
-    body: `<ul class="approval-list">${queue}</ul>`,
-  })}
-${posture}`;
+  return `<div data-testid="approval-decision-result">${decided}</div>
+${regions}`;
 }

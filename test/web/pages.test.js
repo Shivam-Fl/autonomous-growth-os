@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { openDatabase } from '../../src/data/db.js';
 import { createRepositories, replayRawToDerived } from '../../src/data/repositories.js';
 import { validateEvent } from '../../src/domain/events.js';
+import { computeFunnel } from '../../src/domain/measurement.js';
 import { renderPage } from '../../src/web/pages.js';
 import { buildApp } from '../../src/api/routes.js';
 import { seed } from '../../scripts/seed.js';
@@ -20,6 +21,20 @@ const ROUTES = ['/', '/journal', '/opportunities', '/experiments', '/approvals']
 // plain text.
 const H1_HOOK = /<h1[^>]*\bdata-testid="page-title"[^>]*>[^<]*<\/h1>/;
 
+// The skip link's target, as a heading-hierarchy matcher. Hoisted beside
+// H1_HOOK for the same reason and with the same rule: the id is load-bearing,
+// because the assertion below is only about the landmark the skip link points
+// at, and issue #46 relaxed it past the requirement #52 relied on. Issue #61
+// restores it and pins both the acceptances and the rejections, so a second
+// relaxation cannot pass the 25 shells for the wrong reason again.
+//
+// The attribute is asked for with \s, not \b. \b asserts a word boundary and
+// '-' is not a word character, so \bid="main" also matched the tail of
+// data-id="main" — a landmark the skip link does not target, on a page whose
+// href="#main" resolved to nothing, with the whole suite green. Every matcher
+// in this file's guard family asks for its attribute the same way.
+const mainOf = (html) => /<main\b[^>]*\sid="main"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
+
 function freshRepos() {
   const dir = mkdtempSync(join(tmpdir(), 'pages-'));
   const db = openDatabase(join(dir, 'app.db'));
@@ -30,6 +45,73 @@ function seededRepos(prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   seed({ dbPath: join(dir, 'app.db') });
   return createRepositories(openDatabase(join(dir, 'app.db')));
+}
+
+const FIXTURE_OCCURRED_AT = '2026-09-25T08:00:00.000Z';
+
+/** A validated envelope for a named tenant. The assertion names the event
+ * that broke, so a malformed fixture never surfaces as a rendering bug. */
+function validatedEnvelope(tenantId, event_id, event_type, payload) {
+  const validated = validateEvent({
+    event_id, event_type, tenant_id: tenantId, schema_version: '1', occurred_at: FIXTURE_OCCURRED_AT, payload,
+  });
+  assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
+  return validated.event;
+}
+
+/** A USD tenant with one opportunity, whose value and cost are the amounts the
+ * currency assertions read. No events and no experiment: the fixtures that
+ * need those append them on top of the repos this returns.
+ *
+ * The optional argument is how the tenant's stored currency code is spelled the
+ * way a row this app did not write might spell it. tenants.create accepts any
+ * string — the contract the ZZZ test below pins — so this builds a mis-cased
+ * row without a migration, and reaches the same state the QA repro makes with a
+ * raw SQL UPDATE. The amounts are the same either way, so renders are
+ * comparable. */
+function usdRepos(storedCurrency = 'USD') {
+  const repos = freshRepos();
+  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: storedCurrency });
+  repos.opportunities.create({
+    tenant_id: 'tenant_usd',
+    opportunity_id: 'opp_usd_expensive',
+    score: 0.9208,
+    record: {
+      opportunity_id: 'opp_usd_expensive', tenant_id: 'tenant_usd', name: 'US bet',
+      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
+    },
+  });
+  return repos;
+}
+
+/** A seeded database with one pending approval in the queue. Nothing in the
+ * product writes approval.requested — grep finds exactly one hit, the read at
+ * src/web/pages.js:924 — so the card that .approval-actions and .approval-card
+ * describe is reached here through the repository layer. Before this, no test
+ * rendered an approval card at all, so both selectors were pinned against a
+ * page that had never shown one. */
+function pendingApprovalRepos(prefix) {
+  const repos = seededRepos(prefix);
+  repos.rawEvents.append(validatedEnvelope('tenant_demo', 'evt_pages_approval_1', 'approval.requested', {
+    name: 'Raise budget', status: 'pending', impact: 'high', downside: 'low', expires: '2026-10-25T08:00:00.000Z',
+  }));
+  return repos;
+}
+
+/** Every formatted amount on the first opportunity row, in render order, so
+ * one render's money can be compared against another's directly instead of by
+ * eye. The em-dash is a legitimate value here — that is the case a genuine
+ * foreign-surrency spend produces. */
+function opportunityRowMoney(html) {
+  const row = html.match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  return [...row.matchAll(/[$₹€£][\d,]+\.\d{2}/g)].map((match) => match[0]);
+}
+
+/** The Qualified CPL tile's rendered value, the way the kpiStrip assertions
+ * read it. */
+function qualifiedCplValue(html) {
+  const tile = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
+  return tile.match(/kpi-value">([^<]+)</)[1];
 }
 
 test('a fresh database renders the empty dashboard with the setup checklist', async () => {
@@ -112,7 +194,6 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
   };
   // Headings in document order, as levels: h1 .. h6.
   const levelsOf = (html) => [...html.matchAll(/<h([1-6])\b[^>]*>/g)].map(([, level]) => Number(level));
-  const mainOf = (html) => /<main id="main">([\s\S]*?)<\/main>/.exec(html)?.[1] ?? '';
   const h1TextOf = (html) => /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
 
   for (const route of ROUTES) {
@@ -135,6 +216,183 @@ test('every route renders exactly one h1 that opens the hierarchy, in every stat
       assert.equal(h1TextOf(html), EXPECTED[route], `${where}: the h1 names its screen`);
     }
   }
+});
+
+// Issue #52: following a same-document fragment link moves focus only if its
+// target is focusable, and <main> is not by default. The landmark therefore
+// carries tabindex="-1" — programmatically focusable, still out of the tab
+// sequence — or activating the skip link scrolls to #main and leaves focus on
+// <body>, putting the keyboard user back in the header it promises to skip.
+//
+// Each attribute is asked for with \s rather than \b, and the reason is the
+// same as in mainOf above: '-' is a non-word character, so \bid="main" also
+// matched data-id="main", \btabindex="-1" matched data-tabindex="-1", and the
+// class and href clauses matched data-class and data-href. Every capture here
+// begins immediately after the tag name, so a real attribute always has
+// whitespace before it and a data-* spelling never does.
+const skipLinkFocusesMain = (html) => {
+  const main = /<main\b([^>]*)>/.exec(html);
+  const mainAttrs = main?.[1] ?? '';
+  // Find the link by its target rather than by position, so the brand and the
+  // nav are not depended on to sort before it.
+  const skip = [...html.matchAll(/<a\b([^>]*)>/g)]
+    .find(([, attrs]) => /\shref="#main"/.test(attrs));
+  return Boolean(
+    /\sid="main"/.test(mainAttrs) &&
+    /\stabindex="-1"/.test(mainAttrs) &&
+    skip !== undefined &&
+    /\sclass="[^"]*\bskip-link\b[^"]*"/.test(skip[1]) &&
+    // Every clause above is asked of a tag in isolation, so a link sitting
+    // BELOW </main> satisfies all of them and the bypass is destroyed. The
+    // bypass is document order, so compare the two offsets. Last in the chain,
+    // so main.index is never read on a null match.
+    skip.index < main.index
+  );
+};
+
+test('the skip link targets a focusable main landmark on every route and state', async () => {
+  const STATES = ['ideal', 'empty', 'loading', 'partial', 'error'];
+
+  for (const route of ROUTES) {
+    for (const state of STATES) {
+      const where = `${route}?state=${state}`;
+      const html = await renderPage(route, { repositories: freshRepos(), override: state });
+      assert.ok(skipLinkFocusesMain(html), `${where}: the skip link points at a focusable main landmark`);
+    }
+  }
+
+  // Both attributes are matched against the tag's captured attribute string, so
+  // the property is asked of markup nobody emits rather than asserted about
+  // once. Asserting <main id="main"[^>]*tabindex="-1"/> instead would read as
+  // order-independent and would fail the same valid page, reordered.
+  assert.ok(
+    skipLinkFocusesMain('<a href="#main" class="skip-link">Skip to content</a><main tabindex="-1" id="main"></main>'),
+    'attribute order is not pinned on either tag'
+  );
+  assert.ok(
+    skipLinkFocusesMain('<a class="skip-link" href="#main" lang="en">Skip to content</a><main id="main" lang="en" tabindex="-1"></main>'),
+    'a third attribute on either tag is tolerated'
+  );
+  // The order pin below is deliberately on the link-before-main relation and
+  // not on the link being the document's first element, so the brand and the
+  // nav may still sort ahead of it.
+  assert.ok(
+    skipLinkFocusesMain('<header>brand nav</header><a class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'brand and nav may sort before the skip link'
+  );
+
+  // What the lock protects, one failure mode at a time.
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main id="main"></main>'),
+    'a main without tabindex is not focusable, so the link only scrolls'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#content">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'the skip link has to target main'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'a link to #main that is not the skip link is not the bypass'
+  );
+  // The defect issue #61 exists for: every clause above holds for a link that
+  // sits BELOW </main>, because each one is asked of the tag in isolation. The
+  // bypass is the document order, and nothing above compares the two offsets.
+  assert.ok(
+    !skipLinkFocusesMain('<main id="main" tabindex="-1"></main><a class="skip-link" href="#main">Skip to content</a>'),
+    'a skip link after </main> is not a bypass, however well-formed it is'
+  );
+
+  // Issue #61 BUG-2: a required attribute that appears only inside a data-*
+  // attribute is not the attribute. \b asserts a word boundary and '-' is not a
+  // word character, so each of these used to satisfy the guard that was written
+  // to require it. A <main data-id="main"> is not the skip link's target — the
+  // served page had getElementById('main') === null and Enter on the link left
+  // focus on the link itself — while the suite stayed green.
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main data-id="main" tabindex="-1"></main>'),
+    'data-id="main" is not id="main", so the landmark is not the skip link target'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" href="#main">Skip to content</a><main id="main" data-tabindex="-1"></main>'),
+    'data-tabindex="-1" is not tabindex="-1", so the landmark is not focusable'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a data-class="skip-link" href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'data-class="skip-link" is not the styling class, so this is not the bypass'
+  );
+  assert.ok(
+    !skipLinkFocusesMain('<a class="skip-link" data-href="#main">Skip to content</a><main id="main" tabindex="-1"></main>'),
+    'data-href="#main" is not href="#main", so the link targets nothing'
+  );
+
+  // The order clause reads main.index, so a document with no <main> or no <a>
+  // has to answer false rather than throw.
+  assert.equal(
+    skipLinkFocusesMain('<a class="skip-link" href="#main">S</a>'), false, 'no main landmark is not a bypass'
+  );
+  assert.equal(
+    skipLinkFocusesMain('<main id="main" tabindex="-1"></main>'), false, 'no link at all is not a bypass'
+  );
+  assert.equal(skipLinkFocusesMain(''), false, 'an empty document is not a bypass');
+});
+
+// The other end of the same link: the one line that stops the skip link's focus
+// from painting the global accent ring around all 1100px of main can be deleted
+// with a green suite unless something here asserts it. Same currency as the
+// .page-title rule test further down, applied to the stylesheet.
+test('the #main focus suppression still carries the declaration the skip target depends on', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const rule = /#main:focus\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, 'src/web/styles.css defines a #main:focus rule');
+  assert.match(rule[1], /outline:\s*none\s*;/, 'the focused landmark paints no ring');
+});
+
+// The other end of that same rule, in the mode that strips author colours:
+// Chromium honours `outline: none` under forced-colors and substitutes no
+// system colour of its own, while every other focusable element keeps its
+// ring. Without the carve-out, <main> would be the one focusable thing on the
+// page with no indicator, at the exact moment a forced-colors user needs to
+// know the bypass ran. The default-mode suppression above is not the thing
+// under test; this asserts only that the mode gets one back.
+test('the #main focus suppression is restored inside forced-colors so the landmark is not the one focusable thing with no indicator', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const carveOut = /@media\s*\(forced-colors:\s*active\)\s*\{[^@]*?#main:focus\s*\{([^}]*)\}/.exec(css);
+  assert.ok(carveOut, 'src/web/styles.css restores the focus ring inside @media (forced-colors: active)');
+  assert.match(
+    carveOut[1], /outline:\s*2px\s+solid\s+CanvasText\s*;/,
+    'the carve-out paints a system colour, so it survives the mode'
+  );
+
+  // Source order is the whole mechanism, and nothing else in the suite names
+  // it: both selectors are 1,1,0, so the carve-out wins ONLY by coming after
+  // the bare rule. Moved above it, the landmark goes back to painting no
+  // indicator. The test above goes red under that reordering, but at a
+  // property it is not about, so the ordering is named here directly.
+  const bareRuleAt = css.search(/#main:focus\s*\{/);
+  assert.ok(bareRuleAt !== -1, 'src/web/styles.css defines the bare #main:focus rule');
+  assert.ok(
+    carveOut.index > bareRuleAt,
+    'the forced-colors carve-out is declared AFTER the bare #main:focus rule, at equal specificity'
+  );
+});
+
+// mainOf decides which landmark the heading-hierarchy assertion above reads,
+// so its id requirement is load-bearing: relaxed, the assertion would be
+// satisfied by some other <main> and the 25 shells would still pass. Issue
+// #61 restores it and pins both the acceptances and the rejections, so a
+// second relaxation cannot go unnoticed again.
+test('the main matcher still requires id="main" on the landmark it captures', () => {
+  assert.equal(mainOf('<main id="main"><h1>Command dashboard</h1></main>'), '<h1>Command dashboard</h1>', 'the shipped markup matches');
+  assert.equal(mainOf('<main id="main" tabindex="-1"><h1>X</h1></main>'), '<h1>X</h1>', 'the tabindex #52 added still matches');
+  assert.equal(mainOf('<main tabindex="-1" id="main"><h1>X</h1></main>'), '<h1>X</h1>', 'attribute order is not pinned');
+  assert.equal(mainOf('<main tabindex="-1" id="main" lang="en"><h1>X</h1></main>'), '<h1>X</h1>', 'a fourth attribute is tolerated');
+
+  assert.equal(mainOf('<main><h1>X</h1></main>'), '', 'a main with no id is not the skip link target');
+  assert.equal(mainOf('<main id="other"><h1>X</h1></main>'), '', 'another id is not the skip link target');
+  assert.equal(
+    mainOf('<main data-id="main"><h1>X</h1></main>'), '',
+    'data-id="main" is not id="main" (issue #61: \b matched the tail of the data-* spelling)'
+  );
 });
 
 // The matcher above was relaxed on purpose (issue #46), so it is pinned here
@@ -220,29 +478,20 @@ test('without an override the header still follows the store, exactly as before'
 test('a legacy mixed-currency batch on an otherwise empty tenant reads ₹3,000.00 on the card and the API agrees', async () => {
   const repos = freshRepos();
   repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
-  const occurredAt = '2026-09-25T08:00:00.000Z';
-  const envelope = (event_id, event_type, payload) => {
-    const validated = validateEvent({
-      event_id, event_type, tenant_id: 'tenant_demo', schema_version: '1', occurred_at: occurredAt, payload,
-    });
-    assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
-    return validated.event;
-  };
   // Ingest would 400 the USD row against the INR tenant (CURRENCY_MISMATCH),
   // so the only way a live database holds both is the repository route:
   // a pre-fix legacy batch appended straight into the append-only table.
   const legacy = [
-    envelope('evt_ac_inr_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'INR' }),
-    envelope('evt_ac_usd_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'USD' }),
-    envelope('evt_ac_qualified', 'lead_qualified', { campaign: 'legacy', lead_id: 'lead_ac', session_id: 'sess_ac' }),
+    validatedEnvelope('tenant_demo', 'evt_ac_inr_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'INR' }),
+    validatedEnvelope('tenant_demo', 'evt_ac_usd_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'USD' }),
+    validatedEnvelope('tenant_demo', 'evt_ac_qualified', 'lead_qualified', { campaign: 'legacy', lead_id: 'lead_ac', session_id: 'sess_ac' }),
   ];
   for (const event of legacy) {
     repos.rawEvents.append(event);
   }
 
   const html = await renderPage('/', { repositories: repos });
-  const cplCard = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
-  const cplText = cplCard.match(/kpi-value">([^<]+)</)[1];
+  const cplText = qualifiedCplValue(html);
   assert.equal(cplText, '₹3,000.00', `dashboard CPL must exclude the USD row, got ${cplText}`);
 
   const app = buildApp({ repositories: repos });
@@ -258,24 +507,56 @@ test('a legacy mixed-currency batch on an otherwise empty tenant reads ₹3,000.
   }
 });
 
+// The other direction of the same rule, and the one a half-applied fix gets
+// wrong: a stored code that names NO currency matches no spend row, so the same
+// exclusion has to move the tile and the API together. Read rupees here while
+// the API read null would be the same disagreement, inverted.
+test('a tenant row naming no currency reads the em-dash on the dashboard and null from the API', async () => {
+  const repos = freshRepos();
+  // The row is held at 'ZZZ' first, and the INR spend behind it is appended
+  // through the repository rather than posted: ingest 400s a rupee against
+  // this row, which is the point. A live database only reaches this state the
+  // same way a pre-fix batch did.
+  assert.equal(repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'ZZZ' }).currency, 'ZZZ');
+  const legacy = [
+    validatedEnvelope('tenant_demo', 'evt_zzz_read_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 7_200_000_000, currency: 'INR' }),
+    ...[1, 2, 3].map((n) => validatedEnvelope('tenant_demo', `evt_zzz_read_qualified_${n}`, 'lead_qualified', { campaign: 'legacy', lead_id: `lead_zzz_${n}`, session_id: 'sess_zzz' })),
+  ];
+  for (const event of legacy) {
+    assert.equal(repos.rawEvents.append(event).appended, true, `fixture: ${event.event_id} must append`);
+  }
+
+  const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+  const cplText = qualifiedCplValue(html);
+  assert.equal(cplText, '—', `a code naming no currency draws the em-dash, got ${cplText}`);
+  assert.doesNotMatch(html, /2,400\.00/, 'the rupee figure the old read drew is gone');
+  assert.doesNotMatch(html, /ZZZ/, 'and the raw code never reaches a reader');
+
+  const app = buildApp({ repositories: repos });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  try {
+    const metrics = await (await fetch(`http://127.0.0.1:${port}/v1/metrics`)).json();
+    assert.equal(metrics.spend_micros, 0, 'the API excludes what the tile stopped drawing');
+    assert.equal(metrics.qualified_cpl_micros, null, 'API CPL is null on the same row the tile draws — for');
+    assert.equal(metrics.qualified_volume, 3, 'and the volume survives a currency its spend side cannot name');
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 test('the dashboard KPI strip excludes foreign-currency legacy spend like the metrics API does', async () => {
   const repos = seededRepos('pages-mixed-currency-');
   // The demo tenant is INR with one 7_200_000_000 INR spend and 3 qualified
   // leads after the seed, so the legacy batch adds: an INR spend of exactly
   // 3_000_000_000 (matching the AC's amount), a USD spend of 3_000_000_000
   // that must never enter either surface's sum, and one more qualified lead.
-  const occurredAt = '2026-09-25T08:00:00.000Z';
-  const envelope = (event_id, event_type, payload) => {
-    const validated = validateEvent({
-      event_id, event_type, tenant_id: 'tenant_demo', schema_version: '1', occurred_at: occurredAt, payload,
-    });
-    assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
-    return validated.event;
-  };
   const legacy = [
-    envelope('evt_legacy_inr_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'INR' }),
-    envelope('evt_legacy_usd_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'USD' }),
-    envelope('evt_legacy_qualified', 'lead_qualified', { campaign: 'legacy', lead_id: 'lead_legacy', session_id: 'sess_legacy' }),
+    validatedEnvelope('tenant_demo', 'evt_legacy_inr_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'INR' }),
+    validatedEnvelope('tenant_demo', 'evt_legacy_usd_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 3_000_000_000, currency: 'USD' }),
+    validatedEnvelope('tenant_demo', 'evt_legacy_qualified', 'lead_qualified', { campaign: 'legacy', lead_id: 'lead_legacy', session_id: 'sess_legacy' }),
   ];
   // Directly through rawEvents.append: ingest would 400 the USD row today,
   // so the repository layer is the only way a pre-fix database looks like this.
@@ -287,8 +568,7 @@ test('the dashboard KPI strip excludes foreign-currency legacy spend like the me
   assert.deepEqual(bar, [true, true, true], 'fixture: all three legacy rows appended');
 
   const html = await renderPage('/', { repositories: repos });
-  const cplCard = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
-  const cplText = cplCard.match(/kpi-value">([^<]+)</)[1];
+  const cplText = qualifiedCplValue(html);
   // Only the INR rows enter the sum: (7_200 + 3_000) / 4 = 2_550_000_000 = ₹2,550.00.
   assert.equal(cplText, '₹2,550.00', `dashboard CPL must exclude the USD row, got ${cplText}`);
 
@@ -783,6 +1063,61 @@ function draftHarness({ fields = {}, stored = {} } = {}) {
   return { fields: made, listeners, storage };
 }
 
+// A minimal DOM for the error shell, for the claim issue #61 exists to lock:
+// nothing holds keyboard focus before the user has pressed a key (AC-5). It
+// records focus() calls rather than faking document.activeElement, because the
+// property under test is the side effect on the document, not a value read
+// back out of a stub. The panel, its own <h2> and the retry inside it are the
+// whole shell; the retry is also what the ?state= strip is driven from.
+function errorShellHarness({ panel = true, heading = 'Replay evaluation failed for scenario replay-tracking-outage', retryHref = '/journal', href = 'http://localhost:3000/journal?state=error' } = {}) {
+  const focused = [];
+  const navigated = [];
+  const listeners = new Map();
+  const liveRegion = { textContent: '' };
+  const retry = {
+    dataset: { action: 'retry', retryHref },
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    focus() {
+      focused.push('BUTTON[data-action=retry]');
+    },
+  };
+  const errorPanel = {
+    querySelector: (selector) => (selector === 'h2' && heading ? { textContent: heading } : null),
+  };
+  globalThis.document = {
+    title: 'Decision journal · Autonomous Growth OS',
+    body: { dataset: { state: 'error' } },
+    getElementById: (id) => (id === 'live-region' ? liveRegion : null),
+    querySelectorAll: (selector) => (selector === '[data-action="retry"]' && panel ? [retry] : []),
+    // Agnostic about how the panel is addressed, and that is the whole point.
+    // A real querySelector searches the whole tree, so the descendant selector
+    // '.panel-error [data-action="retry"]' resolves to the retry INSIDE the
+    // panel. A stub that answers only the exact string '.panel-error' returns
+    // null for that selector — and the pre-fix client.js, which asked only that
+    // descendant question, then records no focus call at all, so the test below
+    // passes green against the very defect it was written for.
+    querySelector: (selector) => {
+      if (!panel || !selector.includes('.panel-error')) {
+        return null;
+      }
+      return selector.includes('[data-action="retry"]') ? retry : errorPanel;
+    },
+    addEventListener: () => {},
+  };
+  globalThis.window = {
+    localStorage: { getItem: () => null, setItem: () => {} },
+    location: { origin: 'http://localhost:3000', href, replace: (to) => navigated.push(to) },
+  };
+  return {
+    focused,
+    liveRegion,
+    navigated,
+    click: () => listeners.get('click')(),
+  };
+}
+
 let clientLoad = 0;
 async function loadClient() {
   clientLoad += 1;
@@ -823,6 +1158,93 @@ test('typed composer fields are saved to localStorage and restored on the next l
   }
 });
 
+// Issue #61 BUG-1, the runtime half of a guarantee the rest of this file only
+// checks as document order. client.js used to focus the failing panel's retry
+// action on load, so on every error shell document.activeElement was already
+// BUTTON[data-action=retry] before the user pressed anything and the first Tab
+// continued from there — the skip link was never the first stop. Nothing else
+// here could see it: every other guard in this file reads an HTML string, and
+// this is a script side effect. Asserted on the error shell AND on a shell
+// with no panel at all, so the claim is "nothing takes focus", not "the panel
+// takes less of it".
+test('a fresh load focuses nothing on the error shell, so the first Tab reaches the skip link', async () => {
+  try {
+    const errorShell = errorShellHarness();
+    await loadClient();
+    assert.deepEqual(errorShell.focused, [], 'no focus is taken before the user presses a key');
+
+    const noPanel = errorShellHarness({ panel: false });
+    await loadClient();
+    assert.deepEqual(noPanel.focused, [], 'and a shell with no error panel takes no focus either');
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// What the load-time focus was standing in for. On a region-level failure
+// (?meta_error=quota) body data-state is still 'ideal', so the page-state
+// announcement names nothing that failed and the failure was announced
+// nowhere. Locked as a contract of its own: without it, deleting the focus
+// would have left a failed page that says nothing. Both halves — what failed
+// and what to do about it — and the copy is the panel's own <h2>, which
+// docs/ui.md already requires the panel to state, so it cannot drift.
+test('an error panel is announced through the live region, by name and with a next action', async () => {
+  try {
+    const errorShell = errorShellHarness();
+    await loadClient();
+    assert.match(
+      errorShell.liveRegion.textContent,
+      /Replay evaluation failed for scenario replay-tracking-outage/,
+      'the live region names the failure the panel itself names'
+    );
+    assert.match(
+      errorShell.liveRegion.textContent,
+      /Use Retry to try again\./,
+      'and points at the Retry action'
+    );
+
+    // The defensive half of the new branch: a panel that ever stops rendering
+    // an <h2> degrades to a generic sentence rather than throwing on load.
+    const headingless = errorShellHarness({ heading: null });
+    await loadClient();
+    assert.equal(
+      headingless.liveRegion.textContent,
+      'This page failed to load Use Retry to try again.',
+      'a panel with no heading still announces, and does not throw'
+    );
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
+// The behaviour the autofocus displaced, minus the focus steal: the retry is
+// still wired, still announces, and still reloads the route with the ?state=
+// preview override stripped so the user lands on the real page. Both sources of
+// the target are exercised, because the button carries data-retry-href and a
+// shell that does not falls back to the current location.
+test('the wired retry still announces and still reloads the route with the preview override stripped', async () => {
+  try {
+    const fromHref = errorShellHarness();
+    await loadClient();
+    fromHref.click();
+    assert.deepEqual(fromHref.navigated, ['/journal']);
+    assert.equal(fromHref.liveRegion.textContent, 'Retrying…');
+
+    const fromLocation = errorShellHarness({ retryHref: '' });
+    await loadClient();
+    fromLocation.click();
+    assert.deepEqual(
+      fromLocation.navigated, ['/journal'],
+      'with no data-retry-href the current location is used and ?state= is stripped'
+    );
+  } finally {
+    delete globalThis.document;
+    delete globalThis.window;
+  }
+});
+
 test('an empty database still renders the research-prompt empty state', async () => {
   const repos = freshRepos();
   repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'INR' });
@@ -856,17 +1278,7 @@ test('a non-INR tenant sees its own currency on opportunity value, cost and the 
   // The bug the hardcoded rupee sign had: a USD tenant read 6,000 micros as
   // ₹6,000. Every renderer now goes through the tenant's currency, so the page
   // draws the same amounts the tenant's own account would.
-  const repos = freshRepos();
-  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: 'USD' });
-  repos.opportunities.create({
-    tenant_id: 'tenant_usd',
-    opportunity_id: 'opp_usd_expensive',
-    score: 0.9208,
-    record: {
-      opportunity_id: 'opp_usd_expensive', tenant_id: 'tenant_usd', name: 'US bet',
-      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
-    },
-  });
+  const repos = usdRepos();
 
   const row = (await renderPage('/opportunities', { repositories: repos }))
     .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
@@ -903,17 +1315,7 @@ test('a non-INR tenant sees its own currency on opportunity value, cost and the 
 // what went stale in the #43 work order. A function or branch name moves with
 // the code, and the mutation is what keeps the claim honest.
 test('a non-INR tenant sees its own currency on every branch that draws money', async () => {
-  const repos = freshRepos();
-  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: 'USD' });
-  repos.opportunities.create({
-    tenant_id: 'tenant_usd',
-    opportunity_id: 'opp_usd_expensive',
-    score: 0.9208,
-    record: {
-      opportunity_id: 'opp_usd_expensive', tenant_id: 'tenant_usd', name: 'US bet',
-      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
-    },
-  });
+  const repos = usdRepos();
   repos.experiments.create({
     tenant_id: 'tenant_usd',
     experiment_id: 'exp_usd_running',
@@ -926,27 +1328,27 @@ test('a non-INR tenant sees its own currency on every branch that draws money', 
     },
   });
 
-  const occurredAt = '2026-09-25T08:00:00.000Z';
-  const envelope = (event_id, event_type, payload) => {
-    const validated = validateEvent({
-      event_id, event_type, tenant_id: 'tenant_usd', schema_version: '1', occurred_at: occurredAt, payload,
-    });
-    assert.equal(validated.ok, true, `fixture: ${event_id} must validate`);
-    return validated.event;
-  };
   for (const event of [
-    envelope('evt_usd_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'USD' }),
-    envelope('evt_usd_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_us', session_id: 'sess_us' }),
+    validatedEnvelope('tenant_usd', 'evt_usd_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'USD' }),
+    validatedEnvelope('tenant_usd', 'evt_usd_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_us', session_id: 'sess_us' }),
   ]) {
     repos.rawEvents.append(event);
   }
-  // Before any money assertion: the qualified lead is what stops the CPL tile
-  // reading the em-dash. If that has gone, the '$3,000.00' assertion below is
-  // measuring the fixture, not the renderer.
+  // Before any money assertion, the fixture's own arithmetic is checked, so a
+  // broken fixture fails HERE rather than surfacing at the money assertion as
+  // 'got —', which reads as a currency regression. Both halves of the CPL
+  // need guarding: the qualified lead is the denominator, and the spend row is
+  // the numerator. Guarding only the denominator lets a fixture that stopped
+  // carrying its amount pass this guard and then fail as a currency bug —
+  // which is exactly what the guard's own comment claims to prevent.
   const seeded = repos.rawEvents.listByTypes('tenant_usd', ['spend.observed', 'lead_qualified']);
   assert.equal(
     seeded.filter((event) => event.event_type === 'lead_qualified').length, 1,
     'the CPL tile has a qualified volume to divide by, so it is not the em-dash',
+  );
+  assert.equal(
+    seeded.find((event) => event.event_type === 'spend.observed')?.payload?.amount_micros, 3_000_000_000,
+    'the fixture still carries the spend the $3,000.00 CPL is 3_000_000_000 divided by',
   );
 
   // Every page is rendered twice: the ideal branch and the partial one, because
@@ -971,8 +1373,7 @@ test('a non-INR tenant sees its own currency on every branch that draws money', 
     assert.doesNotMatch(card, /₹/, `no rupee sign in the experiment card on ${where}`);
 
     const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider(), ...opts });
-    const cplTile = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
-    const cplText = cplTile.match(/kpi-value">([^<]+)</)[1];
+    const cplText = qualifiedCplValue(html);
     assert.equal(cplText, '$3,000.00', `Qualified CPL in dollars on ${where}, got ${cplText}`);
     // Scoped to their own sections: the CPL value and the insight spend are
     // both dollar strings, so an unscoped assertion lets one site's regression
@@ -983,6 +1384,141 @@ test('a non-INR tenant sees its own currency on every branch that draws money', 
     assert.match(insights, /\$4,000\.00/, `the insight spend in dollars on ${where}`);
     assert.doesNotMatch(adSets + insights, /₹/, `no rupee sign in the Meta sections on ${where}`);
   }
+});
+
+// A stored currency code is an arbitrary string: the QA repro sets the column
+// with a raw SQL UPDATE, which never reaches tenants.create, so 'usd', 'Usd'
+// and ' USD ' all arrive in the read path. These name the SAME unit of account
+// as 'USD', and every test here fails against the exact-match membership test
+// this replaces — a 'usd' tenant drew all six of its dashboard amounts as
+// rupees and its own spend as foreign.
+test('a tenant stored as lowercase usd renders its own currency on the opportunity row', async () => {
+  const repos = usdRepos('usd');
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /value \$6,000\.00/, 'the stored row names the same currency as USD');
+  assert.match(row, /cost \$1,900\.00/);
+  assert.doesNotMatch(row, /₹/, 'no rupee sign survives anywhere on a usd row');
+});
+
+test('usd, Usd and a padded USD render byte-identical money, so case is not a currency', async () => {
+  // Compared against each other rather than eyeballed: three renders that
+  // each happen to look right is a weaker claim than three that are equal,
+  // and the baseline is pinned too so the comparison cannot pass vacuously
+  // on three empty lists.
+  const renders = [];
+  for (const stored of ['usd', 'Usd', ' USD ']) {
+    renders.push(opportunityRowMoney(await renderPage('/opportunities', { repositories: usdRepos(stored) })));
+  }
+  assert.deepEqual(renders[0], ['$6,000.00', '$1,900.00'], 'the usd row draws its own unit, in render order');
+  assert.deepEqual(renders[1], renders[0], 'Usd draws exactly what usd draws');
+  assert.deepEqual(renders[2], renders[0], 'a padded code draws exactly what usd draws');
+});
+
+test('a usd tenant with its own USD spend gets a number for Qualified CPL, not the em-dash', async () => {
+  // The exclusion in computeFunnel used to see the tenant row's 'usd' and the
+  // spend row's 'USD' as two currencies, so the tenant's own spend was dropped
+  // and the tile read '—'. The figure is this fixture's own: one qualified
+  // lead and no seed rows, so 3_000_000_000 / 1. The seeded database behind
+  // the browser criterion divides the same amount by three.
+  const repos = usdRepos('usd');
+  for (const event of [
+    validatedEnvelope('tenant_usd', 'evt_casing_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'USD' }),
+    validatedEnvelope('tenant_usd', 'evt_casing_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_casing', session_id: 'sess_casing' }),
+  ]) {
+    repos.rawEvents.append(event);
+  }
+  const cplText = qualifiedCplValue(await renderPage('/', { repositories: repos }));
+  assert.equal(cplText, '$3,000.00', `a usd tenant's own USD spend must reach the CPL, got ${cplText}`);
+});
+
+test("a usd tenant whose only spend row is a different currency still reads the em-dash", async () => {
+  // The case an earlier reading of this ticket mistook for the defect. It is
+  // not: computeFunnel excludes spend denominated in a currency other than
+  // the tenant's, and a tenant whose only spend is genuinely foreign really
+  // does have no CPL to show. Ingest would 400 this INR row against the usd
+  // tenant, so — as in the mixed-currency legacy tests above — the only way a
+  // database holds both is the append-only repository route.
+  //
+  // Pinned so the em-dash cannot later be "fixed" by summing foreign-currency
+  // spend, which would put a real number in front of a reader denominated in
+  // the wrong unit. An em-dash that means "we do not know" is the honest one.
+  const repos = usdRepos('usd');
+  for (const event of [
+    validatedEnvelope('tenant_usd', 'evt_foreign_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'INR' }),
+    validatedEnvelope('tenant_usd', 'evt_foreign_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_foreign', session_id: 'sess_foreign' }),
+  ]) {
+    repos.rawEvents.append(event);
+  }
+  const rows = repos.rawEvents.listByTypes('tenant_usd', ['spend.observed', 'lead_qualified']);
+  assert.equal(computeFunnel(rows, 'USD').spend_micros, 0, 'the foreign row never enters the sum');
+  assert.equal(computeFunnel(rows, 'USD').qualified_volume, 1, 'the qualified lead still counts');
+  const cplText = qualifiedCplValue(await renderPage('/', { repositories: repos }));
+  assert.equal(cplText, '—', 'no CPL is knowable, so the tile says so rather than inventing one');
+});
+
+test("a usd tenant's dashboard Meta tables render dollars", async () => {
+  const repos = usdRepos('usd');
+  const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+  const adSets = html.match(/data-testid="meta-adSets"[\s\S]*?<\/section>/)[0];
+  const insights = html.match(/data-testid="meta-insights"[\s\S]*?<\/section>/)[0];
+  assert.match(adSets, /\$500\.00/, 'the ad-set budget is in the tenant currency');
+  assert.match(insights, /\$4,000\.00/, 'the insight spend is in the tenant currency');
+  assert.doesNotMatch(adSets + insights, /₹/, 'no rupee amount in the Meta sections');
+});
+
+test('a usd tenant still renders the last-good Meta snapshot in dollars on the error path', async () => {
+  // The last-good path reads the same tenant currency as the ideal one, from a
+  // snapshot rather than a live read, so it is a separate code path to the one
+  // the ideal-page test exercises.
+  const repos = usdRepos('usd');
+  const html = await renderPage('/', {
+    repositories: repos,
+    metaProvider: new FakeMetaAdsProvider({ failureMode: 'quota' }),
+    metaError: 'quota',
+  });
+  assert.match(html, /data-testid="meta-last-good">Meta last good sync /, 'the tables are the last-good snapshot');
+  assert.match(html, /\$500\.00/, 'the snapshot ad-set budget is in the tenant currency');
+  assert.match(html, /\$4,000\.00/, 'the snapshot insight spend is in the tenant currency');
+  assert.doesNotMatch(html, /₹/);
+});
+
+test('an unrecognised tenant currency is still resolved to the INR fallback, never leaked', async () => {
+  // Case and whitespace are not currency errors, so canonicalCurrency resolves
+  // them. A code that names no ISO currency is genuine bad data, and the
+  // documented fallback is unchanged: it renders, and it does not 500 or print
+  // the raw code at a reader.
+  const repos = usdRepos('ZZZ');
+  const row = (await renderPage('/opportunities', { repositories: repos }))
+    .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
+  assert.match(row, /value ₹6,000\.00/, 'an unknown code still falls back to the repo default');
+  const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+  assert.doesNotMatch(html, /ZZZ/, 'the raw code never reaches a reader');
+});
+
+test('a bad code still renders a symbol on every money() surface, and no raw micros anywhere', async () => {
+  // The seven non-funnel call sites the currency seam change deliberately does
+  // not move. They must look exactly as they did: an unknown code relabels to
+  // the repo default, which is money()'s guard, and the funnel is the only
+  // consumer that COMPARES codes. A sweep is the only thing that catches a
+  // call site the change moved that nobody enumerated, so it asserts the
+  // property rather than the amounts: a symbol, or no amount at all.
+  const repos = usdRepos('ZZZ');
+  for (const route of ['/', '/opportunities', '/experiments']) {
+    const html = await renderPage(route, { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+    assert.doesNotMatch(html, /ZZZ/, `${route} never prints the raw code`);
+    assert.doesNotMatch(html, /NaN|undefined/, `${route} renders no failed-format sentinel`);
+    // Text content only: the composer's cap input carries a micros placeholder
+    // in an attribute, and a raw integer in a placeholder is a form default,
+    // not a rendered amount. Seven digits is above every non-money count these
+    // pages print — the largest is the insights table's 6-digit impressions.
+    const text = html.replace(/<[^>]*>/g, ' ');
+    assert.doesNotMatch(text, /\d{7,}/, `${route} renders no bare micros integer`);
+  }
+  // And the one surface that definitely does draw money still draws it, in the
+  // repo default, rather than quietly drawing nothing.
+  const opportunities = await renderPage('/opportunities', { repositories: repos });
+  assert.deepEqual(opportunityRowMoney(opportunities), ['₹6,000.00', '₹1,900.00'], 'the opportunity amounts still render, relabelled');
 });
 
 test('the Meta error shell renders the last-good money cells in the tenant currency too', async () => {
@@ -2289,4 +2825,269 @@ test('the cascade guard resolves the page h1 and its chain from the markup', asy
     + 'a proof, not a guess, which is the one direction the guard is allowed to be quiet in');
   assert.equal(branchReaches('[lang]', stripped.chain, 0), true,
     'while ground (b) is unchanged, because dropping a class says nothing about what reaches the root');
+});
+
+// Issue #48: the narrow-viewport overflow is a layout constraint rather than a
+// styling choice, and a stylesheet is not observable from a rendered page — so
+// these two declarations are pinned here for the same reason the #main:focus
+// and .page-title rules above are. Delete either one and every page overflows
+// sideways again below ~1100px, with a green browser run to prove it.
+//
+// Every matching rule, not the first. The first-match form could not see a
+// later rule re-declaring either property to something else, which is exactly
+// how this fix gets silently undone: append `#main > * { min-width: auto }` or
+// `.table-scroll { overflow-x: visible }` to the end of the stylesheet and the
+// old assertion still passed, with the declarations it names both overridden.
+test('the narrow layout still carries the two declarations it depends on', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+
+  const itemRules = [...css.matchAll(/#main\s*>\s*\*\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(itemRules.length > 0, 'src/web/styles.css lifts the floor on the #main grid items');
+  itemRules.forEach((body, i) => {
+    const values = [...body.matchAll(/min-width\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['0'],
+      `#main > * rule ${i + 1} must declare min-width: 0 and nothing else, or a later rule re-breaks the layout; it declared ${JSON.stringify(values)}`);
+  });
+
+  const regionRules = [...css.matchAll(/\.table-scroll\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(regionRules.length > 0, 'src/web/styles.css defines a .table-scroll rule');
+  regionRules.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-x\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['auto'],
+      `.table-scroll rule ${i + 1} must declare overflow-x: auto and nothing else, or a later rule re-breaks the layout; it declared ${JSON.stringify(values)}`);
+  });
+});
+
+// Issue #67: the other half of the same constraint, pinned in the same
+// deliberate style and for the same reason — a stylesheet is not observable
+// from a rendered page, and the browser check that would catch this is not in
+// CI. `overflow-wrap: anywhere` on the four card lists is what keeps a long
+// unbreakable name inside its own card instead of scrolling the page sideways.
+//
+// #71 findings 2, 3 and 5. The pin this replaces asserted on a substring of
+// the rule's raw text, so a class renamed to .opportunity-roww satisfied it,
+// and counted every overflow-wrap rule in the file, so a .page-footer rule
+// that cannot override the card rule failed it. Three changes: exact compound
+// match instead of substring, comments stripped before parsing (a comment has
+// no braces, so prose naming a class was being swallowed into the selector),
+// and the "no later override" check scoped to rules that touch a card class
+// instead of counted across the file.
+//
+// #71 finding 2, other end: the class list is checked against the markup the
+// server actually renders. The stylesheet half of this test cannot tell a
+// selector that matches a rendered element from one that matches nothing, so
+// each class is also required in the HTML of the route that renders it.
+test('the card lists still carry the wrap that keeps an unbreakable name inside its own card', async () => {
+  const CARD_CLASSES = ['.experiment-card', '.opportunity-row', '.approval-card', '.learning-card'];
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  // Comments carry no braces, so a class named only in prose would otherwise be
+  // swallowed into the selector group and satisfy the assertion below.
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const rules = [...stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .map((match, index) => ({ selector: match[1].trim(), body: match[2], index }))
+    .filter((rule) => /overflow-wrap\s*:/.test(rule.body));
+
+  const card = rules.find((rule) => rule.selector.split(',').some((part) => CARD_CLASSES.includes(part.trim())));
+  assert.ok(card, 'src/web/styles.css declares overflow-wrap on the card lists');
+
+  // Exact compound match, not a substring: '.opportunity-roww' and '.opportunity-row-old'
+  // both contain '.opportunity-row', and a `*` descendant states nothing the bare
+  // class does not, because overflow-wrap is inherited.
+  assert.deepEqual(card.selector.split(',').map((part) => part.trim()).sort(), [...CARD_CLASSES].sort(),
+    `the wrap rule covers exactly these four classes as bare selectors — a renamed or dropped class matches nothing in the page: ${JSON.stringify(CARD_CLASSES)}`);
+
+  const values = [...card.body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+  assert.deepEqual(values, ['anywhere'],
+    'the wrap is anywhere and not break-word: break-word creates the break opportunity but leaves the intrinsic min-content width alone, so a grid track floored at min-content still sizes to the whole string');
+
+  // Scoped to the card classes, so a rule that cannot override them does not turn
+  // the suite red — appending `.page-footer { overflow-wrap: anywhere; }` must pass.
+  for (const later of rules.filter((rule) => rule.index > card.index)) {
+    const touched = later.selector.split(',').map((part) => part.trim()).filter((part) => CARD_CLASSES.includes(part));
+    assert.deepEqual(touched, [],
+      `a later rule re-declares overflow-wrap on ${touched.join(', ')}, which overrides the card rule it is meant to protect`);
+  }
+
+  // #71 finding 2, closed: a selector that matches nothing in a real page is the
+  // one mistake the stylesheet half cannot see. Each class is required in the HTML
+  // of the route that renders it, so renaming a class on the page fails here even
+  // though the stylesheet and CARD_CLASSES would both still say the old name.
+  const seeded = seededRepos('pages-card-wrap-');
+  const markup = {
+    '.experiment-card': await renderPage('/experiments', { repositories: seeded }),
+    '.opportunity-row': await renderPage('/opportunities', { repositories: seeded }),
+    '.learning-card': await renderPage('/opportunities', { repositories: seeded }),
+    '.approval-card': await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-card-wrap-approvals-') }),
+  };
+  for (const cls of CARD_CLASSES) {
+    // The markup carries the class name without the dot, and split on
+    // whitespace so a renamed class (learning-item, learning-cardw) is a
+    // different token rather than a substring of this one.
+    const tokens = new Set([...markup[cls].matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+    assert.ok(tokens.has(cls.slice(1)),
+      `the page still renders ${cls} as its own class, so the wrap rule's selector has something to match`);
+  }
+});
+
+// #71 finding 1: the wrap rule fixes the name but not the card. .approval-actions
+// was a nowrap flex row holding an <input> at its ~234px intrinsic width, so the
+// row floored the card at ~389px and .approval-card is a grid item, so the page
+// overflowed anyway — with a short name. overflow-wrap cannot reach either, so
+// the two declarations it takes are pinned here for the same reason as the ones
+// above, and the render proves both selectors have a card to match.
+//
+// #71 BUG-1: the first version of this pin required min-width: 0, which is the
+// declaration that broke the field. flex: 1 is basis 0%, so with the automatic
+// minimum removed the input is the row's only shrinkable item and took the whole
+// deficit: 59px at a 414px viewport, six characters, against 232px on the base
+// commit. The pin below states the property that is actually wanted — a readable
+// floor — rather than the one that happened to fix the overflow.
+test('the approval action row can shrink, and the selectors below have something to match', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+
+  const rows = [...css.matchAll(/\.approval-actions\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(rows.length > 0, 'src/web/styles.css defines a .approval-actions rule');
+  rows.forEach((body, i) => {
+    const values = [...body.matchAll(/flex-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['wrap'], `.approval-actions rule ${i + 1} must declare flex-wrap: wrap and nothing else, or the reason input and the two buttons cannot share a narrow card; it declared ${JSON.stringify(values)}`);
+  });
+
+  const inputs = [...css.matchAll(/\.approval-actions input\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(inputs.length > 0, 'src/web/styles.css styles the approval reason input');
+  inputs.forEach((body, i) => {
+    const widths = [...body.matchAll(/min-width\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(widths.length, 1, `the reason input rule ${i + 1} declares exactly one min-width, or which one wins is a matter of order; it declared ${JSON.stringify(widths)}`);
+    const floor = /^(\d+(?:\.\d+)?)(ch|rem|px)$/.exec(widths[0]);
+    assert.ok(floor, `the reason input rule ${i + 1} floors the field at a readable width in ch, rem or px, not at a keyword or a percentage it cannot be measured against; it declared ${JSON.stringify(widths[0])}`);
+    assert.ok(Number(floor[1]) >= 12, `the reason input rule ${i + 1} floors the field at 12 characters or more, or it collapses to six characters of what a human is typing: at a 414px viewport min-width: 0 measured 59px against this rule's 16ch; it declared ${JSON.stringify(widths[0])}`);
+  });
+
+  // The render is what makes the two pins facts about the page rather than
+  // about the file: until this, no test had ever rendered an approval card.
+  const html = await renderPage('/approvals', { repositories: pendingApprovalRepos('pages-approval-actions-') });
+  assert.match(html, /<li class="approval-card">/, 'a pending approval renders the card the pins above are about');
+  const row = /<form class="approval-actions"[\s\S]*?<\/form>/.exec(html)?.[0];
+  assert.ok(row, 'and the action row inside it');
+  assert.equal((row.match(/<button /g) ?? []).length, 2, 'the row holds the Approve and Reject buttons the flex-wrap pin is about');
+  assert.match(row, /<input id="reason-/, 'and the reason input the min-width pin is about');
+});
+
+// #71 BUG-2: the same free-text class of defect on a fifth surface. The wrap
+// rule is scoped to four server-rendered card lists, and the journal decision
+// drawer renders the same stored free text — evidence_refs, memory_refs,
+// policy_decision_id, worst_reasonable_case — by a different route, client.js
+// filling #journal-drawer-body from GET /v1/decisions/:id. Nothing rendered it
+// in any test, so nothing measured it: with 120-character unbreakable values
+// the body laid out 1229px inside 271px at a 320px viewport, and the page only
+// stayed the right width because #journal-drawer is position: fixed and so is
+// left out of document scroll width. The text was reachable by scrolling the
+// drawer sideways, which its overflow-y: auto makes overflow-x: auto.
+//
+// Unlike the card rule this one cannot be cross-checked against rendered
+// markup: the drawer body is empty in the server's HTML by design, so there is
+// no render in which the selector is known to match. That gap is the reason
+// the pin is a declaration pin and is worth stating rather than hiding.
+test('the journal decision drawer wraps the stored free text it is filled with', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const bodies = [...css.matchAll(/\.journal-drawer-body\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(bodies.length > 0, 'src/web/styles.css defines a .journal-drawer-body rule');
+  bodies.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['anywhere'],
+      `.journal-drawer-body rule ${i + 1} declares overflow-wrap: anywhere and nothing else, or a decision's stored refs scroll the drawer sideways instead of wrapping inside it: with 120-character unbreakable values the body measured 1229px of scrollWidth against 271px of clientWidth at a 320px viewport; it declared ${JSON.stringify(values)}`);
+  });
+});
+
+// #71 finding 6: the header shows tenants.list()[0].name, and src/api/routes.js
+// auto-creates an unknown tenant with name = the request's tenant_id, so that
+// name is the request's free text verbatim. .header-status is a flex row and the
+// span's automatic minimum floored the header at the whole token — 1495px of
+// scrollWidth at every width from 320 to 414. Not decoration, and the render
+// below is what makes the selector a fact about the page.
+test('the header wraps a tenant name as long as the id that created it', async () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const names = [...css.matchAll(/\.tenant-name\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(names.length > 0, 'src/web/styles.css defines a .tenant-name rule');
+  names.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['anywhere'], `.tenant-name rule ${i + 1} must declare overflow-wrap: anywhere and nothing else; it declared ${JSON.stringify(values)}`);
+  });
+
+  const long = `tenant_${'a'.repeat(130)}`;
+  const repos = freshRepos();
+  repos.tenants.create({ id: long, name: long, currency: 'INR' });
+  const html = await renderPage('/', { repositories: repos });
+  const shown = /data-testid="tenant-name">([^<]*)</.exec(html)?.[1];
+  assert.equal(shown, long, 'the header renders the whole tenant name; it wraps, it is not truncated');
+});
+
+// The other half of the same fix. Lifting the floor stops one wide table from
+// sizing the column for every sibling, but the table itself is still wider than
+// the column, so it scrolls in a region of its own. The tabindex and the name
+// are not decoration: a scroll container that cannot take focus cannot be
+// scrolled by keyboard outside Chromium, which would trade a sideways-scrolling
+// page for a table whose last columns cannot be read at all.
+//
+// Like the .page-title test above, this couples to a class name on purpose and
+// says so: the wrapper is the only handle there is on the region, and asserting
+// it on a rendered page is what makes the keyboard contract checkable.
+test('every table the five routes render is wrapped in a keyboard-reachable, named region', async () => {
+  const repos = seededRepos('pages-table-scroll-');
+  const shells = [
+    ['/', { metaProvider: new FakeMetaAdsProvider() }],
+    ['/journal', {}],
+    // The error shell keeps the journal table (it is the record the failure
+    // preserved), so the region it scrolls in has to be there too.
+    ['/journal', { override: 'error' }],
+    ['/opportunities', {}],
+    ['/experiments', {}],
+    ['/approvals', {}],
+  ];
+  const labels = {};
+
+  for (const [route, options] of shells) {
+    const where = `${route}${options.override ? `?state=${options.override}` : ''}`;
+    const html = await renderPage(route, { repositories: repos, ...options });
+    const tables = html.match(/<table[\s>]/g) ?? [];
+    const wrappers = html.match(/<div class="table-scroll"[^>]*>/g) ?? [];
+    // Cardinality is not the claim. An equal count is satisfied just as well by
+    // an empty region sitting beside a bare table — and a bare table that
+    // nothing can scroll to is exactly what the keyboard contract below is
+    // about — so containment is asserted directly.
+    const wrapped = html.match(/<div class="table-scroll"[^>]*>\s*<table[\s>]/g) ?? [];
+    assert.equal(wrappers.length, tables.length, `${where}: every table has a region, and nothing else does`);
+    assert.equal(wrapped.length, tables.length,
+      `${where}: every table opens inside a region — an equal count of the two is satisfied just as well by an empty region beside a bare table, and a bare table is exactly what the keyboard contract below is about`);
+
+    labels[where] = [];
+    for (const [i, tag] of wrappers.entries()) {
+      const named = /\baria-label="([^"]*)"/.exec(tag);
+      assert.ok(named, `${where}: region ${i + 1} of ${wrappers.length} carries an aria-label, so it has an accessible name`);
+      const label = named[1];
+      labels[where].push(label);
+      assert.match(tag, /\btabindex="0"/, `${where}: ${label} takes focus, or its last columns are unreachable by keyboard`);
+      assert.match(tag, /\brole="region"/, `${where}: ${label} is announced as a region`);
+      assert.notEqual(label, '', `${where}: the region has a non-empty accessible name`);
+    }
+  }
+
+  assert.ok(labels['/'].includes('Meta insights table'), 'the Meta panels name their table');
+  assert.ok(labels['/journal'].includes('Decision journal table'), 'the journal names its table');
+  assert.ok(labels['/journal?state=error'].includes('Decision journal table'), 'the preserved journal table is named too');
+  assert.ok(
+    labels['/approvals'].includes('Autonomy posture by action class table'),
+    'the approvals posture table names itself'
+  );
+});
+
+test('a page that renders no table renders no region, so the count above is not vacuous', async () => {
+  const empty = await renderPage('/', { repositories: freshRepos() });
+  assert.doesNotMatch(empty, /<table[\s>]/, 'the empty dashboard renders no table');
+  assert.doesNotMatch(empty, /table-scroll/, 'so it renders no region to put one in');
+
+  for (const route of ['/opportunities', '/experiments']) {
+    const html = await renderPage(route, { repositories: seededRepos(`pages-tablescroll-${route.slice(1)}-`) });
+    assert.doesNotMatch(html, /<table[\s>]/, `${route}: no table`);
+    assert.doesNotMatch(html, /table-scroll/, `${route}: no region`);
+  }
 });

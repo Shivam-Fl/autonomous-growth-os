@@ -183,7 +183,7 @@ Say so — in `stop.json` at the repository root, **instead of** `work-order.jso
 ```
 
 `kind` is `needs-decision` when a person has to settle something the ticket does not say, and
-`cannot-plan` for anything else that stops an honest plan. Do not comment and do not label the
+`cannot-plan` for anything else that stops an honest plan. `already-done` when every change the ticket asks for is already true on the default branch: reproduce each claim first, and put what you ran and what you saw in `reason`. A ticket the pipeline filed then closes on your evidence, so be sure. Do not comment and do not label the
 issue: a script posts your reason, records where to resume, and hands the issue to a person.
 Writing neither file reads as a crash, and gets you run again on the same question.
 
