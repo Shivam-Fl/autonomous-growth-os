@@ -202,7 +202,11 @@
       "Not measured here: chromium is present at /usr/bin/chromium but does not start in this sandbox (dbus bus errors, no DOM from --dump-dom), so no layout measurement was taken by me. The pixel figures in the issue body are carried into AC-1 through AC-6 for QA to confirm on a real runner."
     ]
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/web/styles.css",
+    "test/web/pages.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
