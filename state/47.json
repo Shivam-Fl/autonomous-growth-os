@@ -16,7 +16,11 @@
     "n": 1,
     "run": "36200725179"
   },
-  "halted": null,
+  "halted": {
+    "by": "Shivam-Fl",
+    "at": "2026-09-26T07:11:00.422Z",
+    "why": "issue closed by @Shivam-Fl"
+  },
   "pending": null,
   "work_order": null,
   "touch_paths": [],
