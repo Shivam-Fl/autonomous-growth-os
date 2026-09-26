@@ -1186,17 +1186,19 @@
       "AC-19",
       "AC-20",
       "AC-21",
-      "AC-22"
+      "AC-22",
+      "AC-23",
+      "AC-24"
     ],
-    "sha": "cecee2047ef7a85e371355eeed3eaa50f10d07b3",
-    "run_id": "36248323845",
-    "work_order_version": 4,
-    "at": "2026-09-26T15:13:40.624Z"
+    "sha": "1a3741e494a44097c7cd6cdd93488de32b6b5532",
+    "run_id": "36257676967",
+    "work_order_version": 5,
+    "at": "2026-09-26T17:29:49.805Z"
   },
   "qa_open_bugs": [
     {
-      "id": "BUG-11",
-      "title": "The guard-vs-probe agreement table cannot detect a deleted or neutered shipped-stylesheet probe, because it unions the two verdicts instead of comparing them"
+      "id": "BUG-13",
+      "title": "Half the shipped-stylesheet probe can be deleted for free: no assertion requires probeStylesheet to report a root-font-size override"
     }
   ],
   "failure_packet": {
