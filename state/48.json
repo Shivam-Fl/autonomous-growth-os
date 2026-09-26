@@ -325,7 +325,33 @@
         "detail": "Two small readability faults in the same three lines: the aria-label extraction dereferences a regex match without checking it, and the loop below re-derives `wrappers[i]` through a second variable instead of indexing directly. The first turns a missing attribute into a TypeError stack instead of the named assertion the file uses everywhere else; the second makes a paged-on reader trace two variables to see a pair that is just (tag, label).\n\n`test/web/pages.test.js:1364`\n\nEvidence: `labels[where] = wrappers.map((tag) => /\\baria-label=\"([^\"]*)\"/.exec(tag)[1]);` — if the attribute is dropped from the markup, exec() returns null and line 1364 throws `TypeError: Cannot read properties of null (reading '1')` before any assertion runs, so the failure names neither the route nor the region. The `assert.notEqual(label, '', ...)` on the next lines is unreachable for that case. Then `for (const [tag, label] of wrappers.map((w, i) => [w, labels[where][i]]))` — labels[where] was assigned from this same `wrappers` on the line above, so the map is `wrappers.map((tag, i) => [tag, labels[where][i]])` written the long way round. Surrounding tests in this file report the route and the fixture, per the validatedEnvelope() convention ('fixture: ${event_id} must validate'); this one does not.\n\nFix: Extract the attribute with a match assertion rather than a dereference, and index the same array: assert the wrapper tag matches /\\baria-label=\"([^\"]+)\"/ with a message naming the route and the region, then loop `for (const [i, tag] of wrappers.entries())` and use `match[1]` and `tag` directly. Three lines shorter and every failure names what broke."
       }
     ],
-    "pr": "65"
+    "pr": "65",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "minor",
+        "title": "A long unbreakable title still scrolls the whole page sideways at 320-414px, on every list page and the dashboard",
+        "expected": "Content too wide to wrap stays inside its own box, so document.documentElement.scrollWidth stays at or below the viewport at 320px and up, as it now does for wide tables.",
+        "actual": "With an experiment or opportunity name of ~120 unbroken characters, / and /experiments measure scrollWidth 572 against a 375px viewport and /opportunities measures 587, at 320, 375 and 414 alike. The sweep lists LI.experiment-card and its children, which sit outside every .table-scroll region, so the PR's own ancestor-aware sweep reports them as real document overflow.",
+        "repro": [
+          "Seed and boot the preview (npm run sdlc:seed, npm run sdlc:serve) and confirm GET /health answers 200.",
+          "POST an experiment whose name is a long unbreakable string, e.g. POST /v1/experiments with {\"experiment_id\":\"exp_probe\",\"tenant_id\":\"tenant_demo\",\"name\":\"https://internal.example.com/opportunities/retargeting-creative-swing-probe-do-not-use-in-production-ever-again-0123456789\",\"state\":\"running\",\"arms\":[{\"id\":\"a\",\"name\":\"control\"},{\"id\":\"b\",\"name\":\"variant\"}],\"caps\":{\"max_spend_micros\":500000000,\"max_downside_micros\":200000000},\"stopRules\":{\"min_runtime_hours\":48,\"min_sample\":100,\"success_threshold\":0.1,\"harm_threshold\":0.2},\"data_through\":\"2026-09-25T18:00:00.000Z\"} (201).",
+          "Open / at a 375px viewport and read document.documentElement.scrollWidth: 572, against innerWidth 375.",
+          "Run the sweep from qa_script step 3: LI.experiment-card, STRONG and SPAN are listed, none of them inside a .table-scroll region.",
+          "Repeat at 320px and 414px, and on /experiments and /opportunities."
+        ],
+        "area": "layout",
+        "introduced_by_pr": false,
+        "reproducible": "always",
+        "evidence": [
+          "qa-evidence/T-9-dashboard-375px-long-unbreakable-title.png",
+          "qa-evidence/T-9-experiments-375px-long-unbreakable-title.png",
+          "qa-evidence/T-11-fixture-experiment-post.txt",
+          "qa-evidence/base-vs-head-out.txt"
+        ],
+        "suspected_cause": "The fix lifts the automatic minimum on #main's direct children only (#main > * { min-width: 0 }). The floor itself is unchanged one level down, on the nested grids: .experiment-list and .approval-list are display: grid (src/web/styles.css:346-353), so their items keep an automatic minimum of min-content, and a card whose widest child is an unbreakable string sizes the track. .opportunity-list is not a grid at all, so its overflow comes from an ordinary block child refusing to break. This is the limit the work order's own risks entry describes ('overflow-wrap was deliberately NOT added ... a future unbreakable string wider than its container would still overflow its box'); the change is not expected to have fixed it, and does not. Confirmed pre-existing by measurement, not inference: the same fixture on the base-commit server overflows too (597px), and the PR does not touch .experiment-list, .opportunity-list or any overflow-wrap declaration."
+      }
+    ]
   },
   "qa": {
     "verdict": "pass",
