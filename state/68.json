@@ -68,5 +68,156 @@
     "decided_at": "2026-09-26T00:41:51.846Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "issue": 68,
+    "version": 1,
+    "kind": "bug",
+    "mode": "committed",
+    "reproduced": true,
+    "confidence": 88,
+    "confidence_rationale": "Every one of the four findings was re-checked on current main (779a660) before planning, and all four still hold: the read-side widening I measured end-to-end against a booted app (metrics 7_200_000_000 / CPL 2_400_000_000 and a ₹2,400.00 tile for a 'ZZZ' row, while POSTing one more rupee to that same tenant returns 400), the TypeError from the null-guarded-then-dereferenced helper, and the overstated money() comment. The post-change numbers were computed by driving the real computeFunnel and money(), not the patched tree, because this token only reads. The residual is a fixture detail in the new tests, not the behaviour: the only case that changes at all is a stored code naming no currency.",
+    "understanding": "Four non-blocking findings the reviewer of #66 approved despite, filed as it merged. I re-checked all four against current main (779a660) before planning; the suite is 297 pass / 0 fail there, not the 294 the finding text quotes, so nothing since has fixed any of them. They are one root cause in one place — a tenant row's stored currency being resolved differently by each helper that reads it — and they ship as one change. Splitting them would put the two halves of the read-side fix (routes.js and pages.js) in separate PRs, and the dashboard and the API are asserted to agree, so a half-applied fix fails a test that is already in the suite.\n\nFINDING 1 (src/api/routes.js:72) is a real behaviour regression on the read side and the reason the other three are here. #66 moved the INR fallback off the write path but left it on the read path, where it now changes a money-bearing API number rather than a rendering. Measured end to end on a booted app just now, on a fresh DB with one INR spend of 7_200_000_000 and three qualified leads, then the tenant row held at 'ZZZ' by the same raw SQL the QA repro uses: GET /v1/metrics?tenant_id=tenant_demo returns {\"spend_micros\":7200000000,\"qualified_volume\":3,\"qualified_cpl_micros\":2400000000} and the dashboard Qualified CPL tile reads ₹2,400.00 — while POSTing one more INR spend to that same tenant returns 400 CURRENCY_MISMATCH. The row is held at a code naming no currency, the write path refuses to add a rupee to it, and the read reports rupees it holds. On ed5aa90 the same database read {\"spend_micros\":0,…,\"qualified_cpl_micros\":null} and the tile read the em-dash; #63 (4372b06) introduced the widening, and this PR inherits it. The dashboard inherits the same line through pages.js:213, which feeds computeFunnel at pages.js:414.\n\nFINDING 2 (src/api/routes.js:87) and FINDING 4 (the same two lines) are the same edit, and the second is the one I am taking. tenantCurrencyMismatch null-guards the row for the canonical read and dereferences it for the verbatim read, so a null row throws TypeError instead of answering — I reproduced that — while resolveTenantCurrency on the same shape returns 'INR'. Written as a coalesce it is one rule rather than two arms with different left operands, and it is one character shorter with the misleading `?.` gone. I checked the coalesce against the ternary over every shape that reaches the helper ('ZZZ', 'usd', ' USD ', 'INR', 'x', '') against three spend currencies: identical results on all eighteen. No call site can pass a null row today — the sole call site is guarded by `existingTenant &&` on the same line — so dropping the `?.` states a precondition the call site already makes rather than half-honouring one that cannot arrive.\n\nFINDING 3 (src/web/pages.js:241) is right that the comment overstates, and the read-side fix makes the comment's claim not merely overstated but inverted, so it must be replaced rather than narrowed. The comment says money()'s membership guard cannot be pinned by a test because no current caller can reach it. After this ticket, a 'ZZZ' tenant reaches it on every money() call on every screen, and it is load-bearing: without it fromMicros(6_000_000_000, 'ZZZ') throws INVALID_CURRENCY and the page 500s, which is precisely the outcome that comment says the guard exists to prevent. test/web/pages.test.js:1171 already renders a 'ZZZ' tenant and asserts the rupee relabelling, so the guard is covered, not invisible.",
+    "root_cause": "One stored currency, four questions, and no single answer to 'what does a code that names no currency mean'. #63 introduced resolveTenantCurrency's `canonicalCurrency(stored) ?? 'INR'` on the read side; #66 introduced tenantCurrencyMismatch for the write side and left the read alone. The two now disagree on purpose for one row, and the read is the side that reports numbers: the read guesses INR for a row the write path will refuse to add to. The same split is mirrored in pages.js:213 and routes.js:88, where the optional chain and the ternary both describe one rule as two.",
+    "approach": "Give the read side the same treatment the write side already got: a stored code that names an ISO currency is canonicalised, a stored code that names none is passed through VERBATIM so it matches no spend row, and INR is a fallback for a MISSING row only. Three lines of source, plus the comment text the change makes false.\n\nThe rule, stated once, for every call site of both seams:\n  canonical currency -> that code ('usd', ' USD ' -> 'USD')\n  a code naming no currency -> VERBATIM ('ZZZ' stays 'ZZZ', '' stays '')\n  a missing tenant row -> 'INR'\nThe invariant: for a tenant whose stored code names no currency, the read reports no spend and a null CPL, because that code matches no stored spend row — and the write path 400s a spend against it, so the two surfaces now agree about what the row is instead of one guessing rupees and the other refusing them.\n\nWorked examples, computed by driving the real computeFunnel and money() on this tree, over a tenant holding one INR spend of 7_200_000_000 and three qualified leads (values are spend_micros / qualified_cpl_micros):\n  stored 'ZZZ'  -> before 7_200_000_000 / 2_400_000_000, after 0 / null          (the change)\n  stored ''     -> before 7_200_000_000 / 2_400_000_000, after 0 / null          (same rule, see below)\n  stored 'usd'  -> 0 / null before and after                                     (unchanged)\n  stored ' USD '-> 0 / null before and after                                     (unchanged)\n  stored 'INR'  -> 7_200_000_000 / 2_400_000_000 before and after               (unchanged)\n  stored 'USD'  -> 0 / null before and after                                     (unchanged)\n  no tenant row -> 0 / null before and after                                     (unchanged)\nOnly the two rows naming no currency move, and they move from a wrong-unit number to an honest unknown. qualified_volume is 3 in every row: computeFunnel filters spend rows only (src/domain/measurement.js:191-208), so a volume survives a currency the spend side cannot name. Any input: the sum of the excluded rows is the sum the funnel reports, so spend_micros is 0 whenever the stored code names no currency, and qualified_cpl_micros is null whenever spend_micros is 0 — never a 0, because a zero CPL would claim free acquisitions.\n\nImplementation note the implementer must not get wrong: the chain is `??`, not `||`. tenants.currency is `TEXT NOT NULL` (src/data/db.js:24), so a present row always holds a string, and `||` would turn a stored '' into INR on the read while tenantCurrencyMismatch still 400s a spend against '' — the exact collapse this change removes. The last `?? 'INR'` covers a MISSING row only, and it must stay: dropping it yields `undefined` for a tenant with no row, and computeFunnel skips currency filtering entirely when tenantCurrency is undefined (measurement.js:201), so a missing row would silently stop excluding foreign legacy rows.\n\nAll eight money() call sites in pages.js go through the shared tenantCurrency() seam (363, 383, 414, 427, 781, 795, 870, 886) and I checked each: with the guard in money() intact, the seven non-funnel ones render exactly what they render today ('ZZZ' and '' both relabel to the repo default, and no raw code reaches a reader, because ISO_CURRENCIES.includes() fails and the fallback fires). Only the Qualified CPL tile at 427 changes, because the funnel is the only consumer that compares codes. The seam stays in each file rather than moving to a shared export: both files already carry a private per-file currency seam and the file's own pattern, and a new public domain export is a larger change than the three lines it would save.\n\nNothing outside src/ and test/ changes. No new dependency, no new route, no new error code, no change to the write path's behaviour, and no new host.",
+    "files": [
+      {
+        "path": "src/api/routes.js",
+        "action": "edit",
+        "change": "resolveTenantCurrency (lines 72-74): body becomes `const stored = row?.currency; return canonicalCurrency(stored) ?? stored ?? 'INR';`. Replace its doc comment (lines 59-71) with: the read side's question, that a code NAMES a currency -> canonicalised, names none -> passed through VERBATIM so it matches no stored spend row, and only a MISSING row falls back to INR because tenants.currency is NOT NULL; that the write guard below now agrees with this for a bad row (it refuses to add a rupee the read will not report); and that the chain is `??` not `||` so a stored '' excludes like 'ZZZ' does. Also update the GET /v1/metrics comment (lines 201-202), which currently says the tenant currency is an 'INR default when absent', to say the stored code is used verbatim when it names no currency and INR applies only when the row is missing.",
+        "why": "The one line that widened the read in #63. Its only caller is line 203."
+      },
+      {
+        "path": "src/api/routes.js",
+        "action": "edit",
+        "change": "tenantCurrencyMismatch (lines 86-89): body becomes `const canonical = canonicalCurrency(row.currency); return (canonical ?? row.currency) !== spendCurrency;` — the `?.` dropped, the ternary written as a coalesce. Add one sentence to its doc comment: the call site guarantees a row (`existingTenant &&` on the line below, routes.js:179), so the helper states that precondition rather than half-guarding a read whose result the other arm discarded. Behaviour is unchanged in all five currency directions.",
+        "why": "Findings 2 and 4 are the same two lines; this is finding 4's edit, which also settles finding 2. Checked equivalent to the ternary over every shape the helper sees."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "tenantCurrency (lines 213-215): body becomes `const stored = tenant?.currency; return canonicalCurrency(stored) ?? stored ?? 'INR';` — the same rule as routes.js, in the file's own private seam. Its doc comment (lines 206-212) must drop 'A code naming no ISO currency at all falls back to INR, as before', which this ticket reverses, and say instead: canonical when it names a currency, verbatim when it names none (so a bad row's amounts are excluded from the dashboard funnel too), INR only for a missing row, and that this seam and routes.js:203 are the same rule on two surfaces, asserted to agree by test/web/pages.test.js:377.",
+        "why": "The dashboard feeds the same computeFunnel from the same row. Fixing routes.js alone would leave the tile reading ₹2,400.00 while the API reads null — the same disagreement, inverted, and a test already in the suite fails."
+      },
+      {
+        "path": "src/web/pages.js",
+        "action": "edit",
+        "change": "money() (line 259, unchanged) keeps its `ISO_CURRENCIES.includes(currency) ? currency : 'INR'` guard — do not touch the line. Replace the paragraph at lines 241-247, which claims the guard 'CANNOT be pinned by a test' and that 'no current caller takes' that path, because after this ticket both halves are false. The replacement must state: with tenantCurrency() passing a code that names no currency through verbatim, every money() call on every screen for such a tenant reaches the guard; without it fromMicros(6_000_000_000, 'ZZZ') throws INVALID_CURRENCY and the page 500s, which is the outcome the guard exists to prevent; it is covered rather than invisible — test/web/pages.test.js renders a 'ZZZ' tenant and asserts the rupee relabelling, so replacing the fallback with `currency` turns that suite red; and the relabelling trade one line above (an unknown code is drawn in the repo default rather than as a bare 'ZZZ' prefix) is unchanged by this ticket.",
+        "why": "Finding 3, plus the consequence finding 3 did not have: the read-side fix makes this guard reachable and load-bearing, so the claim has to be replaced, not narrowed."
+      }
+    ],
+    "tests": [
+      {
+        "path": "test/api/events.test.js",
+        "action": "edit",
+        "cases": [
+          "a tenant row held at 'ZZZ' with an INR spend row and three lead_qualified rows behind it: GET /v1/metrics?tenant_id=<id> returns spend_micros 0, qualified_cpl_micros null, and qualified_volume 3 — the volume is not currency-filtered (measurement.js:191-208) and must not be. Build the rows with repositories.rawEvents.append after creating the tenant at 'ZZZ', because ingest itself 400s a ZZZ row (events.test.js:322 already pins that); the same repository-route trick is used at pages.test.js:345. This is the case that fails on unfixed main with 7_200_000_000 / 2_400_000_000",
+          "a tenant row held at '' with the same rows behind it: spend_micros 0 and qualified_cpl_micros null, and POST of an INR spend returns 400 CURRENCY_MISMATCH with details {tenant_currency: '', received: 'INR'}. This is the `??`-not-`||` case: a `||` chain passes the read and fails this",
+          "a tenant row stored as 'USD' with a USD spend of 2_000_000_000 and one lead_qualified: spend_micros 2_000_000_000 and qualified_cpl_micros 2_000_000_000 — the canonical arm of the new chain still resolves, so the change cannot be passed by making every read return null",
+          "GET /v1/metrics?tenant_id=tenant_that_does_not_exist returns 200 with spend_micros 0 and qualified_cpl_micros null rather than a 500, pinning the missing-row fallback the chain keeps"
+        ]
+      },
+      {
+        "path": "test/web/pages.test.js",
+        "action": "edit",
+        "cases": [
+          "a tenant_demo held at 'ZZZ' with an INR spend of 7_200_000_000 and three qualified leads behind it: renderPage('/') puts the em-dash in the Qualified CPL tile (read it with the existing qualifiedCplValue helper, expect '—'), and booting the app over the same repositories, GET /v1/metrics returns qualified_cpl_micros null and spend_micros 0. One test, both surfaces, the same rule — the shape of the existing agreement test at pages.test.js:345",
+          "every money() call site on a 'ZZZ' tenant still renders a currency symbol and never the raw code: render '/', '/opportunities' and '/experiments' over usdRepos('ZZZ') and assert opportunityRowMoney(html) matches only /[$₹€£] amounts, that the page contains no 'ZZZ', and that none contains 'NaN' or a bare micros integer. This covers the seven non-funnel call sites of the changed seam (363, 383, 781, 795, 870, 886) that this ticket deliberately does not change",
+          "the existing 'ZZZ' render assertions stay green: pages.test.js:1171 (value ₹6,000.00 and no 'ZZZ' for a ZZZ tenant) and :1202 (₹1,000.00 and ₹500.00). They are what pins money()'s membership guard now that tenantCurrency() stops hiding the bad code from it; if the guard were dropped these two go red, which is the point of AC-6"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "For a tenant row whose stored currency names no ISO currency, GET /v1/metrics reports spend_micros 0 and qualified_cpl_micros null, and reports qualified_volume unchanged. On a freshly seeded DB with the demo tenant held at 'ZZZ': {\"spend_micros\":0,\"qualified_volume\":3,\"qualified_cpl_micros\":null}.",
+        "how_to_verify": "Seed, serve, then sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='ZZZ' WHERE id='tenant_demo'\" (changes() = 1) and GET /v1/metrics?tenant_id=tenant_demo. Unfixed main returns spend_micros 7_200_000_000 and qualified_cpl_micros 2_400_000_000 here; the fixed build returns 0 and null. volume stays 3 in both — a volume is not currency-filtered, and a change to it would be its own bug. The new case in test/api/events.test.js proves the same three numbers on an isolated tenant.",
+        "source": "TR-1",
+        "verify": "api"
+      },
+      {
+        "id": "AC-2",
+        "check": "With the same row held at 'ZZZ', the dashboard's Qualified CPL tile at / reads the em-dash '—', the page contains no rupee figure from the previous render, and it contains no 'ZZZ' anywhere.",
+        "how_to_verify": "With the row still held, load / in the browser. Read the tile as the suite does: the .kpi-card whose .kpi-label is 'Qualified CPL', then its .kpi-value. Expect '—'. Assert the page body contains neither '2,400.00' nor 'ZZZ'. On unfixed main the tile reads ₹2,400.00.",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-3",
+        "check": "The same tenant still refuses a new INR spend with 400 CURRENCY_MISMATCH naming the stored code verbatim in both message and details, so the read and the write now agree about that row: neither reports rupees for it.",
+        "how_to_verify": "With the row still held at 'ZZZ', POST /v1/events {\"event_id\":\"qa_zzz_read_agreement\",\"event_name\":\"spend.observed\",\"currency\":\"INR\",\"value\":1000000000,\"tenant_id\":\"tenant_demo\",\"occurred_at\":\"<now>\"}. Expect 400 with exactly {\"code\":\"CURRENCY_MISMATCH\",\"message\":\"tenant tenant_demo keeps ZZZ; spend in INR was rejected\",\"details\":{\"tenant_currency\":\"ZZZ\",\"received\":\"INR\"}}, then re-read GET /v1/metrics and confirm spend_micros is still 0 — a rejected event appends nothing.",
+        "verify": "api"
+      },
+      {
+        "id": "AC-4",
+        "check": "A stored code that names a currency but is spelled differently is still resolved to that currency on the read and on the page: a row held at 'usd' or ' USD ' counts its own USD spend and resolves a CPL from it, rather than being excluded like a bad code.",
+        "how_to_verify": "sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='usd' WHERE id='tenant_demo'\", then POST one USD spend (expect 202) and GET /v1/metrics — spend_micros must include that USD amount and qualified_cpl_micros must be a number, not null. Repeat with ' USD '. Then reset the row to 'INR'. The mis-cased read is already pinned at test/api/events.test.js:286 and must stay green.",
+        "verify": "api"
+      },
+      {
+        "id": "AC-5",
+        "check": "tenantCurrencyMismatch compares with the coalesce `(canonical ?? row.currency) !== spendCurrency` and reads `row.currency` with no optional chain, and all five currency directions are unchanged: 'ZZZ' vs INR 400, 'ZZZ' vs USD 400, 'usd' vs USD 202, ' USD ' vs USD 202, 'usd' vs EUR 400.",
+        "how_to_verify": "node --test, and the four cases that pin it: test/api/events.test.js 'an unrecognised tenant currency is not silently treated as INR on ingest' (:322), 'an unrecognised tenant currency is still a 400 reporting the stored code verbatim' (:305), 'a tenant row stored as usd accepts its own USD spend' and its padded twin (:255, :274), and 'a canonical tenant still rejects a genuinely different currency' (:345). The whole suite must be 0 fail. No new test is required for this edit: it introduces no new branch, and these five already cover every value either operand can take.",
+        "verify": "test"
+      },
+      {
+        "id": "AC-6",
+        "check": "The doc comment above money() no longer claims its membership guard is unreachable or unpinned, and the claim it makes instead is true: a page render for a tenant whose stored code names no currency exercises that guard, and dropping it is caught by the suite.",
+        "how_to_verify": "Read the comment in src/web/pages.js and confirm it does not contain 'CANNOT be pinned' or 'no current caller takes'. Then prove the new claim: change the fallback on line 259 from `'INR'` to `currency` and run node --test test/web/pages.test.js — the 'ZZZ' tenant case must go red (without the guard, fromMicros throws INVALID_CURRENCY and renderPage throws). Revert the mutation and re-run to green. A comment that says the guard is invisible while the suite is red on its removal is the defect #64's review found; this is the check that it is no longer written that way.",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "npm ci --no-audit --no-fund && npm run sdlc:seed, then npm run sdlc:serve (PORT defaults to 3000, DB_PATH to ./data/app.db). Confirm GET /health is 200.",
+      "Baseline before touching the row: GET /v1/metrics?tenant_id=tenant_demo must read spend_micros 7_200_000_000, qualified_volume 3, qualified_cpl_micros 2_400_000_000, and / must show ₹2,400.00 in the Qualified CPL tile. If it does not, the database is not freshly seeded and the rest of the script proves nothing.",
+      "sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='ZZZ' WHERE id='tenant_demo'\" (expect changes() = 1).",
+      "AC-1, the regression check: GET /v1/metrics?tenant_id=tenant_demo must now read spend_micros 0, qualified_cpl_micros null, qualified_volume 3. Unfixed main still reads 7_200_000_000 / 2_400_000_000 / 3 here, and that difference is the whole ticket.",
+      "AC-2: with the row still held, load / in the browser. The Qualified CPL tile reads '—'. The page contains no '2,400.00' and no 'ZZZ'.",
+      "AC-3: POST /v1/events {\"event_id\":\"qa_68_inr\",\"event_name\":\"spend.observed\",\"currency\":\"INR\",\"value\":1000000000,\"tenant_id\":\"tenant_demo\",\"occurred_at\":\"<now>\"} — expect 400 CURRENCY_MISMATCH, message naming ZZZ verbatim, details {tenant_currency:'ZZZ', received:'INR'}. Re-read /v1/metrics: spend_micros must still be 0.",
+      "AC-4: sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='usd' WHERE id='tenant_demo'\", then POST a USD spend of 1_000_000_000 (expect 202) and GET /v1/metrics: spend_micros must be 1_000_000_000 (the INR rows are now correctly excluded as foreign) and qualified_cpl_micros a number, not null. Repeat the read with the row held at ' USD ' — same result. This is the case that fails if the change excludes every code instead of every BAD code.",
+      "Empty-string edge, the `??`-not-`||` check: sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='' WHERE id='tenant_demo'\". GET /v1/metrics must read spend_micros 0 and qualified_cpl_micros null (an empty code names no currency, so it excludes like 'ZZZ'), and POSTing an INR spend must 400 with tenant_currency ''. If the read shows rupees here, the chain was written with `||`.",
+      "Sibling-surface sweep with the row still held at a bad code: load /opportunities, /experiments, /journal and /approvals. Every amount carries a currency symbol, and no screen shows 'ZZZ', '₹NaN', 'undefined' or a bare micros integer. This is the seven call sites the change deliberately leaves alone — they must look exactly as they did before.",
+      "Restore and re-check: sqlite3 \"$DB_PATH\" \"UPDATE tenants SET currency='INR' WHERE id='tenant_demo'\". / shows ₹2,400.00 again and /v1/metrics reads 7_200_000_000 — nothing about a healthy tenant moved.",
+      "AC-5 and AC-6, then the suite: node --test must be 0 fail across the whole file set (297 pass on main before this change, plus the four new cases). Separately, the AC-6 mutation: replace the 'INR' fallback in src/web/pages.js:259 with `currency`, run node --test test/web/pages.test.js, and confirm the 'ZZZ' tenant case goes red — then revert it and re-run to green.",
+      "Widen past the script: this change touches one line on each of two surfaces, so the risk is a caller nobody enumerated. Load every page at ?state=empty, ideal, partial, loading and error, and / at ?meta_error=quota and ?meta_error=revoked, on a seeded INR database, and confirm every amount still carries the rupee symbol and the Qualified CPL tile still reads ₹2,400.00."
+    ],
+    "risks": [
+      "The merged #66 run pinned the opposite of this ticket: its AC-1 and AC-4 and qa_script step 4 asserted that a 'ZZZ' row reads 7_200_000_000 and the tile reads ₹2,400.00, and called that the 'unchanged' baseline. This ticket deliberately reverses that pin. Anyone reading the #66 QA trail without this issue in hand will read the new 0 / null / '—' as a regression, so say so in the PR description.",
+      "money()'s membership guard becomes load-bearing rather than decorative. Today tenantCurrency() hides a bad code from it by resolving to INR; after this change every render for such a tenant reaches it, and without it fromMicros throws INVALID_CURRENCY and the page 500s. The guard stays and AC-6 pins it, but the next reader should know that line is now what stands between a bad row and a 500 on every screen.",
+      "A tenant row holding '' or any other non-ISO code now reads spend 0 and a null CPL where it read an INR number. That is the intended honest unknown and it matches what the write path has always done, but it is a visible change for any operator whose row is already bad, and the first time they see it they will read it as lost spend. Named in the PR description rather than left to be discovered.",
+      "The pages.js change moves one seam that eight money() call sites share. I enumerated all eight (363, 383, 414, 427, 781, 795, 870, 886) and only 427's input changes, but the sweep step in qa_script is there because a caller I did not read is the failure mode this kind of change has.",
+      "No path in forbidden_paths is touched (.sdlc/**, .github/**, docs/spec/**, docs/prd.md, docs/trd.md, docs/ui.md are all untouched), and the change adds no host to env.api_allowlist — it reads and writes nothing outside the local SQLite file the app already uses."
+    ],
+    "out_of_scope": [
+      "The write path. tenantCurrencyMismatch already answers correctly as merged in #66; this ticket only removes the `?.` that misdescribed it, and changes no 400, no message and no details.",
+      "Moving resolveTenantCurrency and tenantCurrency into one shared export in src/domain/money.js. It would shrink the diff by two lines, but it adds a public domain API and restructures two files' own private seams. It would ship on its own; say so and file it separately if you want it.",
+      "Returning 404 from GET /v1/metrics for a tenant that has no row. The missing-row INR fallback stays: a read must still answer, and changing that is an API decision, not a bug fix.",
+      "Rendering a bad code on screen as 'ZZZ 1,000.00' instead of relabelling it to the repo default. money()'s knowingly-wrong-unit-over-knowingly-unformatted trade is deliberate and unchanged; this ticket only makes the guard that implements it reachable.",
+      "The empty string as a distinct bad-data case beyond the `??`-not-`||` guard above — tenants.create takes any string, so '' is reachable through the repository, and it is covered, but making the application reject it at write time is a separate change to that repository."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Keep the INR fallback on the read side, record the decision in resolveTenantCurrency's doc comment, and pin it with a test in test/api/events.test.js (the second half of finding 1's fix).",
+        "rejected_because": "It answers a question nobody asked — what should a bad row draw? — with a guess, and it keeps the read and the write disagreeing about one row: the API would report 7_200_000_000 rupees of spend for a tenant that POST /v1/events 400s a rupee to. The reviewer's own wording for the fallback's justification ('a read must draw something rather than 500') does not hold here: computeFunnel filters and never renders, and the read did not throw or 500 before #63. It is also a number the #66 QA run already pinned as correct, which is how the disagreement survived a review."
+      },
+      {
+        "approach": "Fix only src/api/routes.js:203 as finding 1 names, and leave pages.js:213 on the INR fallback.",
+        "rejected_because": "The two surfaces feed the same computeFunnel from the same row and are asserted to agree — test/web/pages.test.js:377 boots the app and compares both in one test. Fixing one alone inverts the disagreement rather than removing it: the API would read null while the dashboard still showed ₹2,400.00, and that existing test would go red. Half a fix here is not a smaller diff, it is a failing suite."
+      },
+      {
+        "approach": "Drop the INR fallback from the read entirely: `canonicalCurrency(stored) ?? stored`.",
+        "rejected_because": "For a tenant with no row at all that yields `undefined`, and computeFunnel skips currency filtering entirely when tenantCurrency is undefined (measurement.js:201) — so a missing tenant row would silently stop excluding foreign-currency legacy spend, the exact corruption the parameter exists to prevent. The fallback is narrowed to the case it is actually for, not removed."
+      },
+      {
+        "approach": "Write the read chain with `||` instead of `??` (`canonicalCurrency(stored) || stored || 'INR'`).",
+        "rejected_because": "A stored empty string is falsy, so `||` turns it into INR and the read reports rupees for a row the write side 400s — the same collapse the ticket removes, reintroduced for the one shape `??` distinguishes. The `??`-not-`||` requirement is in the approach, in a test case, and in the qa_script."
+      },
+      {
+        "approach": "Split this into four tickets, one per finding.",
+        "rejected_because": "Findings 2 and 4 are the same two lines, and finding 1's fix is the read half of the same disagreement findings 2 and 4 document. Splitting puts the two halves of the read-side change in separate PRs, and a half-applied read fix fails a test already in the suite. The whole lot is three lines of source in two files plus comment text; four tickets would be four reviews of the same two functions."
+      }
+    ]
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-09-26T00:52:56.408Z",
+  "validated_ac_changes": []
 }
