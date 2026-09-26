@@ -277,17 +277,10 @@
   "touch_paths": [
     "src/policy/kernel.js",
     "src/executor/executor.js",
-    "src/strategy/guardian.js",
-    "src/api/routes.js",
     "src/web/pages.js",
-    "src/web/client.js",
     "test/executor/executor.test.js",
-    "test/api/actions.test.js",
-    "test/strategy/guardian.test.js",
-    "test/api/guardian.test.js",
     "test/policy/kernel.test.js",
-    "test/web/approvals.test.js",
-    "test/api/approvals.test.js"
+    "test/api/actions.test.js"
   ],
   "acceptance": [],
   "planned_route": [
