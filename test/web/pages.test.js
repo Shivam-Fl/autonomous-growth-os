@@ -374,6 +374,46 @@ test('a legacy mixed-currency batch on an otherwise empty tenant reads ₹3,000.
   }
 });
 
+// The other direction of the same rule, and the one a half-applied fix gets
+// wrong: a stored code that names NO currency matches no spend row, so the same
+// exclusion has to move the tile and the API together. Read rupees here while
+// the API read null would be the same disagreement, inverted.
+test('a tenant row naming no currency reads the em-dash on the dashboard and null from the API', async () => {
+  const repos = freshRepos();
+  // The row is held at 'ZZZ' first, and the INR spend behind it is appended
+  // through the repository rather than posted: ingest 400s a rupee against
+  // this row, which is the point. A live database only reaches this state the
+  // same way a pre-fix batch did.
+  assert.equal(repos.tenants.create({ id: 'tenant_demo', name: 'Demo Tenant', currency: 'ZZZ' }).currency, 'ZZZ');
+  const legacy = [
+    validatedEnvelope('tenant_demo', 'evt_zzz_read_spend', 'spend.observed', { campaign: 'legacy', amount_micros: 7_200_000_000, currency: 'INR' }),
+    ...[1, 2, 3].map((n) => validatedEnvelope('tenant_demo', `evt_zzz_read_qualified_${n}`, 'lead_qualified', { campaign: 'legacy', lead_id: `lead_zzz_${n}`, session_id: 'sess_zzz' })),
+  ];
+  for (const event of legacy) {
+    assert.equal(repos.rawEvents.append(event).appended, true, `fixture: ${event.event_id} must append`);
+  }
+
+  const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+  const cplText = qualifiedCplValue(html);
+  assert.equal(cplText, '—', `a code naming no currency draws the em-dash, got ${cplText}`);
+  assert.doesNotMatch(html, /2,400\.00/, 'the rupee figure the old read drew is gone');
+  assert.doesNotMatch(html, /ZZZ/, 'and the raw code never reaches a reader');
+
+  const app = buildApp({ repositories: repos });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  try {
+    const metrics = await (await fetch(`http://127.0.0.1:${port}/v1/metrics`)).json();
+    assert.equal(metrics.spend_micros, 0, 'the API excludes what the tile stopped drawing');
+    assert.equal(metrics.qualified_cpl_micros, null, 'API CPL is null on the same row the tile draws — for');
+    assert.equal(metrics.qualified_volume, 3, 'and the volume survives a currency its spend side cannot name');
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 test('the dashboard KPI strip excludes foreign-currency legacy spend like the metrics API does', async () => {
   const repos = seededRepos('pages-mixed-currency-');
   // The demo tenant is INR with one 7_200_000_000 INR spend and 3 qualified
@@ -1179,6 +1219,31 @@ test('an unrecognised tenant currency is still resolved to the INR fallback, nev
   assert.match(row, /value ₹6,000\.00/, 'an unknown code still falls back to the repo default');
   const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
   assert.doesNotMatch(html, /ZZZ/, 'the raw code never reaches a reader');
+});
+
+test('a bad code still renders a symbol on every money() surface, and no raw micros anywhere', async () => {
+  // The seven non-funnel call sites the currency seam change deliberately does
+  // not move. They must look exactly as they did: an unknown code relabels to
+  // the repo default, which is money()'s guard, and the funnel is the only
+  // consumer that COMPARES codes. A sweep is the only thing that catches a
+  // call site the change moved that nobody enumerated, so it asserts the
+  // property rather than the amounts: a symbol, or no amount at all.
+  const repos = usdRepos('ZZZ');
+  for (const route of ['/', '/opportunities', '/experiments']) {
+    const html = await renderPage(route, { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
+    assert.doesNotMatch(html, /ZZZ/, `${route} never prints the raw code`);
+    assert.doesNotMatch(html, /NaN|undefined/, `${route} renders no failed-format sentinel`);
+    // Text content only: the composer's cap input carries a micros placeholder
+    // in an attribute, and a raw integer in a placeholder is a form default,
+    // not a rendered amount. Seven digits is above every non-money count these
+    // pages print — the largest is the insights table's 6-digit impressions.
+    const text = html.replace(/<[^>]*>/g, ' ');
+    assert.doesNotMatch(text, /\d{7,}/, `${route} renders no bare micros integer`);
+  }
+  // And the one surface that definitely does draw money still draws it, in the
+  // repo default, rather than quietly drawing nothing.
+  const opportunities = await renderPage('/opportunities', { repositories: repos });
+  assert.deepEqual(opportunityRowMoney(opportunities), ['₹6,000.00', '₹1,900.00'], 'the opportunity amounts still render, relabelled');
 });
 
 test('the Meta error shell renders the last-good money cells in the tenant currency too', async () => {
