@@ -7,14 +7,14 @@
   "lock_run": "36235831451",
   "attempts": {
     "plan": 5,
-    "ci": 4,
+    "ci": 5,
     "review": 3,
     "qa": 0
   },
   "attempt_run": {
-    "counter": "review",
-    "n": 3,
-    "run": "36234670381"
+    "counter": "ci",
+    "n": 5,
+    "run": "36235831451"
   },
   "pending": {
     "stage": "implement",
@@ -286,7 +286,7 @@
   ],
   "review_root_caused": [],
   "created_at": "2026-09-25T20:33:08.537Z",
-  "updated_at": "2026-09-26T10:27:25.339Z",
+  "updated_at": "2026-09-26T10:27:27.252Z",
   "history": [
     {
       "at": "2026-09-25T20:33:29.581Z",
@@ -672,6 +672,11 @@
       "at": "2026-09-26T10:27:25.339Z",
       "agent": "implementer",
       "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T10:27:27.252Z",
+      "agent": "ci",
+      "action": "ci attempt 5"
     }
   ],
   "resume_at": null,
