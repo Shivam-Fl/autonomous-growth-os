@@ -48,36 +48,23 @@ function validatedEnvelope(tenantId, event_id, event_type, payload) {
 
 /** A USD tenant with one opportunity, whose value and cost are the amounts the
  * currency assertions read. No events and no experiment: the fixtures that
- * need those append them on top of the repos this returns. */
-function usdRepos() {
+ * need those append them on top of the repos this returns.
+ *
+ * The optional argument is how the tenant's stored currency code is spelled the
+ * way a row this app did not write might spell it. tenants.create accepts any
+ * string — the contract the ZZZ test below pins — so this builds a mis-cased
+ * row without a migration, and reaches the same state the QA repro makes with a
+ * raw SQL UPDATE. The amounts are the same either way, so renders are
+ * comparable. */
+function usdRepos(storedCurrency = 'USD') {
   const repos = freshRepos();
-  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: 'USD' });
+  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: storedCurrency });
   repos.opportunities.create({
     tenant_id: 'tenant_usd',
     opportunity_id: 'opp_usd_expensive',
     score: 0.9208,
     record: {
       opportunity_id: 'opp_usd_expensive', tenant_id: 'tenant_usd', name: 'US bet',
-      value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
-    },
-  });
-  return repos;
-}
-
-/** usdRepos() with the tenant's stored currency code spelled the way a row
- * this app did not write might spell it. tenants.create accepts any string —
- * the contract the ZZZ test below pins — so this builds a mis-cased row
- * without a migration, and reaches the same state the QA repro makes with a
- * raw SQL UPDATE. The amounts match usdRepos() so a render is comparable. */
-function usdCasingRepos(storedCurrency) {
-  const repos = freshRepos();
-  repos.tenants.create({ id: 'tenant_usd', name: 'US Tenant', currency: storedCurrency });
-  repos.opportunities.create({
-    tenant_id: 'tenant_usd',
-    opportunity_id: 'opp_usd_casing',
-    score: 0.9208,
-    record: {
-      opportunity_id: 'opp_usd_casing', tenant_id: 'tenant_usd', name: 'US bet',
       value_micros: 6_000_000_000, pSuccess: 0.6, fit: 0.9, infoValue: 1.2, reversibility: 0.9, cost_micros: 1_900_000_000, downside: 2, delay: 1,
     },
   });
@@ -371,8 +358,7 @@ test('a legacy mixed-currency batch on an otherwise empty tenant reads ₹3,000.
   }
 
   const html = await renderPage('/', { repositories: repos });
-  const cplCard = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
-  const cplText = cplCard.match(/kpi-value">([^<]+)</)[1];
+  const cplText = qualifiedCplValue(html);
   assert.equal(cplText, '₹3,000.00', `dashboard CPL must exclude the USD row, got ${cplText}`);
 
   const app = buildApp({ repositories: repos });
@@ -409,8 +395,7 @@ test('the dashboard KPI strip excludes foreign-currency legacy spend like the me
   assert.deepEqual(bar, [true, true, true], 'fixture: all three legacy rows appended');
 
   const html = await renderPage('/', { repositories: repos });
-  const cplCard = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
-  const cplText = cplCard.match(/kpi-value">([^<]+)</)[1];
+  const cplText = qualifiedCplValue(html);
   // Only the INR rows enter the sum: (7_200 + 3_000) / 4 = 2_550_000_000 = ₹2,550.00.
   assert.equal(cplText, '₹2,550.00', `dashboard CPL must exclude the USD row, got ${cplText}`);
 
@@ -1073,8 +1058,7 @@ test('a non-INR tenant sees its own currency on every branch that draws money', 
     assert.doesNotMatch(card, /₹/, `no rupee sign in the experiment card on ${where}`);
 
     const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider(), ...opts });
-    const cplTile = html.match(/kpi-card[\s\S]*?Qualified CPL[\s\S]*?<\/div>/)[0];
-    const cplText = cplTile.match(/kpi-value">([^<]+)</)[1];
+    const cplText = qualifiedCplValue(html);
     assert.equal(cplText, '$3,000.00', `Qualified CPL in dollars on ${where}, got ${cplText}`);
     // Scoped to their own sections: the CPL value and the insight spend are
     // both dollar strings, so an unscoped assertion lets one site's regression
@@ -1094,7 +1078,7 @@ test('a non-INR tenant sees its own currency on every branch that draws money', 
 // this replaces — a 'usd' tenant drew all six of its dashboard amounts as
 // rupees and its own spend as foreign.
 test('a tenant stored as lowercase usd renders its own currency on the opportunity row', async () => {
-  const repos = usdCasingRepos('usd');
+  const repos = usdRepos('usd');
   const row = (await renderPage('/opportunities', { repositories: repos }))
     .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
   assert.match(row, /value \$6,000\.00/, 'the stored row names the same currency as USD');
@@ -1109,7 +1093,7 @@ test('usd, Usd and a padded USD render byte-identical money, so case is not a cu
   // on three empty lists.
   const renders = [];
   for (const stored of ['usd', 'Usd', ' USD ']) {
-    renders.push(opportunityRowMoney(await renderPage('/opportunities', { repositories: usdCasingRepos(stored) })));
+    renders.push(opportunityRowMoney(await renderPage('/opportunities', { repositories: usdRepos(stored) })));
   }
   assert.deepEqual(renders[0], ['$6,000.00', '$1,900.00'], 'the usd row draws its own unit, in render order');
   assert.deepEqual(renders[1], renders[0], 'Usd draws exactly what usd draws');
@@ -1122,7 +1106,7 @@ test('a usd tenant with its own USD spend gets a number for Qualified CPL, not t
   // and the tile read '—'. The figure is this fixture's own: one qualified
   // lead and no seed rows, so 3_000_000_000 / 1. The seeded database behind
   // the browser criterion divides the same amount by three.
-  const repos = usdCasingRepos('usd');
+  const repos = usdRepos('usd');
   for (const event of [
     validatedEnvelope('tenant_usd', 'evt_casing_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'USD' }),
     validatedEnvelope('tenant_usd', 'evt_casing_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_casing', session_id: 'sess_casing' }),
@@ -1144,7 +1128,7 @@ test("a usd tenant whose only spend row is a different currency still reads the 
   // Pinned so the em-dash cannot later be "fixed" by summing foreign-currency
   // spend, which would put a real number in front of a reader denominated in
   // the wrong unit. An em-dash that means "we do not know" is the honest one.
-  const repos = usdCasingRepos('usd');
+  const repos = usdRepos('usd');
   for (const event of [
     validatedEnvelope('tenant_usd', 'evt_foreign_spend', 'spend.observed', { campaign: 'us', amount_micros: 3_000_000_000, currency: 'INR' }),
     validatedEnvelope('tenant_usd', 'evt_foreign_qualified', 'lead_qualified', { campaign: 'us', lead_id: 'lead_foreign', session_id: 'sess_foreign' }),
@@ -1159,7 +1143,7 @@ test("a usd tenant whose only spend row is a different currency still reads the 
 });
 
 test("a usd tenant's dashboard Meta tables render dollars", async () => {
-  const repos = usdCasingRepos('usd');
+  const repos = usdRepos('usd');
   const html = await renderPage('/', { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
   const adSets = html.match(/data-testid="meta-adSets"[\s\S]*?<\/section>/)[0];
   const insights = html.match(/data-testid="meta-insights"[\s\S]*?<\/section>/)[0];
@@ -1172,7 +1156,7 @@ test('a usd tenant still renders the last-good Meta snapshot in dollars on the e
   // The last-good path reads the same tenant currency as the ideal one, from a
   // snapshot rather than a live read, so it is a separate code path to the one
   // the ideal-page test exercises.
-  const repos = usdCasingRepos('usd');
+  const repos = usdRepos('usd');
   const html = await renderPage('/', {
     repositories: repos,
     metaProvider: new FakeMetaAdsProvider({ failureMode: 'quota' }),
@@ -1189,7 +1173,7 @@ test('an unrecognised tenant currency is still resolved to the INR fallback, nev
   // them. A code that names no ISO currency is genuine bad data, and the
   // documented fallback is unchanged: it renders, and it does not 500 or print
   // the raw code at a reader.
-  const repos = usdCasingRepos('ZZZ');
+  const repos = usdRepos('ZZZ');
   const row = (await renderPage('/opportunities', { repositories: repos }))
     .match(/<li class="opportunity-row"[\s\S]*?<\/li>/)[0];
   assert.match(row, /value ₹6,000\.00/, 'an unknown code still falls back to the repo default');
