@@ -11,7 +11,8 @@ whether to open the entry itself.
 - [docs/ui.md](../../docs/ui.md) — theme tokens, patterns and every screen's five states. Read before touching anything a user sees.
 
 ## Situational
-- [qa/environment.md](qa/environment.md) — boot recipe (PORT/DB_PATH), ?state= and ?meta_error= preview overrides, failure envelopes. Read before browser QA.
-- [qa/selectors.md](qa/selectors.md) — stable hooks: body[data-page/state], data-testid chrome/empty/meta regions, retry controls. Assert these, not class names.
+- [qa/environment.md](qa/environment.md) — boot recipe (PORT/DB_PATH), ?state= and ?meta_error= preview overrides (including the ?meta_error *write-path* forward), seeded approval fixtures and `--reset-approvals`, failure envelopes. Read before browser QA.
+- [qa/selectors.md](qa/selectors.md) — stable hooks: body[data-page/state], data-testid chrome/empty/meta/approvals/guardian regions, retry controls, and the data-approval-id ON the control invariant. Assert these, not class names.
+- [patterns/phone-width-horizontal-overflow.md](patterns/phone-width-horizontal-overflow.md) — a long unbreakable string scrolls the page sideways at 320px. Read before touching any card's wrapping, and before putting a wrap rule on `#main`.
 - [patterns/](patterns/) — bug shapes this repo has produced before. Grep by symptom.
 - [decisions/](decisions/) — why things are as they are. Read before proposing a rewrite.
