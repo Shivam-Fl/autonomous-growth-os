@@ -3,38 +3,51 @@
 // through here, and the checks below run in the order written because the
 // order is the safety property:
 //
-//   (0) tenant    — the envelope's own tenant, not the caller's word for it
-//   (1) dedupe    — durably, in the repository, before the provider is touched
-//   (2) kernel    — signature, expiry, scope, replay and the kill switches
-//   (3) provenance — the bytes are one this server ISSUED, read back from the
+//   (0) tenant     — the envelope's own tenant, not the caller's word for it
+//   (1) identity   — is this envelope one this server issued, unmoved: the
+//                    kernel's shape check and signature comparison alone
+//   (2) provenance — the bytes are one this server ISSUED, read back from the
 //                    capabilities table rather than believed from the request
-//   (4) the gate  — the SAME kernel.validateIntent, re-run here on the STORED
+//   (3) dedupe     — durably, in the repository, before the provider is touched
+//   (4) admission  — the kernel's other answer: expiry, scope, replay and the
+//                    kill switches, which is what the envelope needs to WRITE
+//   (5) the gate   — the SAME kernel.validateIntent, re-run here on the STORED
 //                    envelope with the posture, the approval and the maturity
 //                    read live, so a check that lived only at the minting route
 //                    is a check this path cannot get past
-//   (5) resolve   — the write method from the SIGNED action, never from the caller
-//   (6) re-read   — through the READ interface, against the instance that wrote
-//   (7) receipt   — one row, plus the idempotency effect and the audit event
+//   (6) resolve    — the write method from the SIGNED action, never from the caller
+//   (7) re-read    — through the READ interface, against the instance that wrote
+//   (8) receipt    — one row, plus the idempotency effect and the audit event
 //
 // A SIGNATURE IS NOT AN AUTHORISATION. It proves the bytes have not moved since
 // issuance, and a signature computed over a published dev secret proves that
-// about an envelope the server never minted — which is why (3) exists and why
+// about an envelope the server never minted — which is why (2) exists and why
 // the envelope is acted on only after it has been read back from storage.
+//
+// (1) and (2) are above (3) because (3) ANSWERS: a delivery reusing a spent
+// nonce is handed a receipt, and the server owes that answer only to a body it
+// has just proved is its own. Everything below (3) gates a WRITE, and a
+// duplicate writes nothing — which is why a duplicate of a genuine envelope is
+// still answered 200 while automation is frozen, and why an impostor wearing
+// the same nonce is refused before the freeze is ever consulted.
 //
 // The provider is INJECTED and never constructed here: it is per request, and
 // a module that built its own would have no way to honour the request's
 // ?meta_error simulation, nor hold the state it just wrote for the re-read.
 
 import { ACTION_WRITES } from '../integrations/meta_ads/index.js';
-import { AUTHORITY_KINDS, approvalIdFromAuthority, intentFromEnvelope } from '../policy/kernel.js';
+import { AUTHORITY_KINDS, SIGNED_FIELDS, approvalIdFromAuthority, intentFromEnvelope } from '../policy/kernel.js';
 
 const CONSUMER = 'executor';
 
 const DRIFT_SOURCES = new Set(['manual', 'platform', 'third-party']);
 
-/** The signed fields plus the signature, as the pair the capabilities table
- * stores: what issuance wrote and what execution must find again. */
-const ENVELOPE_FIELDS = Object.freeze(['authority', 'capability_id', 'signature']);
+/** Every field issuance wrote, plus the signature: what the capabilities table
+ * stores, and what execution must find again field for field. Comparing the
+ * whole envelope rather than a chosen few means the duplicate answer's
+ * correctness does not rest on a reader of this file knowing which fields the
+ * HMAC happens to cover. */
+const ENVELOPE_FIELDS = Object.freeze([...SIGNED_FIELDS, 'capability_id', 'signature']);
 
 /**
  * The re-gate port, called with the STORED envelope's own values. It is
@@ -176,7 +189,9 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
   /**
    * Run one capability. Every branch that did NOT reach the provider releases
    * the claim it took, so a refused or failed write leaves a nonce unspent and
-   * the caller's retry is a genuine retry rather than a swallowed claim.
+   * the caller's retry is a genuine retry rather than a swallowed claim — and
+   * the two branches BEFORE the claim takes one have no claim to release,
+   * because an unauthenticated body never takes one at all.
    *
    * There is NO approvalId option. Which queue row this execution satisfies is
    * read out of the STORED envelope's signed authority, because it was the
@@ -194,14 +209,58 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
     }
     const nonce = capability.nonce;
 
-    // (1) DURABLE DEDUPE, in two sub-steps. 1a is check-then-act and does not
-    // close the two-tab race; 1b is what closes it.
+    // (1) IDENTITY. Is this envelope shaped like one of ours and unmoved since
+    // it was signed? That, and nothing else: whether it may WRITE right now is
+    // (4)'s question, and a duplicate arrives under exactly the conditions (4)
+    // refuses — so the two answers are asked in that order, and this one is
+    // what the duplicate answer below is allowed to rest on.
+    const identity = kernel.verifyCapabilityIdentity(capability);
+    if (!identity.ok) {
+      return { executed: false, duplicate: false, error: identity.error };
+    }
+
+    // (2) PROVENANCE. The signature above proves the bytes have not moved; it
+    // does not prove this server ever issued them, and with the dev secret
+    // published it cannot. So the envelope is read back out of the capabilities
+    // table by its own primary key and required to be the SAME envelope, field
+    // for field across everything issuance wrote. Everything after this point
+    // acts on the STORED one, so a value that survived this comparison is a
+    // value the server wrote — and so the receipt (3) hands back describes the
+    // envelope that was actually spent rather than one the delivery claimed.
+    const issued = repositories.capabilities.get(capability.tenant, capability.capability_id);
+    const stored = issued?.envelope ?? null;
+    // A stored authority of no recognised kind names no approval, and treating
+    // it as autonomous would turn a row this build never wrote into the one
+    // thing the write path admits without a human.
+    const altered = stored === null
+      || !AUTHORITY_KINDS.includes(stored.authority?.kind)
+      || ENVELOPE_FIELDS.some((field) => JSON.stringify(capability[field]) !== JSON.stringify(stored[field]));
+    if (altered) {
+      return {
+        executed: false,
+        duplicate: false,
+        error: {
+          code: 'CAPABILITY_NOT_ISSUED',
+          message: stored === null
+            ? 'this capability was not issued by this server'
+            : 'the delivered capability differs from the one this server issued',
+          details: { reason: stored === null ? 'unknown-capability' : 'altered-envelope', capability_id: capability.capability_id },
+        },
+      };
+    }
+    const approvalId = approvalIdFromAuthority(stored.authority);
+
+    // (3) DURABLE DEDUPE, in two sub-steps. 3a is check-then-act and does not
+    // close the two-tab race; 3b is what closes it.
     const existing = repositories.actionRecords.getByNonce(capability.tenant, nonce);
     if (existing) {
       // A duplicate mutates nothing, so it answers with its receipt even while
       // a kill switch is active. This is deliberately NOT a 409: a second tab
       // or a retried POST is exactly the case where a 409 tells the operator
-      // their action failed when it succeeded.
+      // their action failed when it succeeded. It is also not an answer given
+      // to whoever asks: (1) and (2) have just proved this body is the very
+      // envelope the receipt is the record of, so the two describe each other
+      // by construction rather than by a caller-supplied nonce.
       return {
         executed: false,
         duplicate: true,
@@ -227,45 +286,18 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
 
     const release = () => repositories.idempotency.release(capability.tenant, nonce, CONSUMER);
 
-    // (2) THE STRUCTURAL GATE.
+    // (4) ADMISSION. (1) answered identity; this answers the other half of the
+    // kernel's question — may this envelope write NOW: expiry, the caller's
+    // tenant, a nonce already spent, and the kill switches. All four are
+    // conditions of writing, and all four are conditions a duplicate arrives
+    // under, which is why they sit below the dedupe and not above it.
     const validated = kernel.validateCapability(capability, { nowIso, tenantId });
     if (!validated.ok) {
       release();
       return { executed: false, duplicate: false, error: validated.error };
     }
 
-    // (3) PROVENANCE. The signature above proves the bytes have not moved; it
-    // does not prove this server ever issued them, and with the dev secret
-    // published it cannot. So the envelope is read back out of the capabilities
-    // table by its own primary key and required to be the SAME envelope, field
-    // for field across everything issuance wrote. Everything after this point
-    // acts on the STORED one, so a value that survived this comparison is a
-    // value the server wrote.
-    const issued = repositories.capabilities.get(capability.tenant, capability.capability_id);
-    const stored = issued?.envelope ?? null;
-    // A stored authority of no recognised kind names no approval, and treating
-    // it as autonomous would turn a row this build never wrote into the one
-    // thing the write path admits without a human.
-    const altered = stored === null
-      || !AUTHORITY_KINDS.includes(stored.authority?.kind)
-      || ENVELOPE_FIELDS.some((field) => JSON.stringify(capability[field]) !== JSON.stringify(stored[field]));
-    if (altered) {
-      release();
-      return {
-        executed: false,
-        duplicate: false,
-        error: {
-          code: 'CAPABILITY_NOT_ISSUED',
-          message: stored === null
-            ? 'this capability was not issued by this server'
-            : 'the delivered capability differs from the one this server issued',
-          details: { reason: stored === null ? 'unknown-capability' : 'altered-envelope', capability_id: capability.capability_id },
-        },
-      };
-    }
-    const approvalId = approvalIdFromAuthority(stored.authority);
-
-    // (4) THE GATE, again, on the write path. Same pure kernel.validateIntent
+    // (5) THE GATE, again, on the write path. Same pure kernel.validateIntent
     // the issuance routes ran, fed the STORED envelope's own values and the
     // server's own reading of the world: the live posture, the approval row the
     // envelope's own authority names, and the maturity measured now. A
@@ -277,7 +309,7 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
       return { executed: false, duplicate: false, error: reGated.error };
     }
 
-    // (5) THE WRITE, resolved from the SIGNED action. An action the contract
+    // (6) THE WRITE, resolved from the SIGNED action. An action the contract
     // does not map is a malformed capability, not a default to something
     // adjacent: a signed envelope naming a write this build does not implement
     // is refused, never quietly routed.
@@ -309,7 +341,7 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
       };
     }
 
-    // (6) THE RE-READ, through the READ interface against the SAME provider
+    // (7) THE RE-READ, through the READ interface against the SAME provider
     // instance that performed the write, so one request reconciles against the
     // state it just wrote.
     const applied = written.data?.reported ?? null;
@@ -317,7 +349,7 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
     const reconciliation = classify(applied, readBackState);
     const drift = classifyDrift(provider, reconciliation);
 
-    // (7) THE RECEIPT. maturity and band are COPIED from the signed envelope
+    // (8) THE RECEIPT. maturity and band are COPIED from the signed envelope
     // rather than recomputed: without that, the two audit columns would be null
     // on every autonomous receipt and a receipt could not answer which band was
     // actually enforced.
@@ -343,7 +375,7 @@ export function createExecutor({ repositories, provider, kernel, auditClock, rev
     });
 
     if (!appended) {
-      // Lost the UNIQUE nonce race between 1a and here. Release the claim and
+      // Lost the UNIQUE nonce race between 3a and here. Release the claim and
       // hand back the receipt that won, rather than reporting a second write.
       release();
       const winner = repositories.actionRecords.getByNonce(stored.tenant, nonce);

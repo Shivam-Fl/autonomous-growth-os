@@ -260,6 +260,100 @@ test('a duplicate is still answered while a kill switch is active', async () => 
   assert.equal(second.error, undefined);
 });
 
+test('BUG-6: a spent nonce is answered ONLY to the envelope it was spent on', async () => {
+  // The delivery this server issued and spent, and the four bodies that reuse
+  // its nonce without being it. Every one of the four was answered with the
+  // receipt for a mutation it did not describe, because the dedupe read ran
+  // before anything had looked at the body asking.
+  const { repositories, kernel, executor, provider } = boot({ secret: DEFAULT_SIGNING_SECRET });
+  const spent = capabilityFor(repositories, kernel);
+  const first = await run(executor, spent);
+  assert.equal(first.executed, true);
+  const writeAfterSpend = provider.lastWrite();
+  const receiptsAfterSpend = repositories.actionRecords.listForTenant(TENANT, { limit: 10 }).length;
+  // The spend owns the idempotency row for this nonce, and records the receipt
+  // on it. Every refusal below has to leave that row exactly as it found it.
+  const claimAfterSpend = repositories.idempotency.get(TENANT, spent.nonce, 'executor');
+  assert.equal(claimAfterSpend.effect.receipt_id, first.receipt_id);
+
+  // The control, in the same breath: the SAME envelope, delivered again, is
+  // answered with the SAME receipt (AC-2).
+  const honest = await run(executor, spent);
+  assert.equal(honest.executed, false);
+  assert.equal(honest.duplicate, true);
+  assert.equal(honest.receipt_id, first.receipt_id);
+  assert.equal(honest.reconciliation, first.reconciliation);
+  assert.equal(honest.drift, first.drift);
+
+  const impostors = {
+    'a different resource': { ...spent, resource: 'campaign_009' },
+    'a different action class': { ...spent, action_class: 'campaign-launch' },
+    'a replaced signature': { ...spent, signature: 'not-even-a-signature' },
+    // The case a test that only tampers a FIELD cannot reach: the bytes are
+    // re-signed over themselves with the published dev secret, so the HMAC
+    // agrees and a real capability_id rides along. The only thing left to
+    // catch it is the comparison against the envelope the server stored.
+    'a body re-signed over its own altered bytes': forge({
+      ...spent,
+      action_class: 'new-geography',
+      action: 'create_campaign',
+      resource: 'campaign_009',
+      constraints: { name: 'Retargeting — new region' },
+    }),
+  };
+  const refusals = {};
+  for (const [label, delivered] of Object.entries(impostors)) {
+    const result = await run(executor, delivered);
+    refusals[label] = result;
+    assert.equal(result.executed, false, label);
+    assert.equal(result.duplicate, false, label);
+    assert.equal(result.receipt_id, undefined, `${label} was told the mutation is done`);
+    assert.equal(typeof result.error?.code, 'string', label);
+    assert.equal(provider.lastWrite(), writeAfterSpend, `${label} reached the provider`);
+    assert.equal(repositories.actionRecords.listForTenant(TENANT, { limit: 10 }).length, receiptsAfterSpend, `${label} wrote a receipt`);
+    // A refused body takes no idempotency claim either, asserted through the
+    // real repository rather than a stub: the row the spend left is untouched.
+    assert.deepEqual(repositories.idempotency.get(TENANT, spent.nonce, 'executor'), claimAfterSpend, label);
+  }
+  // ...and the re-signed forgery is refused on the capabilities table, by the
+  // comparison rather than by the signature, which is what its own bytes
+  // agreed with.
+  const resigned = refusals['a body re-signed over its own altered bytes'];
+  assert.equal(resigned.error.code, 'CAPABILITY_NOT_ISSUED');
+  assert.equal(resigned.error.details.reason, 'altered-envelope');
+  assert.equal(resigned.error.details.capability_id, spent.capability_id);
+
+  // The same refusal on a nonce that was never spent leaves it CLAIMABLE,
+  // which is what "an unauthenticated body takes no claim" has to mean where
+  // there is no earlier spend to leave a row behind.
+  const unspent = capabilityFor(repositories, kernel);
+  const refusedFirstTime = await run(executor, { ...unspent, resource: 'campaign_009' });
+  assert.equal(refusedFirstTime.error.code, 'BAD_SIGNATURE');
+  assert.equal(repositories.idempotency.claim(TENANT, unspent.nonce, 'executor'), true, 'a refused body took no claim');
+  repositories.idempotency.release(TENANT, unspent.nonce, 'executor');
+});
+
+test('BUG-6 under a freeze: the altered delivery is refused, the honest one is still answered', async () => {
+  // Both halves of the identity/admission split at once. A freeze is an
+  // admission condition, so it must not turn an impostor into something the
+  // server will talk about — and it must not stop the server telling an
+  // operator that a mutation which really happened did happen.
+  const { repositories, kernel, executor } = boot();
+  const spent = capabilityFor(repositories, kernel);
+  const first = await run(executor, spent);
+  repositories.killSwitches.upsertFreeze({ tenant_id: TENANT, scope: 'provider', scope_id: 'meta_ads', kind: 'spend-spike', reason: 'x', actor: 'guardian', frozen_at: NOW });
+
+  const altered = await run(executor, { ...spent, resource: 'campaign_009' });
+  assert.equal(altered.executed, false);
+  assert.equal(altered.duplicate, false);
+  assert.equal(altered.receipt_id, undefined);
+
+  const honest = await run(executor, spent);
+  assert.equal(honest.duplicate, true);
+  assert.equal(honest.receipt_id, first.receipt_id);
+  assert.equal(honest.error, undefined);
+});
+
 test('the loser of the atomic claim is told to RETRY, and no provider call is made', async () => {
   // A claim the winner holds and has not yet released: exactly the two-tab
   // race, held open by hand. It is taken from the SAME repository the executor

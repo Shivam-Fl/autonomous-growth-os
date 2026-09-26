@@ -14,8 +14,9 @@ import { policyBand } from '../domain/measurement.js';
 
 /**
  * Dev-only default signing secret. It is NOT the authorisation boundary and
- * nothing may treat it as one: the write path proves provenance against the
- * server's own capabilities table (executor.provenance), so an envelope forged
+ * nothing may treat it as one: every path that answers about a delivered
+ * envelope proves it against the server's own capabilities table before it
+ * answers anything at all — a duplicate included — so an envelope forged
  * offline against this literal verifies and is still refused as
  * CAPABILITY_NOT_ISSUED. It is kept only because a signature has to be
  * computable, and because a signature nobody can compute would buy nothing.
@@ -294,7 +295,7 @@ export function validateIntent(intent, { nowIso, posture, approval = null, matur
   return { ok: true, intent };
 }
 
-const SIGNED_FIELDS = Object.freeze([
+export const SIGNED_FIELDS = Object.freeze([
   'tenant', 'action_class', 'action', 'resource', 'constraints', 'maturity', 'band', 'expiry', 'nonce', 'policy_version',
   'authority',
 ]);
@@ -462,9 +463,51 @@ function killSwitchChecks(envelope) {
 }
 
 /**
+ * IDENTITY: is this envelope one this server issued, unmoved? The first half of
+ * what validateCapability answers, split out because the write path has to
+ * establish it BEFORE the durable dedupe: a duplicate is answered from storage,
+ * and an answer about a mutation is an answer this server owes nobody until it
+ * has proved the body it is talking about is its own.
+ *
+ * The boundary, in one line: identity decides whether the server may ANSWER
+ * about a delivery, admission decides whether it may WRITE. A duplicate arrives
+ * under precisely the conditions admission refuses — a spent nonce, and often a
+ * live freeze — so those live in validateCapability and not here.
+ *
+ * It is the same function validateCapability calls as its first step, so there
+ * is exactly one implementation of "is this envelope yours" in the repository
+ * and no caller assembles a signing comparison of its own.
+ */
+export function verifyCapabilityIdentity(capability, { secret }) {
+  if (capability === null || typeof capability !== 'object' || Array.isArray(capability)) {
+    return refusal('MALFORMED_CAPABILITY', 'a capability must be an object', { field: null });
+  }
+  for (const field of [...SIGNED_FIELDS, 'capability_id', 'signature']) {
+    if (capability[field] === undefined || capability[field] === null) {
+      return refusal('MALFORMED_CAPABILITY', `a capability is missing ${field}`, { field });
+    }
+  }
+  if (Number.isNaN(Date.parse(capability.expiry))) {
+    return refusal('MALFORMED_CAPABILITY', 'a capability expiry is not a parseable timestamp', { field: 'expiry' });
+  }
+  const expected = sign(signingBytes(capability), secret);
+  // Length-insensitive comparison is unnecessary and wrong here: this is a
+  // public key over a public value, not a password, and the length of a
+  // mismatched digest leaks nothing the caller does not already hold.
+  if (capability.signature !== expected) {
+    return refusal('BAD_SIGNATURE', 'the capability signature does not verify', { field: 'signature' });
+  }
+  return { ok: true, capability };
+}
+
+/**
  * Structural, signature, expiry, scope, replay and kill-switch validation of a
- * capability. Both injected ports are NON-MUTATING and read-only, and the
- * difference matters:
+ * capability: verifyCapabilityIdentity, and then every question about whether
+ * the envelope may WRITE right now. The order between the two is fixed —
+ * identity first, and the admission checks below it in the order written.
+ *
+ * Both injected ports are NON-MUTATING and read-only, and the difference
+ * matters:
  *
  *   killSwitches { isActive(tenantId, scope, scopeId) } — a boolean read.
  *   nonces       { seen(tenantId, nonce) }               — NEVER claim. Claiming
@@ -484,23 +527,9 @@ function killSwitchChecks(envelope) {
  * refusal here and not a check the caller can satisfy by saying so.
  */
 export function validateCapability(capability, { secret, nowIso, tenantId, killSwitches, nonces }) {
-  if (capability === null || typeof capability !== 'object' || Array.isArray(capability)) {
-    return refusal('MALFORMED_CAPABILITY', 'a capability must be an object', { field: null });
-  }
-  for (const field of [...SIGNED_FIELDS, 'capability_id', 'signature']) {
-    if (capability[field] === undefined || capability[field] === null) {
-      return refusal('MALFORMED_CAPABILITY', `a capability is missing ${field}`, { field });
-    }
-  }
-  if (Number.isNaN(Date.parse(capability.expiry))) {
-    return refusal('MALFORMED_CAPABILITY', 'a capability expiry is not a parseable timestamp', { field: 'expiry' });
-  }
-  const expected = sign(signingBytes(capability), secret);
-  // Length-insensitive comparison is unnecessary and wrong here: this is a
-  // public key over a public value, not a password, and the length of a
-  // mismatched digest leaks nothing the caller does not already hold.
-  if (capability.signature !== expected) {
-    return refusal('BAD_SIGNATURE', 'the capability signature does not verify', { field: 'signature' });
+  const identity = verifyCapabilityIdentity(capability, { secret });
+  if (!identity.ok) {
+    return identity;
   }
   if (Date.parse(capability.expiry) <= Date.parse(nowIso)) {
     return refusal('EXPIRED_CAPABILITY', 'the capability expired', { expiry: capability.expiry });
@@ -527,9 +556,9 @@ export function validateCapability(capability, { secret, nowIso, tenantId, killS
 
 /**
  * Bind the secret, the policy version, the TTL and the two read-only ports, so
- * a caller never assembles a validateCapability call by hand. The ports are
- * required, not defaulted: a kernel with no way to ask about a freeze would
- * silently stop enforcing one.
+ * a caller never assembles a signing call by hand — neither the full gate nor
+ * the identity half of it. The ports are required, not defaulted: a kernel with
+ * no way to ask about a freeze would silently stop enforcing one.
  */
 export function createKernel({ secret, policyVersion, ttlMs = DEFAULT_CAPABILITY_TTL_MS, killSwitches, nonces }) {
   return {
@@ -543,6 +572,9 @@ export function createKernel({ secret, policyVersion, ttlMs = DEFAULT_CAPABILITY
     },
     validateCapability(capability, options) {
       return validateCapability(capability, { secret, killSwitches, nonces, ...options });
+    },
+    verifyCapabilityIdentity(capability, options) {
+      return verifyCapabilityIdentity(capability, { secret, ...options });
     },
   };
 }

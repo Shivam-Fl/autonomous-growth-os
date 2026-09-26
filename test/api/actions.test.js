@@ -184,6 +184,68 @@ test('a capability that WAS issued still executes, still writes one receipt, and
     .filter((row) => row.nonce === envelope.nonce).length, 1);
 });
 
+test('BUG-6 / AC-13: a spent nonce re-delivered with a different body is refused, and the honest re-delivery is not', async (t) => {
+  // The three-step curl QA ran, over the route: mint, spend, and deliver the
+  // same nonce again with a body that is not the envelope it was spent on.
+  const issued = await issue({ action_class: 'campaign-status', ...intents['campaign-status'] });
+  const envelope = issued.body.envelope;
+  const first = await post('/v1/actions/execute', envelope);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.executed, true);
+  const receipt = first.body.receipt_id;
+  const receiptsAfterSpend = repositories.actionRecords.listForTenant(TENANT, { limit: 200 }).length;
+
+  // (c) The SAME envelope, delivered again. AC-2, and the control that keeps
+  // every refusal below from being passed by refusing everything.
+  const honest = await post('/v1/actions/execute', envelope);
+  assert.equal(honest.status, 200);
+  assert.equal(honest.body.executed, false);
+  assert.equal(honest.body.duplicate, true);
+  assert.equal(honest.body.receipt_id, receipt);
+
+  const impostors = {
+    'a different resource': { ...envelope, resource: 'campaign_009' },
+    'a different action class': { ...envelope, action_class: 'campaign-launch' },
+    'a replaced signature': { ...envelope, signature: 'not-even-a-signature' },
+    // Re-signed over its OWN altered bytes with the published dev secret, so
+    // it carries a real capability_id and a real spent nonce and still
+    // verifies. Nothing but the comparison with the stored envelope refuses it.
+    'a body re-signed over its own altered bytes': forge({
+      ...envelope,
+      action_class: 'new-geography',
+      action: 'create_campaign',
+      resource: 'campaign_009',
+      constraints: { name: 'Retargeting — forged' },
+    }),
+  };
+  const assertRefused = async (label) => {
+    for (const [shape, delivered] of Object.entries(impostors)) {
+      const { status, body } = await post('/v1/actions/execute', delivered);
+      assert.equal(status, 403, `${label} / ${shape}`);
+      assert.equal(typeof body.code, 'string', `${label} / ${shape}`);
+      assert.equal(body.receipt_id, undefined, `${label} / ${shape} was handed a receipt`);
+      assert.equal(body.duplicate, undefined, `${label} / ${shape}`);
+      assert.equal(repositories.actionRecords.listForTenant(TENANT, { limit: 200 }).length, receiptsAfterSpend, `${label} / ${shape} wrote a receipt`);
+    }
+  };
+  await assertRefused('no freeze');
+  const reSigned = await post('/v1/actions/execute', impostors['a body re-signed over its own altered bytes']);
+  assert.equal(reSigned.status, 403);
+  assert.equal(reSigned.body.code, 'CAPABILITY_NOT_ISSUED', 'a verifying signature is not what refuses this one');
+  assert.equal(reSigned.body.details.reason, 'altered-envelope');
+
+  // (e) A freeze changes neither answer. The refusals do not become
+  // duplicates, and the honest re-delivery is still answered — telling an
+  // operator their action failed when it succeeded would be the worse bug.
+  repositories.killSwitches.upsertFreeze({ tenant_id: TENANT, scope: 'provider', scope_id: 'meta_ads', kind: 'spend-spike', reason: 'spike', actor: 'guardian', frozen_at: new Date().toISOString() });
+  t.after(() => repositories.killSwitches.reEnable(TENANT, 'provider', 'meta_ads', { actor: 'test', at: new Date().toISOString() }));
+  await assertRefused('under a freeze');
+  const frozenHonest = await post('/v1/actions/execute', envelope);
+  assert.equal(frozenHonest.status, 200);
+  assert.equal(frozenHonest.body.duplicate, true);
+  assert.equal(frozenHonest.body.receipt_id, receipt);
+});
+
 test('an intent whose action_class is absent or is not a class is refused with a named reason', async () => {
   // Both used to reach the roster lookup as undefined and be reported as an
   // object, which read like a server fault rather than a refusal.

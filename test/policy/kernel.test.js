@@ -24,6 +24,7 @@ import {
   labelFor,
   validateCapability,
   validateIntent,
+  verifyCapabilityIdentity,
 } from '../../src/policy/kernel.js';
 import { DECISION_CLASSES } from '../../src/domain/decisions.js';
 import { ACTION_WRITES } from '../../src/integrations/meta_ads/index.js';
@@ -321,6 +322,60 @@ test('the four structural failures are each refused', () => {
   assert.equal(replayed.error.details.nonce, capability.nonce);
 });
 
+test('THE SPLIT: identity answers "is this envelope yours", admission answers "may it write now"', () => {
+  // The write path has to establish identity BEFORE the durable dedupe, which
+  // means the two answers cannot be one function. Paired here and in
+  // test/executor/executor.test.js: the half that returns ok on a spent nonce
+  // looks like a hole on its own and is only a hole until this case says so.
+  const capability = sign();
+  const identify = (candidate, options = {}) => verifyCapabilityIdentity(candidate, { secret: SECRET, ...options });
+
+  // Identity is EXACTLY the shape check and the signature comparison, and
+  // returns the verdict validateCapability returns for the same input.
+  const missing = { ...capability };
+  delete missing.signature;
+  const shapes = [
+    ['not an object', null],
+    ['an array', []],
+    ['a missing signature', missing],
+    ['an unparseable expiry', { ...capability, expiry: 'not-a-date' }],
+    ['a moved byte', { ...capability, resource: 'campaign_002' }],
+  ];
+  for (const [label, candidate] of shapes) {
+    assert.deepEqual(identify(candidate), verify(candidate), label);
+    assert.equal(identify(candidate).ok, false, label);
+  }
+  assert.deepEqual(identify(capability, { secret: 'another-secret' }), verify(capability, { secret: 'another-secret' }));
+
+  // ...and the admissions it deliberately does NOT answer, on bodies that pass
+  // it cleanly.
+  const replayed = verify(capability, { nonces: { seen: () => true } });
+  assert.equal(replayed.error.code, 'REPLAYED_NONCE');
+  assert.equal(identify(capability).ok, true, 'a spent nonce is not an identity question');
+  const frozen = verify(capability, { killSwitches: { isActive: () => true } });
+  assert.equal(frozen.error.code, 'KILL_SWITCH_ACTIVE');
+  assert.equal(identify(capability).ok, true, 'a live freeze is not an identity question');
+});
+
+test('validateCapability is UNCHANGED for every verdict it already had, so the split is a refactor', () => {
+  // The extraction earns its keep only if the whole gate still answers what it
+  // answered. Pinned input by input, including the two identity owns.
+  const capability = sign();
+  const verdicts = {
+    MALFORMED_CAPABILITY: verify(null),
+    BAD_SIGNATURE: verify({ ...capability, resource: 'campaign_002' }),
+    EXPIRED_CAPABILITY: verify(sign({}, { ttlMs: -1 })),
+    OVER_SCOPE: verify(capability, { tenantId: 'tenant_other' }),
+    REPLAYED_NONCE: verify(capability, { nonces: { seen: () => true } }),
+    KILL_SWITCH_ACTIVE: verify(capability, { killSwitches: { isActive: () => true } }),
+  };
+  for (const [code, result] of Object.entries(verdicts)) {
+    assert.equal(result.ok, false, code);
+    assert.equal(result.error.code, code, code);
+  }
+  assert.equal(verify(capability).ok, true, 'a fresh, unfrozen, unseen capability is still admitted');
+});
+
 test('expiry is capped by the approval it authorised', () => {
   const cap = '2026-09-25T10:05:00.000Z';
   const capability = sign({}, { expiresAtCap: cap });
@@ -477,6 +532,14 @@ test('createKernel binds the secret, the TTL and the ports', () => {
   assert.equal(capability.policy_version, '7');
   assert.equal(capability.expiry, '2026-09-25T10:00:01.000Z');
   assert.equal(kernel.validateCapability(capability, { nowIso: NOW, tenantId: 'tenant_demo' }).ok, true);
+  // The identity half is bound the same way, so the executor never hands a
+  // secret to a signing function of its own: called with the capability and
+  // nothing else, it answers exactly as the module-level function does.
+  assert.deepEqual(kernel.verifyCapabilityIdentity(capability), verifyCapabilityIdentity(capability, { secret: SECRET }));
+  assert.deepEqual(
+    kernel.verifyCapabilityIdentity({ ...capability, resource: 'campaign_002' }),
+    verifyCapabilityIdentity({ ...capability, resource: 'campaign_002' }, { secret: SECRET }),
+  );
   assert.deepEqual(kernel.ACTION_CLASSES, ACTION_CLASSES);
   assert.deepEqual(kernel.BAND_ORDER, BAND_ORDER);
   assert.deepEqual(kernel.POSTURE_LABELS, POSTURE_LABELS);
