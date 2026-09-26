@@ -201,8 +201,8 @@
     "mode": "committed"
   },
   "touch_paths": [
+    "src/web/client.js",
     "test/web/pages.test.js",
-    "src/web/styles.css",
     "test/web/pages.test.js"
   ],
   "acceptance": [],
