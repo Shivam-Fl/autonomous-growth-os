@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -1832,6 +1832,15 @@ test('the rule the page h1 carries still holds the declarations the page title d
 // strings; the cascade test takes the class rule's winning declaration for each
 // guarded group and compares it to the same three. A stylesheet that declares
 // .page-title twice satisfies both while the h1 renders at 38.4px (BUG-2).
+//
+// That comparison is on the declaration TEXT, not on the resolved value, and
+// that is a decision rather than an accident: 'margin: 0px', 'font-size: 1.40rem'
+// and 'line-height: 1.250' all render the h1 exactly as the shipped sheet does
+// and are all reported, because telling those apart from the held spelling means
+// resolving every length against the root's font-size — the very coupling to the
+// root that ground (b) exists to police. The noise is in the direction the
+// contract accepts, and a restatement that changes the RENDERING is caught by
+// either reading.
 // ---------------------------------------------------------------------------
 
 // The three things the page title depends on. Each group lists every shorthand
@@ -2185,6 +2194,27 @@ const heavier = (one, other) => one[0] !== other[0]
   ? one[0] > other[0]
   : one[1] !== other[1] ? one[1] > other[1] : one[2] > other[2];
 
+// Which of two declarations the class rule wrote the cascade keeps: the one
+// under the more specific branch wins, and among equals the later one. 'at' is
+// the position in the pool, and the pool is built in document order across the
+// class rules and in body order inside each, so a pair written in ONE rule is
+// settled the way the browser settles it — 'margin-top: 24px' then 'margin: 0'
+// keeps the shorthand, which is the declaration PAGE_TITLE_HELD names.
+//
+// A specificity the vocabulary cannot compute is not a proof that the
+// declaration loses, so it is KEPT rather than passed over. That is the same
+// one-directional answer the reachability half gives for the same shape, and it
+// costs a report on a selector the guard cannot read, which is the direction
+// the contract accepts.
+function keptInPool(entry, at, keep, keepAt) {
+  const one = specificityOf(entry.branch);
+  const other = specificityOf(keep.branch);
+  if (one === null) return true;
+  if (other === null) return false;
+  if (one[0] !== other[0] || one[1] !== other[1] || one[2] !== other[2]) return heavier(one, other);
+  return at > keepAt;
+}
+
 function compoundSpecificity(compound) {
   const counts = [0, 0, 0];
   for (const token of splitSimple(compound)) {
@@ -2345,16 +2375,23 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
       });
       continue;
     }
+    // The branch to NAME is needed whether or not the pool below turns out to
+    // be empty, so it is read here. Reading it from the winner instead put a
+    // stylesheet whose class rule omits one of the three guarded properties —
+    // the single most likely edit to that rule — into a ReferenceError on a
+    // `const` declared twenty lines further down, rather than the report this
+    // branch was written to make.
+    const namedBranch = classBranchesOf(classRules[classRules.length - 1], cls, chain)[0];
     const held = classRules.flatMap((rule) => declarations(rule.body)
       .filter((entry) => properties.includes(entry.property))
       .map((entry) => ({ ...entry, index: rule.index, atRules: rule.atRules, branch: classBranchesOf(rule, cls, chain)[0] })));
     if (held.length === 0) {
       offenders.push({
-        selector: classBranch,
+        selector: namedBranch,
         atRules: classRules[classRules.length - 1].atRules,
         group,
         property: group,
-        message: `${classBranch} declares no ${properties.join(' or ')}, so ${subject} is not held by the class rule`,
+        message: `${namedBranch} declares no ${properties.join(' or ')}, so ${subject} is not held by the class rule`,
       });
       continue;
     }
@@ -2367,7 +2404,22 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
     // order, and reported an override the browser does not apply. So the pool is
     // narrowed to the heaviest declarations first and the last of those wins.
     const top = held.some((entry) => entry.important) ? held.filter((entry) => entry.important) : held;
-    const winner = top[top.length - 1];
+    // ...and the last of those only among declarations of equal SPECIFICITY
+    // too. The pool is in document order, so its last entry is the last one
+    // WRITTEN, which is not the same rule: 'h1.page-title { font-size: 2.4rem }'
+    // followed by '.page-title { font-size: 1.4rem; ... }' left the plain rule
+    // as the winner, so the value cross-check certified a 1.4rem the browser had
+    // already discarded and the suite passed green on a heading Chromium renders
+    // at 38.4px. Every entry carries the branch it was written under, so the
+    // weight the cascade would use is already in hand.
+    let winner = null;
+    let winnerAt = -1;
+    for (const [at, entry] of top.entries()) {
+      if (winner === null || keptInPool(entry, at, winner, winnerAt)) {
+        winner = entry;
+        winnerAt = at;
+      }
+    }
     const classBranch = winner.branch;
     const baseline = { specificity: specificityOf(classBranch), index: winner.index };
 
@@ -2390,8 +2442,16 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
     }
 
     for (const rule of rules) {
-      if (classIndexes.has(rule.index)) continue;
+      const carriesClass = classIndexes.has(rule.index);
       for (const selector of branchesOf(rule)) {
+        // A rule that gives the page h1 its typography is the baseline, not a
+        // competitor — but only through the BRANCH that gives it to it. A
+        // selector list may pair '.page-title' with a real competitor, and
+        // skipping the whole RULE put the competitor out of reach of both
+        // grounds behind the class branch it shares a rule with:
+        // '#main h1, .page-title { font-size: 2.4rem }' is an override the
+        // browser applies at (1,0,1), and the guard saw only the baseline.
+        if (carriesClass && isClassBranch(selector, cls, chain)) continue;
         if (!branchReaches(selector, chain, pageTitle)) continue;
         const candidate = { specificity: specificityOf(selector) };
         for (const entry of declarations(rule.body).filter((one) => properties.includes(one.property))) {
@@ -2403,9 +2463,12 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
           // it does everywhere else.
           if (entry.important !== winner.important) {
             if (winner.important) continue;
-          } else if (candidate.specificity === null) {
-            // A specificity the vocabulary cannot compute is not a proof that
-            // the rule loses, so it is reported rather than passed.
+          } else if (candidate.specificity === null || baseline.specificity === null) {
+            // A specificity the vocabulary cannot compute, on EITHER side of the
+            // comparison, is not a proof that the rule loses, so it is reported
+            // rather than passed. The baseline can be unreadable because a
+            // class rule written 'h1::first-line.page-title' has a
+            // pseudo-element in it; comparing against it unguarded threw.
           } else if (!beats({ ...candidate, index: rule.index }, baseline)) continue;
           const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
           const because = entry.important && !winner.important
@@ -2448,8 +2511,13 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
   // a change that does not happen, which is the failure mode this rewrite
   // exists to remove.
   for (const rule of rules) {
-    if (classIndexes.has(rule.index)) continue;
+    const carriesClass = classIndexes.has(rule.index);
     for (const selector of branchesOf(rule)) {
+      // As above: the class branch of a rule is the baseline, and any other
+      // branch in the same list is still judged on its own. '.page-title, html
+      // { font-size: 20px }' moves the h1 through the root just as much as the
+      // plain 'html' rule does.
+      if (carriesClass && isClassBranch(selector, cls, chain)) continue;
       if (!branchReaches(selector, chain, 0)) continue;
       // 'all' is here for the same reason it is in PAGE_TITLE_PROPERTIES: it
       // sets the root's font-size like any reset does, and the same argument
@@ -2481,11 +2549,25 @@ function outrankingPageTitleDeclarations(css, cls, chain) {
   return offenders;
 }
 
-test('nothing outranks the page title rule for the typography the h1 depends on', async () => {
-  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+// The cascade contract is seven tests rather than one. `node --test` reports a
+// single pass or fail for a whole body, so a red build used to hand the reader
+// an assertion message and nothing about which of thirty independent scenarios
+// produced it — while every other long test in this file scopes itself to one
+// concern, which is the convention here. They are cut at the comment
+// boundaries already in the contract, so each assertion keeps the reasoning
+// written above it, and they share one resolved page h1 and one stylesheet, so
+// what differs between them is the case and nothing else.
+let css;
+let chain;
+let cls;
+let sheetWith;
+let bySelectorAndProperty;
+
+before(async () => {
+  css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
   const html = await renderPage('/', { repositories: freshRepos() });
-  const { chain } = pageTitleElement(html);
-  const cls = pageTitleClass(html);
+  chain = pageTitleElement(html).chain;
+  cls = pageTitleClass(html);
   // A stylesheet carrying the class rule and nothing else, for every case
   // below that asserts what the guard REPORTS. Those cases are about the
   // guard, and pinning them to the shipped file ties them to a property of
@@ -2498,8 +2580,13 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // every other case here. The shipped sheet stays the input to the
   // clean-tree probes and to the cases that are about the file itself: the
   // two-longhand winner, the appended !important class rule, and the renames.
-  const sheetWith = (extra) => `.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }\n${extra}\n`;
+  sheetWith = (extra) => `.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }\n${extra}\n`;
+  bySelectorAndProperty = (offenders) => offenders.map((one) => `${one.selector} ${one.property}`);
+});
+
+test('nothing in the shipped stylesheet beats the class rule for the page h1', async () => {
   const inMedia = sheetWith('@media (max-width: 900px) { #main h1 { font-size: 2.4rem; } }');
+  const override = '#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }';
 
   // The shipped stylesheet must be clean, and it is the case that proves the
   // resolver is not simply flagging everything: the '*' reset and the body
@@ -2564,9 +2651,6 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     'and not one of them declares font-size, the font shorthand or the all shorthand, so ground (b) fires on nothing in the shipped sheet',
   );
 
-  const override = '#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }';
-  const bySelectorAndProperty = (offenders) => offenders.map((one) => `${one.selector} ${one.property}`);
-
   assert.deepEqual(
     bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(override), cls, chain)),
     ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
@@ -2594,6 +2678,9 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     'specificity decides, not source order: the same rule declared above the class rule still fails',
   );
 
+});
+
+test('a rule that reaches the h1 and the root: the two grounds on single rules', async () => {
   // '*' was one case in the previous version of this file, and its message said
   // the heading was unaffected because '*' loses to the class rule at (0,1,0).
   // That sentence was false and it is worth saying why: the cascade on the
@@ -2715,6 +2802,9 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     "a universal selector under a descendant combinator matches the h1, and !important on it wins",
   );
 
+});
+
+test("the class rule's own declarations: which one the cascade keeps", async () => {
   // Within the class rule the declaration the cascade keeps is the last one
   // setting that property, so that is the value the message names and the
   // importance the comparison weighs — not the first in the group.
@@ -2772,6 +2862,9 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     );
   }
 
+});
+
+test('the class name is a styling decision both ends may move together', async () => {
   // A coordinated rename of the class is a styling decision both ends may make
   // together; a one-sided one is a loud failure. This is the behaviour #51's
   // work order said it wanted and its delivered literals did not permit. All
@@ -2801,11 +2894,55 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // ...and the baseline is the selector that is in the file, not the plain
   // spelling: 'h1.page-title' is (0,1,1) and outranks '.page-title' at (0,1,0),
   // so a competitor that loses to the plain spelling wins against this one.
+  //
+  // This used to expect a report, and the report was false. It assumed the class
+  // rule 'carries' the 2.4rem because that is the last declaration written,
+  // which is not what the cascade keeps: 'h1.page-title' is (0,1,1) and the
+  // h1 is an h1 carrying the class, so the 1.4rem wins at any position in the
+  // file. Chromium reads 22.4px for this sheet, and the assertion was turning
+  // the build red over a stylesheet the browser renders exactly as the page
+  // title is held. The pair is BOTH ways round below, because the claim worth
+  // pinning is that the answer follows the specificity and not the order.
   assert.deepEqual(
     bySelectorAndProperty(outrankingPageTitleDeclarations(
       sheetWith(`h1.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }\n.${cls} { font-size: 2.4rem; }`), cls, chain)),
-    [`.${cls} font-size`],
-    "the later plain-spelled rule loses to 'h1.page-title' on specificity, so the competitor is the one that loses — and the value cross-check still names the 2.4rem the class rule now carries",
+    [],
+    "the later plain-spelled rule loses to 'h1.page-title' on specificity, so the declaration the cascade keeps is the 1.4rem and the h1 stays at 22.4px",
+  );
+  // The same two rules the other way round is the false pass this guard was
+  // filed to close, and it is invisible to an assertion that only reads the
+  // last declaration written: the specific rule is written FIRST here, so
+  // 'winner = the last one in the document' picked the plain 1.4rem, found it
+  // equal to the held value, and passed on a heading Chromium renders at
+  // 38.4px. Specificity is settled before source order, and both orders have
+  // to be green for the right reason and red for the right reason.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(
+      sheetWith(`h1.${cls} { font-size: 2.4rem; }\n.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }`), cls, chain)),
+    [`h1.${cls} font-size`],
+    "and with the specific rule written FIRST the 2.4rem is the declaration the cascade keeps, so it is reported rather than passed over (38.4px)",
+  );
+  assert.match(
+    outrankingPageTitleDeclarations(sheetWith(`h1.${cls} { font-size: 2.4rem; }\n.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }`), cls, chain)[0].message,
+    new RegExp(`the selector 'h1\\.${cls}' declares font-size: 2\\.4rem and the cascade keeps it`),
+    'and the message names the winning selector, not merely the property',
+  );
+  // A competitor that shares a selector LIST with the class rule is still a
+  // competitor. The whole rule is the baseline when a class branch is in it,
+  // and skipping the whole rule put the other half of the list out of reach of
+  // both grounds: '#main h1' at (1,0,1) is a real override the browser applies,
+  // and the guard was reading only the '.page-title' half of the same rule.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(
+      sheetWith(`#main h1, .${cls} { font-size: 2.4rem; }\n.${cls} { font-size: 1.4rem; line-height: 1.25; margin: 0; }`), cls, chain)),
+    ['#main h1 font-size'],
+    "the '#main h1' half of a list that also carries the class is a real override at (1,0,1), and 38.4px is what the browser renders",
+  );
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(
+      sheetWith(`.${cls}, html { font-size: 20px; }`), cls, chain)),
+    [`.${cls} font-size`, 'html font-size'],
+    "and the same on the other ground: a list pairing the class with a root selector moves the h1 twice over — the class rule's own value becomes 20px, and the root's font-size moves with it. Chromium reads 20px",
   );
   // A rule that gives the h1 the class on the ANCESTOR is a different rule
   // about a descendant, and the shipped chain has no such ancestor — so it is
@@ -2816,6 +2953,9 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     "'.page-title > .page-title' needs a page title inside a page title, and there is none, so it is a no-op at (0,2,0)",
   );
 
+});
+
+test('the value cross-check: the declaration the cascade keeps against the held value', async () => {
   // BUG-2, verbatim. The class rule declared twice with different values
   // satisfied BOTH tests in the previous version — the declaration test read
   // the first rule with .exec and the cascade test took the last declaration of
@@ -2851,7 +2991,58 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     [],
     'a restatement of the held value is green, even carrying !important',
   );
+  // Importance is the one thing the comparison ignores, because '1.4rem' and
+  // '1.4rem !important' are the same value. SPELLING is not ignored, and that
+  // is the ordered design rather than an oversight: the comparison is on the
+  // declaration text, so a rule that renders identically is still reported. All
+  // three of these settle the h1 at 22.4px / 1.25 / 0px in Chromium, and the
+  // build goes red on them anyway — the false-failure direction the risk section
+  // names as the one to be wrong in. Resolving them would mean resolving every
+  // length against the root's font-size, which is the coupling ground (b)
+  // polices; it is pinned here so the next reader does not read the loudness as
+  // a bug.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(sheetWith(`.${cls} { margin: 0px; }`), cls, chain)),
+    [`.${cls} margin`],
+    "a value that renders identically but is spelled differently is REPORTED: the comparison is textual, and that is on the record rather than accidental",
+  );
 
+  // A class rule that declares none of a group's properties is the most likely
+  // edit anyone makes to that rule, and the branch written to REPORT it — "the
+  // class rule declares no line-height or font" — read a `const` declared
+  // twenty lines further down the same function. So the guard threw a
+  // ReferenceError instead of making the report, on the one shape where it has
+  // nothing to compare and everything to say. No case covered the path, which is
+  // how the crash reached a branch whose suite is green.
+  const incomplete = outrankingPageTitleDeclarations(`.${cls} { color: red; }`, cls, chain);
+  assert.deepEqual(
+    incomplete.map((one) => one.group),
+    ['font-size', 'line-height', 'margin-top'],
+    'a class rule that declares none of the guarded properties is reported once per group, not thrown on',
+  );
+  for (const group of ['font-size', 'line-height', 'margin-top']) {
+    assert.match(
+      incomplete.find((one) => one.group === group).message,
+      new RegExp(`^\\.${cls} declares no .*${group === 'margin-top' ? 'margin' : group}.*, `
+        + `so the page h1's ${group} is not held by the class rule$`),
+      `and the '${group}' report names the class rule and says the group is no longer held`,
+    );
+  }
+  // The same path is reachable from a selector list rather than a hand-edited
+  // class rule: the list is read as the class rule, its body carries one of the
+  // three groups, and the other two are unheld. Both routes run the same code,
+  // and this is the one that made the crash look like a crash on ordinary CSS.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(`#main h1, .${cls} { font-size: 2.4rem; }`, cls, chain)
+      .filter((one) => one.message.includes('is not held by the class rule'))
+      .map((one) => one.group),
+    ['line-height', 'margin-top'],
+    "a list pairing the class with a competitor leaves the other two groups unheld, and that is reported rather than thrown on",
+  );
+
+});
+
+test('BUG-3 and BUG-4: the shapes to prove out, and the spellings to read whole', async () => {
   // BUG-3, verbatim. The old guard reported this one, in a message asserting as
   // fact a change that does not happen: '.page-title h1' needs an ancestor
   // carrying the class, and the chain is html < body < main#main < h1 — the page
@@ -2955,6 +3146,9 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
     "':where(#a)' contributes no specificity at all, so it reaches the h1 and loses at (0,0,0) — and the browser keeps the class rule's 1.25",
   );
 
+});
+
+test('ground (b): a font-size on the document root moves the page h1', async () => {
   // Ground (b), reported. These lose the cascade on the element and still move
   // the heading, because the class rule's font-size is in rem. Chromium reads
   // 53.76px for the 2.4rem forms and 28px for the 20px ones.
