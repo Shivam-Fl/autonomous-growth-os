@@ -991,8 +991,8 @@
     "pr": "53"
   },
   "qa": {
-    "verdict": "fail",
-    "introduced_bugs": 1,
+    "verdict": "pass",
+    "introduced_bugs": 0,
     "ac_ids": [
       "AC-1",
       "AC-2",
@@ -1005,17 +1005,13 @@
       "AC-9",
       "AC-10",
       "AC-11",
-      "AC-12"
+      "AC-12",
+      "AC-13"
     ],
-    "sha": "df490b057ae09b7d4071544f68207d7d5901542b",
-    "run_id": "36183752409",
-    "work_order_version": 3,
-    "at": "2026-09-25T20:19:35.318Z"
+    "sha": "581a447a3783aae6f8361afd588c64f638942f0c",
+    "run_id": "36227855713",
+    "work_order_version": 4,
+    "at": "2026-09-26T07:59:31.705Z"
   },
-  "qa_open_bugs": [
-    {
-      "id": "BUG-6",
-      "title": "A delivery carrying an already-spent nonce is answered 200 duplicate:true with a receipt for a different mutation, because the nonce dedupe runs before the signature and provenance checks"
-    }
-  ]
+  "qa_open_bugs": []
 }
