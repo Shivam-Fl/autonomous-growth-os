@@ -269,6 +269,12 @@
         "ac-8"
       ],
       "head": "74eef6deaccc1544f1178e12d29ded8e4bac4925"
+    },
+    {
+      "criteria": [
+        "ac-3"
+      ],
+      "head": "81129bc97f4308c55681a071641b2206be792eb5"
     }
   ],
   "review_root_caused": [],
