@@ -1484,6 +1484,13 @@ test('the card lists still carry the wrap that keeps an unbreakable name inside 
 // overflowed anyway — with a short name. overflow-wrap cannot reach either, so
 // the two declarations it takes are pinned here for the same reason as the ones
 // above, and the render proves both selectors have a card to match.
+//
+// #71 BUG-1: the first version of this pin required min-width: 0, which is the
+// declaration that broke the field. flex: 1 is basis 0%, so with the automatic
+// minimum removed the input is the row's only shrinkable item and took the whole
+// deficit: 59px at a 414px viewport, six characters, against 232px on the base
+// commit. The pin below states the property that is actually wanted — a readable
+// floor — rather than the one that happened to fix the overflow.
 test('the approval action row can shrink, and the selectors below have something to match', async () => {
   const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
 
@@ -1497,7 +1504,11 @@ test('the approval action row can shrink, and the selectors below have something
   const inputs = [...css.matchAll(/\.approval-actions input\s*\{([^}]*)\}/g)].map((m) => m[1]);
   assert.ok(inputs.length > 0, 'src/web/styles.css styles the approval reason input');
   inputs.forEach((body, i) => {
-    assert.match(body, /min-width\s*:\s*0\s*;/, `the reason input rule ${i + 1} declares min-width: 0, or the input's ~234px intrinsic width floors the card and the page overflows again`);
+    const widths = [...body.matchAll(/min-width\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(widths.length, 1, `the reason input rule ${i + 1} declares exactly one min-width, or which one wins is a matter of order; it declared ${JSON.stringify(widths)}`);
+    const floor = /^(\d+(?:\.\d+)?)(ch|rem|px)$/.exec(widths[0]);
+    assert.ok(floor, `the reason input rule ${i + 1} floors the field at a readable width in ch, rem or px, not at a keyword or a percentage it cannot be measured against; it declared ${JSON.stringify(widths[0])}`);
+    assert.ok(Number(floor[1]) >= 12, `the reason input rule ${i + 1} floors the field at 12 characters or more, or it collapses to six characters of what a human is typing: at a 414px viewport min-width: 0 measured 59px against this rule's 16ch; it declared ${JSON.stringify(widths[0])}`);
   });
 
   // The render is what makes the two pins facts about the page rather than
@@ -1508,6 +1519,32 @@ test('the approval action row can shrink, and the selectors below have something
   assert.ok(row, 'and the action row inside it');
   assert.equal((row.match(/<button /g) ?? []).length, 2, 'the row holds the Approve and Reject buttons the flex-wrap pin is about');
   assert.match(row, /<input id="reason-/, 'and the reason input the min-width pin is about');
+});
+
+// #71 BUG-2: the same free-text class of defect on a fifth surface. The wrap
+// rule is scoped to four server-rendered card lists, and the journal decision
+// drawer renders the same stored free text — evidence_refs, memory_refs,
+// policy_decision_id, worst_reasonable_case — by a different route, client.js
+// filling #journal-drawer-body from GET /v1/decisions/:id. Nothing rendered it
+// in any test, so nothing measured it: with 120-character unbreakable values
+// the body laid out 1229px inside 271px at a 320px viewport, and the page only
+// stayed the right width because #journal-drawer is position: fixed and so is
+// left out of document scroll width. The text was reachable by scrolling the
+// drawer sideways, which its overflow-y: auto makes overflow-x: auto.
+//
+// Unlike the card rule this one cannot be cross-checked against rendered
+// markup: the drawer body is empty in the server's HTML by design, so there is
+// no render in which the selector is known to match. That gap is the reason
+// the pin is a declaration pin and is worth stating rather than hiding.
+test('the journal decision drawer wraps the stored free text it is filled with', () => {
+  const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+  const bodies = [...css.matchAll(/\.journal-drawer-body\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(bodies.length > 0, 'src/web/styles.css defines a .journal-drawer-body rule');
+  bodies.forEach((body, i) => {
+    const values = [...body.matchAll(/overflow-wrap\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    assert.deepEqual(values, ['anywhere'],
+      `.journal-drawer-body rule ${i + 1} declares overflow-wrap: anywhere and nothing else, or a decision's stored refs scroll the drawer sideways instead of wrapping inside it: with 120-character unbreakable values the body measured 1229px of scrollWidth against 271px of clientWidth at a 320px viewport; it declared ${JSON.stringify(values)}`);
+  });
 });
 
 // #71 finding 6: the header shows tenants.list()[0].name, and src/api/routes.js

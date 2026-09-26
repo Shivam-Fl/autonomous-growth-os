@@ -382,11 +382,15 @@ th, td {
   overflow-wrap: anywhere;
 }
 
-/* The card's own min-content used to be this row: it is a nowrap flex row
-   holding an <input> whose automatic minimum is its ~234px intrinsic width,
-   and .approval-card is a grid item, so the track floored at ~389px and the
-   page overflowed at 320px. min-width: 0 below lets the input shrink, and the
-   wrap keeps both buttons reachable when that is still not enough. */
+/* The card's own min-content used to be this row: a nowrap flex row holding
+   an <input> whose automatic minimum is its ~234px intrinsic width, and
+   .approval-card is a grid item, so the track floored at ~389px and the page
+   overflowed at 320px. The wrap below is what lets the row shrink, so the input
+   needs no automatic minimum — and must not have one: `flex: 1` is basis 0%, so
+   at min-width 0 the field is the row's only shrinkable item and takes the whole
+   deficit, measuring 59px at a 414px viewport — six characters of the reason
+   being typed, against 232px before this ticket. Wrap plus floor is one
+   constraint: the wrap is what makes the floor safe to declare. */
 .approval-actions {
   display: flex;
   gap: var(--space-2);
@@ -396,7 +400,7 @@ th, td {
 
 .approval-actions input {
   flex: 1;
-  min-width: 0;
+  min-width: 16ch;
   min-height: 44px;
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--color-muted);
@@ -466,6 +470,7 @@ th, td {
 }
 
 .journal-drawer-body {
+  overflow-wrap: anywhere;
   display: grid;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
