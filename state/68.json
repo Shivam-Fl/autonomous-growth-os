@@ -353,7 +353,8 @@
         "detail": "Reinvention across test files: this PR adds validatedEnvelope to test/api/events.test.js, a near-verbatim copy of the one already at test/web/pages.test.js:41, and both now diverge in a way that will bite. The two differ only in their timestamp source (NOW() here, FIXTURE_OCCURRED_AT there), so the helper is duplicated for a constant, not for a reason. The repo has no shared test-helper module at all, and every other duplicated helper in these two files (freshRepos, opportunityRowMoney, qualifiedCplValue) is file-local by existing convention, so this is consistent with how the suite is written rather than drift. Flagging it as the smallest available cleanup, not as a convention violation — the convention here genuinely is file-local helpers.\n\n`test/api/events.test.js:365`\n\nEvidence: test/api/events.test.js:365-372 and test/web/pages.test.js:41-47 are the same eight lines with `occurred_at: NOW()` against `occurred_at: FIXTURE_OCCURRED_AT`. test/ contains no helpers or fixtures module beyond test/fixtures/replay-scenarios.json; `git ls-tree -r pr70 -- test` lists 25 files, none of them a shared helper. conventions.md specifies files mirror their directory (src/domain/money.js is tested by test/domain/money.test.js) and says nothing about cross-file test helpers.\n\nFix: Either leave it — the file-local convention is defensible and this is a two-line judgement call, not a defect — or lift both copies into a test/helpers/ module if a third copy is about to appear. Do not do it inside this PR on its own merits; the work order's out_of_scope already declines a shared-currency-export refactor for the same reason (a larger change than the lines it saves)."
       }
     ],
-    "pr": "70"
+    "pr": "70",
+    "filed": 72
   },
   "qa": {
     "verdict": "pass",
