@@ -193,7 +193,14 @@
     "confidence_rationale": "High, and higher than v1's 88 because the one objection has been closed by measurement rather than argument. Every number this order asserts was taken on current main or on a prototype of this exact plan: the regression reproduces (202, and metrics 7.2B->8.2B), the fix restores main's semantics in all five currency directions, the new test provably catches the regression by mutation, the pages.js revert is confirmed neutral at 293/293, and AC-7's count is measured at 4 before and 1 after. The residual uncertainty is not about correctness but about scope judgement: I scoped the 8 pre-existing opportunity-row matches out on the grounds that they predate #63, and a human may want them in the same diff.",
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/api/routes.js",
+    "src/web/pages.js",
+    "test/web/pages.test.js",
+    "test/api/events.test.js",
+    "test/api/events.test.js",
+    "test/web/pages.test.js"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
