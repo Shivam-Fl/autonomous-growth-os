@@ -344,7 +344,54 @@
         "detail": "`assert.equal(wrapping.length, 1, ...)` is stricter than the property its own message states, and it will fail on a future change that is not a defect. The message says the assertion exists 'so a second one cannot override it', but the assertion counts rules that mention overflow-wrap anywhere in the file, not rules that could override the card rule. Appending `.page-footer { overflow-wrap: anywhere; }` - a selector that cannot override `.experiment-card`, and a sensible thing to want for a long tenant name - turns the suite red. The property worth pinning is 'no later rule re-declares overflow-wrap on one of the three card selectors', which is what the sibling assertions in this same file (every-match, per-rule value checks) are written to state.\n\n`test/web/pages.test.js:1346`\n\nEvidence: Appending `.page-footer { overflow-wrap: anywhere; }` to src/web/styles.css: `node --test test/web/pages.test.js` -> 61 pass / 1 fail, with the message 'exactly one rule in src/web/styles.css declares overflow-wrap, so a second one cannot override it'. Restored, the shipped file is 62 pass / 0 fail. The two legitimate cases the assertion was designed to keep passing do pass - a `@media (min-width: 900px)` block re-declaring `#main > * { min-width: 0 }` and `.table-scroll { overflow-x: auto }` leaves the suite at 62/0, and the same block with `min-width: auto` correctly fails naming 'rule 2' - so the strengthened test above it is calibrated correctly and this one is not.\n\nFix: Either scope the count to rules whose selector mentions one of the three card classes, or drop the count and rely on the per-rule value assertion plus the existing every-match form. The current form is a global tripwire on a property the file may reasonably use elsewhere later."
       }
     ],
-    "pr": "69"
+    "pr": "69",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "minor",
+        "title": "A long tenant name scrolls the whole page sideways on every route; the header tenant name is taken verbatim from a request body",
+        "expected": "A tenant name of any length stays inside the header, so document.documentElement.scrollWidth <= window.innerWidth on every route at 320/375/414 — the same class of defect issue #67 was filed to close.",
+        "actual": "With a 137-character tenant name, document.documentElement.scrollWidth is 1495 at 320, 375 and 414 alike, on the commit under test and on the base commit 779a660 alike. The overflowing elements are DIV.header-status and SPAN.tenant-name, whose computed overflow-wrap is 'normal'. The tenant row is created by src/api/routes.js:191 as { id: tenantId, name: tenantId }, so the rendered name is whatever tenant_id the POST /v1/events body carried.",
+        "repro": [
+          "Serve the app on a fresh DB_PATH with no seed (an empty database, so no tenant exists yet) and confirm GET /health answers 200.",
+          "POST /v1/events with a valid event_name (e.g. 'lead_qualified') and tenant_id set to a 137-character unbreakable string such as 'tenant_' followed by 130 'a's. Expect 202.",
+          "GET / at a 320px viewport and read document.documentElement.scrollWidth: 1495 against innerWidth 320.",
+          "Repeat at 375 and 414: the same 1495.",
+          "On the base commit 779a660 the same fixture gives the identical 1495, so this predates the current PR."
+        ],
+        "area": "layout",
+        "introduced_by_pr": false,
+        "reproducible": "always",
+        "suspected_cause": "src/web/pages.js:73 renders the tenant name into SPAN#tenant-name, and src/web/styles.css contains no overflow-wrap, word-break or white-space declaration for .tenant-name or .header-status. The new rule added by this PR is scoped to .experiment-card, .opportunity-row and .approval-card, so it does not reach the header. Note the work order's out_of_scope entry dismisses the tenant name on the premise that it 'carries no user-supplied free text' — that premise is wrong, the name is the request's tenant_id verbatim. Unreachable on the seeded preview only because tenant_demo is the first tenant created and pages.js renders tenants.list()[0]; it is reachable on any deployment where the long-named tenant registers first.",
+        "evidence": [
+          "qa-evidence/T-tenant-name-results.json",
+          "qa-evidence/T-tenant-name-pr-8920f71-375.png",
+          "qa-evidence/T-tenant-name-base-779a660-375.png"
+        ]
+      },
+      {
+        "id": "BUG-2",
+        "severity": "minor",
+        "title": "The /opportunities research-observations card is a fourth free-text card list that the new wrap rule does not cover",
+        "expected": "Every card list that renders user free text outside a .table-scroll region gets overflow-wrap, so a long unbreakable claim stays inside its own card — this is the work order's own stated criterion for scoping the rule to three classes.",
+        "actual": "researchObservations() renders li.learning-card containing a free-text claim on /opportunities. No rule in the served stylesheet matches .learning-card or .learning-list at all, and the new rule names only .experiment-card, .opportunity-row and .approval-card. With a 120-character unbreakable claim, document.documentElement.scrollWidth is 1735 against a 320px viewport, the STRONG's computed overflow-wrap is 'normal', and .learning-list computes display:block — the same ordinary-block-child-refuses-to-break shape the work order names as the root cause for .opportunity-list. Identical 1735 on the base commit 779a660.",
+        "repro": [
+          "Seed and boot the app and confirm GET /health answers 200.",
+          "Give tenant_demo a learning whose claim is a 120-character unbreakable string. There is no HTTP write path — src/api/routes.js:362 exposes GET /v1/learnings only — so this row must come from the seed or from repositories.learnings; a QA run can also confirm the layout by setting the rendered .learning-card strong's textContent to that string in the page.",
+          "Open /opportunities at a 320px viewport.",
+          "Read document.documentElement.scrollWidth: 1735 against innerWidth 320, with STRONG the overflowing element."
+        ],
+        "area": "layout",
+        "introduced_by_pr": false,
+        "reproducible": "always",
+        "suspected_cause": "The work order enumerates three card classes; src/web/pages.js:682 renders a fourth (LI.learning-card with the free-text claim) that no selector in src/web/styles.css matches, so the enumeration is incomplete. The severity is minor only because no API path can create a long claim today; the CSS gap is the same one the ticket fixed three lists over.",
+        "evidence": [
+          "qa-evidence/T-learning-card-results.json",
+          "qa-evidence/T-learning-card-pr-8920f71-320.png",
+          "qa-evidence/T-learning-card-base-779a660-320.png"
+        ]
+      }
+    ]
   },
   "qa": {
     "verdict": "pass",
