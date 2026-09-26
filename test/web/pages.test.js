@@ -1087,15 +1087,73 @@ test('the production h1 assertion goes through H1_HOOK, not an inline regex', ()
 
 // The class, read off the rendered h1 rather than hard-coded, so the two ends
 // of the link are held by one check instead of two literals that happen to
-// agree. The pattern is anchored on whitespace on purpose: /\bclass="/ matches
-// inside data-class=, which is the false pass this ticket closes, and so does
-// the /<h1\s[^>]*\bclass="/ the issue proposed — [^>]* eats the 'data-' and \b
-// is a boundary between '-' and 'c'. This form tolerates either attribute
-// order, which is what #46 bought and must not be lost here.
+// agree. It is read off the resolved ELEMENT now, not off a regex over the tag:
+// the cascade guard below needs the h1 as an element with a chain behind it
+// (pageTitleElement), and two readers of the same markup would be two things
+// to keep in step. The old form was anchored on whitespace for a reason —
+// /\bclass="/ matches inside data-class=, which is the false pass this ticket
+// closes, and so does the /<h1\s[^>]*\bclass="/ the issue proposed — but
+// attribute PARSING is what rules data-class= out, and a parser gets that for
+// free. Either attribute order still works, which is what #46 bought and must
+// not be lost here.
+
+// Void elements never open a scope, so the ancestor stack is walked with them
+// skipped: an <img> in the header must not make every later element a child of
+// it. Comments go before the walk — a '<' inside one is text, not a tag — which
+// is the same order readStylesheet strips them in.
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr',
+]);
+
+function parseAttributes(source) {
+  const attrs = {};
+  const pattern = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? '';
+  }
+  return attrs;
+}
+
+// The page h1 as an element, with the chain of elements it sits inside, root
+// first. The hook is data-testid — the one .sdlc/memory/qa/selectors.md calls
+// stable — so the guard's notion of "the page h1" stops depending on the
+// styling class, and the class is read off what comes back (pageTitleClass) so
+// the two ends of the class-to-rule link still move together under a
+// coordinated rename.
+function pageTitleElement(html) {
+  const open = [];
+  let found = null;
+  const tags = /<(\/?)([a-zA-Z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
+  let tag;
+
+  while ((tag = tags.exec(html.replace(/<!--[\s\S]*?-->/g, ''))) !== null) {
+    const [, closing, name, source, selfClosing] = tag;
+    const element = { tag: name.toLowerCase(), attrs: parseAttributes(source) };
+    element.classes = (element.attrs.class ?? '').split(/\s+/).filter((value) => value !== '');
+
+    if (closing === '/') {
+      // A close tag for an element that is not open is stepped over rather than
+      // unwinding the stack: the guard reasons about one heading, and a
+      // mis-nested sibling elsewhere in the document is not its problem. It
+      // cannot be reached from the shipped shell, which is well formed.
+      if (open.length > 0 && open[open.length - 1].tag === element.tag) open.pop();
+      continue;
+    }
+    if (element.attrs['data-testid'] === 'page-title') {
+      found = { element, chain: [...open, element] };
+    }
+    if (selfClosing !== '/' && !VOID_ELEMENTS.has(element.tag)) open.push(element);
+  }
+
+  assert.ok(found, 'the rendered page carries an element with data-testid="page-title"');
+  // The chain is root-first, so the root is known exactly rather than guessed
+  // at — which is what lets ':root' be decided instead of stripped below.
+  found.chain[0].isRoot = true;
+  return found;
+}
 function pageTitleClass(html) {
-  const h1 = /<h1[^>]*>/.exec(html)?.[0] ?? '';
-  assert.match(h1, /data-testid="page-title"/, 'the page h1 is the hook under test');
-  return /\sclass="([^"]*)"/.exec(h1)?.[1] ?? '';
+  return pageTitleElement(html).element.classes.join(' ');
 }
 
 // Issue #51 finding 2: this is the one place in the suite that asserts on a
@@ -1151,6 +1209,19 @@ test('the rule the page h1 carries still holds the declarations the page title d
   assert.match(rule[1], /margin:\s*0\s*;/, 'the browser default h1 margin is cancelled');
   assert.match(rule[1], /font-size:\s*1\.4rem\s*;/, 'the page title keeps the display size');
   assert.match(rule[1], /line-height:\s*1\.25\s*;/, 'the page title keeps its line height');
+
+  // The same three values again, as the table the cascade guard compares the
+  // stylesheet's RESOLVED value against. The literals above stay so a reader
+  // can see what the values are; this is what stops a stylesheet that declares
+  // .page-title a second time from satisfying both while the cascade keeps the
+  // second rule's 2.4rem (BUG-2), which is a false pass this file was filed
+  // for. The two are read from one table so they cannot drift apart.
+  for (const [group, held] of Object.entries(PAGE_TITLE_HELD)) {
+    assert.ok(
+      new RegExp(`${held.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*;`).test(rule[1]),
+      `the class rule declares ${held}, the value the page h1's ${group} is held at`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1160,8 +1231,47 @@ test('the rule the page h1 carries still holds the declarations the page title d
 // declaration assertion above satisfied and the heading wrong. node:test has no
 // DOM and cannot read a computed style, so the helpers below work out which
 // rule the browser would apply to <main id="main"><h1 class="cls"> and name the
-// ones that beat it. A resolver that guessed at CSS it cannot model would be
-// the same false pass again, so it throws on unsupported syntax instead.
+// ones that beat it.
+//
+// The contract, stated once because the tests, the criteria and the failure
+// message must not disagree about it:
+//
+//   A rule is REPORTED when either ground holds.
+//     (a) it MAY match the page h1 and outranks the class rule on one of the
+//         three guarded properties — higher specificity, or equal and later,
+//         with !important outranking specificity asymmetrically; or
+//     (b) it MAY match the DOCUMENT ROOT, chain[0], and declares font-size or
+//         the font shorthand, because the class rule's own values are in rem
+//         and every rem in the sheet is measured against the root's font-size.
+//   It is SILENT when it provably cannot match the h1, when it does match the
+//         h1 but loses the cascade, and when it declares none of the three
+//         guarded properties.
+//
+// Two properties of that contract carry the whole weight:
+//
+//   Reachability is FALSE ONLY ON A PROOF. A whitelist of recognised spellings
+//   under-approximates — '[data-testid="page-title"]' matches the shipped h1
+//   exactly and a list of spellings had never heard of it (BUG-1) — and a
+//   last-compound test over-approximates, claiming the page h1 of any branch
+//   ending in h1 (BUG-3). One rule, made once, wrong in opposite directions.
+//   Here the question is asked of the ELEMENT and answered one way: nothing the
+//   vocabulary cannot decide is ever a proof. The cost is false failures, and
+//   the risk section names that as the direction to be wrong in.
+//
+//   The ground (b) reach test is about the ROOT, not about the h1. These are
+//   different questions and answering them the same way round is how '[lang]'
+//   got filed as a provable no-match: the h1 carries no lang attribute, which
+//   is a ground (a) fact, but the document root is <html lang="en"> and the
+//   rule matches it, so it is a ground (b) report. The counter-example is the
+//   mirror image: 'h1[data-testid="page title"]' names a value the h1 does not
+//   carry and is a proof of non-match under ground (a), while the root, having
+//   no data-testid at all, is a proof of non-match under ground (b).
+//
+// It also compares the VALUE the browser settles on, not only the declaration
+// that wins. The declaration test above asserts the class rule contains three
+// strings; the cascade test takes the class rule's winning declaration for each
+// guarded group and compares it to the same three. A stylesheet that declares
+// .page-title twice satisfies both while the h1 renders at 38.4px (BUG-2).
 // ---------------------------------------------------------------------------
 
 // The three things the page title depends on. Each group lists every shorthand
@@ -1175,99 +1285,297 @@ const PAGE_TITLE_PROPERTIES = [
   { group: 'margin-top', properties: ['margin', 'margin-top', 'margin-block', 'margin-block-start'] },
 ];
 
-function unsupportedSelector(selector, reason) {
-  return new Error(`the cascade guard cannot read the selector '${selector}': ${reason}`);
+// The declaration each guarded group must finally be settled by, as the
+// declaration text the browser reads — 'margin: 0' for the margin-top group,
+// because a margin: 0 after a margin-top: 24px in the same rule is the
+// declaration the cascade keeps and the one the browser applies. Both the
+// declaration test and the cascade test read this one table; a change to a
+// value the page title is held at is a change both ends see, and it is the
+// same contract AC-2 already imposes on the class rule's own values.
+const PAGE_TITLE_HELD = {
+  'font-size': 'font-size: 1.4rem',
+  'line-height': 'line-height: 1.25',
+  'margin-top': 'margin: 0',
+};
+
+// ONE splitter for the whole guard, and the matcher and the specificity
+// function both run on it — a selector shape that tokenised one way for
+// matching and another for the cascade would mis-order the two against each
+// other, and the fix for that is one function, not two that agree today.
+//
+// Quote- and bracket-aware, because a space inside a quoted value is not a
+// compound boundary: 'h1[data-x="a b"]' is ONE compound, and the plain
+// whitespace regex this replaces cut it in half and threw on the token
+// '[data-x="a' (BUG-4) — a build break on ordinary CSS the guard's own
+// comment claimed to support. A newline is whitespace too, because the
+// shipped sheet breaks a comma list across one.
+//
+// Each compound carries the combinator joining it to the one BEFORE it, and
+// the spaces either side of a '>' emit no empty compound: 'main > h1' is two
+// compounds, not three, and the empty middle one silently broke the match.
+function splitCompounds(branch) {
+  const compounds = [];
+  let text = '';
+  let combinator = '';
+  let depth = 0;
+  let quote = null;
+
+  const push = () => {
+    if (text.trim() !== '') compounds.push({ compound: text.trim(), combinator });
+    text = '';
+    combinator = '';
+  };
+
+  for (const character of branch) {
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === '[' || character === '(') depth += 1;
+    else if (character === ']' || character === ')') depth -= 1;
+    else if (depth === 0 && (character === '>' || character === '+' || character === '~')) {
+      push();
+      combinator = character;
+      continue;
+    } else if (depth === 0 && /\s/.test(character)) {
+      push();
+      continue;
+    }
+    text += character;
+  }
+  push();
+  return compounds;
 }
 
-// Cheap reachability, run before any parsing, so a selector the guard does not
-// evaluate (.checklist li:not(.x)) is skipped without being parsed and never
-// breaks the suite. Every branch that may reach the h1 is then re-checked
-// exactly by parseSelector below — so being generous here can only produce a
-// failure or a throw, never a false pass.
-function mayReachPageTitle(selector, cls) {
-  if (selector === '' || selector.startsWith('@')) return false;
-  const compounds = selector.split(/\s*>\s*|\s+/).filter((compound) => compound !== '');
-  // Anchored on the start of a compound, not compared for equality. A test for
-  // the bare token 'h1' reaches the page h1 only when the whole compound is
-  // exactly that, so h1[data-testid], h1:hover, h1:first-child and
-  // main > h1[data-testid] were all dropped here, never reached parseSelector,
-  // and never reported — h1[data-testid] matching the shipped h1 exactly, at
-  // (0,1,1) against the class rule's (0,1,0).
-  if (compounds.some((compound) => /^h1(?![\w-])/.test(compound))) return true;
-  // On the last compound only, where these reach the h1 at all: '*' matches
-  // the element itself, html and body reach it by inheritance, and whether a
-  // declaration there can win is parseSelector's call, not this one's.
-  const last = compounds[compounds.length - 1] ?? '';
-  if (/^(?:\*|html|body)(?![\w-])/.test(last)) return true;
-  return last.includes(`.${cls}`);
+// The text of an attribute selector's body — everything up to the ']' — found
+// by tracking the quote rather than by the first bracket, since a quoted value
+// may hold both a space and a bracket. Returns null when the ']' never comes,
+// which the caller reports as an unreadable token rather than guessing.
+function readAttributeBody(text) {
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === ']') return text.slice(0, index);
+  }
+  return null;
 }
 
-// Supported vocabulary: id, class, attribute, single-colon pseudo-class, type,
-// '*', and the descendant and '>' combinators (comma lists are split by the
-// caller). A pseudo-element, a '+' or '~', or a functional pseudo-class such as
-// :not(…) throws, naming the offending selector. Only branches that may reach
-// the h1 are ever parsed, so this cannot fire on unrelated CSS.
-function parseSelector(selector, cls) {
-  // The two supported combinators, and the only whitespace a selector carries.
-  const compounds = selector.split(/\s*>\s*|\s+/).filter((compound) => compound !== '');
-  let ids = 0;
-  let classes = 0;
-  let types = 0;
-  let matchesPageTitle = false;
+const ATTRIBUTE_SOURCE = /^\s*([^\s\]~^$*|=]+)\s*(?:(~=|\^=|\$=|\*=|\|=|=)\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]*)))?\s*$/;
 
-  compounds.forEach((compound, position) => {
-    let rest = compound;
-    let lastCarriesClass = false;
-    let lastIsH1 = false;
-    let lastIsUniversal = false;
+// One compound's simple selectors, read left to right, each carrying its own
+// source text so a token can be dropped (stripNarrowing) without re-rendering
+// it. A token the vocabulary does not cover is returned as {kind: 'unknown'}
+// rather than throwing: the guard's contract is that reachability is decided,
+// never guessed, and a token it cannot read is exactly the case it must not
+// claim a proof about. The previous version threw, which turned a selector the
+// parser had not met into a build break — the guard narrowing its own contract
+// to fit its parser, which is how BUG-4 became a failure at all.
+function splitSimple(compound) {
+  const tokens = [];
+  let rest = compound;
 
-    while (rest !== '') {
-      if (rest.startsWith('::')) throw unsupportedSelector(selector, 'a pseudo-element');
-      if (rest.startsWith('+') || rest.startsWith('~')) {
-        throw unsupportedSelector(selector, `the '${rest[0]}' combinator`);
-      }
-      if (rest.startsWith(':')) {
-        const pseudo = /^:[A-Za-z-]+/.exec(rest);
-        if (!pseudo) throw unsupportedSelector(selector, `the token '${rest}'`);
-        if (rest[pseudo[0].length] === '(') {
-          throw unsupportedSelector(selector, `the functional pseudo-class '${pseudo[0]}('`);
+  const take = (kind, name, extra) => {
+    const source = rest.slice(0, name.length);
+    rest = rest.slice(name.length);
+    tokens.push({ kind, source, name, ...extra });
+  };
+
+  while (rest !== '') {
+    if (rest.startsWith('::')) {
+      const name = /^[A-Za-z-]+/.exec(rest.slice(2))?.[0] ?? '';
+      take('pseudo-element', `::${name}`);
+    } else if (rest.startsWith(':')) {
+      const name = /^[A-Za-z-]+/.exec(rest.slice(1))?.[0] ?? '';
+      // A functional pseudo-class takes its argument, which may itself hold
+      // brackets and quotes: ':not([data-x="a b"])' is one token.
+      if (rest[name.length + 1] === '(') {
+        let depth = 0;
+        let quote = null;
+        let end = name.length + 1;
+        for (; end < rest.length; end += 1) {
+          const character = rest[end];
+          if (quote !== null) {
+            if (character === quote) quote = null;
+          } else if (character === '"' || character === "'") quote = character;
+          else if (character === '(') depth += 1;
+          else if (character === ')') {
+            depth -= 1;
+            if (depth === 0) { end += 1; break; }
+          }
         }
-        classes += 1;
-        rest = rest.slice(pseudo[0].length);
-        continue;
+        take('pseudo', rest.slice(0, end));
+      } else if (name !== '') take('pseudo', `:${name}`);
+      else take('unknown', rest[0]);
+    } else if (rest.startsWith('#') || rest.startsWith('.')) {
+      const name = /^[A-Za-z_-][\w-]*/.exec(rest.slice(1))?.[0];
+      if (name === undefined) take('unknown', rest[0]);
+      else take(rest[0] === '#' ? 'id' : 'class', rest[0] + name);
+    } else if (rest.startsWith('[')) {
+      const body = readAttributeBody(rest.slice(1));
+      const parsed = body === null ? null : ATTRIBUTE_SOURCE.exec(body);
+      if (parsed === null) {
+        // Consume the whole malformed selector rather than one character, so
+        // an unreadable token cannot be re-read as a readable one.
+        const consumed = body === null ? rest.length : body.length + 2;
+        tokens.push({ kind: 'unknown', source: rest.slice(0, consumed), name: rest.slice(0, consumed) });
+        rest = rest.slice(consumed);
+      } else {
+        take('attribute', rest.slice(0, body.length + 2), {
+          attribute: parsed[1].toLowerCase(),
+          op: parsed[2] ?? null,
+          value: parsed[3] ?? parsed[4] ?? parsed[5] ?? null,
+        });
       }
-      const simple = /^(?:#[A-Za-z_][\w-]*|\.[A-Za-z_-][\w-]*|\[[^\]]*\]|\*|[A-Za-z][\w-]*)/.exec(rest);
-      if (!simple) throw unsupportedSelector(selector, `the token '${rest}'`);
-      const token = simple[0];
-      if (token.startsWith('#')) ids += 1;
-      else if (token.startsWith('.')) {
-        classes += 1;
-        lastCarriesClass = token === `.${cls}`;
-      } else if (token.startsWith('[')) classes += 1;
-      else if (token === '*') lastIsUniversal = true;
-      else {
-        types += 1;
-        lastIsH1 = token === 'h1';
-      }
-      rest = rest.slice(token.length);
+    } else if (rest.startsWith('*')) {
+      take('universal', '*');
+    } else {
+      const name = /^[A-Za-z][\w-]*/.exec(rest)?.[0];
+      if (name === undefined) take('unknown', rest[0]);
+      else take('type', name);
     }
+  }
 
-    if (position === compounds.length - 1) {
-      // Whether the branch matches the h1 element itself. html and body do not:
-      // they reach it by inheritance, and an inherited value applies only where
-      // no declaration matches the element — which the class rule always does
-      // for these three properties, !important on the ancestor or not. Where it
-      // declares none of them, outrankingPageTitleDeclarations reports that
-      // directly rather than blaming an override that cannot happen.
-      matchesPageTitle = lastCarriesClass || lastIsH1 || lastIsUniversal;
-    }
-  });
-
-  return { specificity: [ids, classes, types], matchesPageTitle };
+  return tokens;
 }
 
-function specificityOf(selector, cls) {
-  return parseSelector(selector, cls).specificity;
+// Pseudo-classes narrow a match; they never widen one. :not(), :is() and :hover
+// all only remove or re-target elements, so the BASE is the whole of the
+// question a proof can be asked about — a base that provably matches nothing
+// proves the original matches nothing either. What is left is decided on, and
+// the narrowing itself is undecidable from static markup, so the answer that
+// comes back is "may match" rather than a guess: 'h1:hover' is reported at
+// rest, which is the noisy direction and the correct one.
+//
+// ':root' is the one that does not narrow: it NAMES an element rather than
+// qualifying one, and the chain knows the root exactly, so it is decided
+// against the element instead of stripped. Stripping it would empty the
+// compound, an empty compound matches anything, and ':root { font-size: 20px }'
+// would then be reported twice — once by each ground, the ground (a) report
+// claiming that ':root' outranks the class rule on an element it does not match.
+function stripNarrowing(compound) {
+  return splitSimple(compound)
+    .filter((token) => token.kind !== 'pseudo' || token.name === ':root')
+    .map((token) => token.source)
+    .join('');
+}
+
+// Does an attribute selector hold for this element? A real VALUE comparison,
+// not a presence test, and that is the whole of it: the shipped h1 carries
+// data-testid="page-title", so 'h1[data-testid]' matches and
+// 'h1[data-testid="page title"]' does not — the attribute is present with a
+// different value, which is a proof and not a maybe. A presence-only test would
+// have made the second one a false failure on a rule that changes nothing
+// (measured: the browser leaves the h1 at 22.4px).
+function attributeHolds(token, element) {
+  const actual = element.attrs[token.attribute];
+  if (actual === undefined) return false;
+  if (token.op === null) return true;
+  const expected = token.value ?? '';
+  if (token.op === '=') return actual === expected;
+  if (token.op === '~=') return actual.split(/\s+/).includes(expected);
+  if (token.op === '^=') return actual.startsWith(expected);
+  if (token.op === '$=') return actual.endsWith(expected);
+  if (token.op === '*=') return actual.includes(expected);
+  if (token.op === '|=') return actual === expected || actual.startsWith(`${expected}-`);
+  return true;
+}
+
+// One simple selector against one element. Tri-state on purpose, and only
+// `false` may silence anything: false is a PROOF of non-match, true is a match,
+// and null is everything static markup cannot decide (a token the vocabulary
+// does not read). That asymmetry is the guard.
+function simpleMatches(token, element) {
+  if (token.kind === 'universal') return true;
+  if (token.kind === 'type') return token.name.toLowerCase() === element.tag;
+  if (token.kind === 'id') return element.attrs.id === token.name.slice(1);
+  if (token.kind === 'class') return element.classes.includes(token.name.slice(1));
+  if (token.kind === 'attribute') return attributeHolds(token, element);
+  // A pseudo-element styles a generated box, never the element itself, so a
+  // compound carrying one cannot match the element.
+  if (token.kind === 'pseudo-element') return false;
+  // The only pseudo-class that survives stripNarrowing, so the only one with a
+  // decidable answer: ':root' names the document root and nothing else.
+  if (token.kind === 'pseudo') return element.isRoot === true;
+  return null;
+}
+
+function compoundMatches(compound, element) {
+  const simple = splitSimple(stripNarrowing(compound));
+  let undecided = false;
+  for (const token of simple) {
+    const answer = simpleMatches(token, element);
+    if (answer === false) return false;
+    if (answer === null) undecided = true;
+  }
+  return undecided ? null : true;
+}
+
+// THE one-directional answer, and the only place the guard decides whether a
+// selector can reach an element. False is returned on a proof and on nothing
+// else; every shape the vocabulary cannot decide is true, which reports the
+// rule rather than guessing at it. `target` is an index into `chain`: the page
+// h1 at the end for ground (a), chain[0] for ground (b).
+function branchReaches(branch, chain, target) {
+  if (branch === '' || branch.startsWith('@')) return false;
+  // A pseudo-element styles a generated box. No declaration in such a branch
+  // is a declaration on the element, at any specificity.
+  if (branch.includes('::')) return false;
+
+  const parts = splitCompounds(branch);
+  if (parts.length === 0) return false;
+
+  // The rightmost compound is the part of the question the chain can answer
+  // with no tree at all, so it decides first: 'h1 + p' is out because the page
+  // h1 is not a p, which is a proof and needs no sibling information.
+  if (compoundMatches(parts[parts.length - 1].compound, chain[target]) === false) return false;
+
+  // '+' and '~' need siblings, which one ancestor chain does not carry.
+  // Whatever got past the rightmost compound cannot be proved out on sibling
+  // grounds, so the honest answer is "may match" — never a silent pass.
+  let position = target;
+  for (let index = parts.length - 2; index >= 0; index -= 1) {
+    const join = parts[index + 1].combinator;
+    if (join === '+' || join === '~') return true;
+    if (join === '>') {
+      // The element immediately to the left. This is what closes BUG-3: '.page-title h1'
+      // is not 'the h1 with the class on an ancestor', it needs an ancestor that
+      // actually carries the class, and the chain is html < body < main#main < h1.
+      position -= 1;
+      if (position < 0) return false;
+      if (compoundMatches(parts[index].compound, chain[position]) === false) return false;
+    } else {
+      // A descendant may be any element to the left, so the proof is that
+      // EVERY element to the left is excluded. `position` deliberately does not
+      // move: keeping the widest set of ancestors for the compounds further
+      // left can only turn a proof into "may match", which is the safe way to
+      // be wrong.
+      const excluded = chain
+        .slice(0, position)
+        .every((element) => compoundMatches(parts[index].compound, element) === false);
+      if (excluded) return false;
+    }
+  }
+  return true;
+}
+
+// (ids, classes, types), on the same splitter the matcher uses. A pseudo-class
+// counts as a b and a universal selector counts as nothing, exactly as CSS
+// says; a pseudo-element and a token the vocabulary cannot read yield null
+// rather than a number, because the guard has no proof about such a shape and
+// "undecidable" must never be read downstream as "loses the cascade".
+function specificityOf(selector) {
+  const counts = [0, 0, 0];
+  for (const { compound } of splitCompounds(selector)) {
+    for (const token of splitSimple(compound)) {
+      if (token.kind === 'id') counts[0] += 1;
+      else if (token.kind === 'class' || token.kind === 'attribute' || token.kind === 'pseudo') counts[1] += 1;
+      else if (token.kind === 'type') counts[2] += 1;
+      else if (token.kind !== 'universal') return null;
+    }
+  }
+  return counts;
 }
 
 // Greater specificity wins; equal specificity is decided by source order, so
@@ -1339,11 +1647,14 @@ function branchesOf(rule) {
   return rule.selector.split(',').map((branch) => branch.trim());
 }
 
-// Every declaration that would beat the class rule for one of the three
-// properties the page title depends on, with the message the reader needs.
-function outrankingPageTitleDeclarations(css, cls) {
+// Every declaration that would move one of the three properties the page title
+// depends on, with the message the reader needs. `chain` is the resolved page
+// h1 and its ancestors; `cls` the class it carries, which is the baseline the
+// class-to-rule link names on both ends.
+function outrankingPageTitleDeclarations(css, cls, chain) {
   const rules = readStylesheet(css);
   const offenders = [];
+  const pageTitle = chain.length - 1;
   // Every rule carrying the class, in document order. A stylesheet may split
   // one class over several rules — an added !important declaration is the usual
   // reason — and the cascade keeps the last declaration of a property from
@@ -1352,6 +1663,7 @@ function outrankingPageTitleDeclarations(css, cls) {
   // class rule "declares no line-height" about a stylesheet that declares it.
   const classRules = rules.filter((rule) => branchesOf(rule).includes(`.${cls}`));
   const classIndexes = new Set(classRules.map((rule) => rule.index));
+  const heldWinner = {};
 
   for (const { group, properties } of PAGE_TITLE_PROPERTIES) {
     const subject = `the page h1's ${group}`;
@@ -1368,7 +1680,7 @@ function outrankingPageTitleDeclarations(css, cls) {
     const classBranch = `.${cls}`;
     const held = classRules.flatMap((rule) => declarations(rule.body)
       .filter((entry) => properties.includes(entry.property))
-      .map((entry) => ({ ...entry, index: rule.index })));
+      .map((entry) => ({ ...entry, index: rule.index, atRules: rule.atRules })));
     if (held.length === 0) {
       offenders.push({
         selector: classBranch,
@@ -1383,14 +1695,32 @@ function outrankingPageTitleDeclarations(css, cls) {
     // name and the one whose importance decides the comparison — and the rule
     // it came from is the one the class rule is compared with for order.
     const winner = held[held.length - 1];
-    const baseline = { specificity: parseSelector(classBranch, cls).specificity, index: winner.index };
+    heldWinner[group] = winner;
+    const baseline = { specificity: specificityOf(classBranch), index: winner.index };
+
+    // The VALUE, not only the declaration that wins (BUG-2). The declaration
+    // test above asserts the class rule contains the three strings; a sheet
+    // that declares .page-title a second time satisfies that while the cascade
+    // keeps the later rule's 2.4rem and the h1 renders at 38.4px. Importance is
+    // ignored here: what the page title depends on is the value, and
+    // 'font-size: 1.4rem !important' settles at the same 1.4rem.
+    const heldText = `${winner.property}: ${winner.value.replace(/!\s*important\s*$/i, '').trim()}`;
+    if (heldText !== PAGE_TITLE_HELD[group]) {
+      offenders.push({
+        selector: classBranch,
+        atRules: winner.atRules,
+        group,
+        property: winner.property,
+        message: `the selector '${classBranch}' declares ${heldText} and the cascade keeps it — `
+          + `${subject} would be ${heldText} instead of ${PAGE_TITLE_HELD[group]}`,
+      });
+    }
 
     for (const rule of rules) {
       if (classIndexes.has(rule.index)) continue;
       for (const selector of branchesOf(rule)) {
-        if (!mayReachPageTitle(selector, cls)) continue;
-        const candidate = parseSelector(selector, cls);
-        if (!candidate.matchesPageTitle) continue;
+        if (!branchReaches(selector, chain, pageTitle)) continue;
+        const candidate = { specificity: specificityOf(selector) };
         for (const entry of declarations(rule.body).filter((one) => properties.includes(one.property))) {
           // Importance outranks specificity in author origin, and it is
           // asymmetric: an !important declaration beats every normal one, so a
@@ -1400,11 +1730,14 @@ function outrankingPageTitleDeclarations(css, cls) {
           // it does everywhere else.
           if (entry.important !== winner.important) {
             if (winner.important) continue;
+          } else if (candidate.specificity === null) {
+            // A specificity the vocabulary cannot compute is not a proof that
+            // the rule loses, so it is reported rather than passed.
           } else if (!beats({ ...candidate, index: rule.index }, baseline)) continue;
           const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
           const because = entry.important && !winner.important
             ? 'carries !important, which outranks any normal declaration of the same property'
-            : `outranks .${cls} at (${candidate.specificity.join(',')})`;
+            : `outranks .${cls} at (${candidate.specificity === null ? 'unreadable' : candidate.specificity.join(',')})`;
           // A shorthand is reported under the group it moves, so name what it
           // sets rather than quoting 'font' as though it were a font-size.
           const sets = entry.property === group
@@ -1426,12 +1759,51 @@ function outrankingPageTitleDeclarations(css, cls) {
     }
   }
 
+  // Ground (b), the root. The class rule's own font-size is in rem, and every
+  // rem in the sheet is measured against the ROOT element's font-size, so a
+  // font-size on the root moves the page h1 even though the class rule wins the
+  // cascade on the element outright — '* { font-size: 2.4rem }' loses at
+  // (0,0,0) and still renders the heading at 53.76px. The reach test is
+  // against chain[0], NOT against the h1, and that is the whole difference:
+  // '[lang]' names an attribute the h1 does not carry and one the root does.
+  //
+  // Only the font-size group is reported, and the guard's own measurements say
+  // so: in every one of these cases Chromium reads lineHeight 67.2px, which is
+  // 1.25 x 53.76px — the h1's line-height is untouched, because
+  // 'line-height: 1.25' is unitless and the class rule declares it on the
+  // element. Reporting the line-height here would be a false failure asserting
+  // a change that does not happen, which is the failure mode this rewrite
+  // exists to remove.
+  for (const rule of rules) {
+    if (classIndexes.has(rule.index)) continue;
+    for (const selector of branchesOf(rule)) {
+      if (!branchReaches(selector, chain, 0)) continue;
+      for (const entry of declarations(rule.body).filter((one) => one.property === 'font-size' || one.property === 'font')) {
+        const inside = rule.atRules.length > 0 ? ` inside ${rule.atRules.join(' then ')}` : '';
+        const sets = entry.property === 'font'
+          ? `the font shorthand, which sets the root's font-size too (${entry.value})`
+          : `font-size: ${entry.value}`;
+        offenders.push({
+          selector,
+          atRules: rule.atRules,
+          group: 'font-size',
+          property: entry.property,
+          message: `the selector '${selector}'${inside} sets ${sets} on the document root — `
+            + `the class rule's font-size is written in rem and is measured against the root's font-size, `
+            + `so the page h1's font-size moves with it, away from ${PAGE_TITLE_HELD['font-size']}, `
+            + `even though .${cls} wins the cascade on the element`,
+        });
+      }
+    }
+  }
+
   return offenders;
 }
 
 test('nothing outranks the page title rule for the typography the h1 depends on', async () => {
   const css = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
   const html = await renderPage('/', { repositories: freshRepos() });
+  const { chain } = pageTitleElement(html);
   const cls = pageTitleClass(html);
   const inMedia = `${css}\n@media (max-width: 900px) { #main h1 { font-size: 2.4rem; } }\n`;
 
@@ -1439,45 +1811,127 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // resolver is not simply flagging everything: the '*' reset and the body
   // typography both reach the h1 and both lose to the class rule.
   assert.deepEqual(
-    outrankingPageTitleDeclarations(css, cls).map((offender) => offender.message),
+    outrankingPageTitleDeclarations(css, cls, chain).map((offender) => offender.message),
     [],
     'nothing in the shipped stylesheet beats the class rule for the h1',
+  );
+
+  // ...which is only a claim worth reading if the sheet is probed rather than
+  // trusted. Every rule of it that declares a guarded property, and every one
+  // that reaches the h1 or the root. A guard that quietly stopped asking about
+  // half the sheet would return [] above just as happily, and this is the
+  // assertion that would notice.
+  //
+  // Note what the h1-side probe does NOT claim: that only the class rule can
+  // reach the h1. A rule that reaches the h1 and LOSES the cascade is silent
+  // and correct — '*' is the standing example, and appending '* { line-height: 2 }'
+  // is an expected-green case. So the claim is the one that decides: of the
+  // rules declaring a guarded property, the class rule is the only one that may
+  // reach the h1 and outrank it.
+  const guarded = new Set(PAGE_TITLE_PROPERTIES.flatMap((entry) => entry.properties));
+  const sheet = readStylesheet(css);
+  const classRule = sheet.find((rule) => branchesOf(rule).includes(`.${cls}`));
+  const outrankingPageTitle = sheet
+    // Every rule carrying the class is the baseline, not a competitor: a second
+    // .page-title rule is reported by the value cross-check below, which is the
+    // claim that actually decides, and calling it an outranking rule here too
+    // would be the same override reported twice.
+    .filter((rule) => !branchesOf(rule).includes(`.${cls}`))
+    .filter((rule) => declarations(rule.body).some((entry) => guarded.has(entry.property)))
+    .flatMap((rule) => branchesOf(rule))
+    .filter((branch) => branchReaches(branch, chain, chain.length - 1))
+    .filter((branch) => beats(
+      { specificity: specificityOf(branch), index: sheet.length },
+      { specificity: specificityOf(`.${cls}`), index: classRule.index },
+    ));
+  assert.deepEqual(outrankingPageTitle, [],
+    'of the rules in the shipped sheet that declare a guarded property, no rule but the class rule may reach the h1 and outrank it');
+  // Ground (b) over the WHOLE sheet rather than the guarded subset, and the
+  // claim is the narrow one: reaching the root is not itself a report — '*'
+  // reaches it and declares box-sizing — a font-size there is. ':root'
+  // and '*' are the two that are provably about the root; ':focus-visible' is
+  // here because a pseudo-class is undecidable from static markup, so it MAY
+  // match anything, which is the noisy direction the contract deliberately
+  // takes. None of the three declares a font-size, which is what keeps an
+  // ordinary type-scale reset from turning the build red.
+  // Distinct branches: a stylesheet may declare '*' twice, and the question is
+  // which SELECTORS can match the root, not how many times one is written.
+  const rootReaching = [...new Set(sheet.flatMap((rule) => branchesOf(rule).filter((branch) => branchReaches(branch, chain, 0))))];
+  assert.deepEqual(rootReaching, [':root', '*', ':focus-visible'],
+    'the rules in the shipped sheet that may match the document root — the last because an undecidable pseudo-class may');
+  assert.deepEqual(
+    rootReaching.filter((branch) => sheet
+      .filter((rule) => branchesOf(rule).includes(branch))
+      .flatMap((rule) => declarations(rule.body))
+      .some((entry) => entry.property === 'font-size' || entry.property === 'font')),
+    [],
+    'and not one of them declares font-size or the font shorthand, so ground (b) fires on nothing in the shipped sheet',
   );
 
   const override = '#main h1 { font-size: 2.4rem; line-height: 1.6; margin-top: 24px; }';
   const bySelectorAndProperty = (offenders) => offenders.map((one) => `${one.selector} ${one.property}`);
 
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls, chain)),
     ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
     'a later, higher-specificity h1 rule is named once per property — this leaves every declaration above satisfied',
   );
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(inMedia, cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(inMedia, cls, chain)),
     ['#main h1 font-size'],
     'the same override inside a media query is a real override at that width',
   );
   assert.match(
-    outrankingPageTitleDeclarations(inMedia, cls)[0].message,
+    outrankingPageTitleDeclarations(inMedia, cls, chain)[0].message,
     /@media \(max-width: 900px\)/,
     'the message names the condition the override bites in',
   );
   assert.deepEqual(
     // Anchored on the resolved class, not the literal, or the insertion would
     // silently no-op under a coordinated rename and this case would pass green.
-    bySelectorAndProperty(outrankingPageTitleDeclarations(css.replace(`.${cls} {`, `${override}\n\n.${cls} {`), cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(css.replace(`.${cls} {`, `${override}\n\n.${cls} {`), cls, chain)),
     ['#main h1 font-size', '#main h1 line-height', '#main h1 margin-top'],
     'specificity decides, not source order: the same rule declared above the class rule still fails',
   );
 
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n* { font-size: 2.4rem; }\n`, cls), [],
-    "'*' reaches every element but loses to the class rule at (0,1,0), so the heading is unaffected");
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem; }\n`, cls), [],
-    'body reaches the h1 by inheritance and still loses at (0,0,1)');
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem !important; }\n`, cls), [],
-    'an !important on an ancestor is still only an inherited value, and a declaration matching the h1 beats it at any weight');
+  // '*' was one case in the previous version of this file, and its message said
+  // the heading was unaffected because '*' loses to the class rule at (0,1,0).
+  // That sentence was false and it is worth saying why: the cascade on the
+  // ELEMENT is only half of what the browser does, because the class rule's own
+  // font-size is 1.4rem and every rem is measured against the root — and '*'
+  // matches the root. Chromium reads 53.76px. So the case splits in two: the
+  // same selector is REPORTED for a font-size (ground (b)) and silent for a
+  // declaration that does not move the root (ground (a), where it reaches the
+  // h1 and loses).
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1 { font-size: 2.4rem !important; }\n`, cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n* { font-size: 2.4rem; }\n`, cls, chain)),
+    ['* font-size'],
+    "'*' declaring font-size is reported under ground (b) — it matches the root, and the h1 renders at 53.76px",
+  );
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(`${css}\n* { line-height: 2; }\n* { margin: 24px 0 0; }\n`, cls, chain),
+    [],
+    "'*' declaring anything else on a guarded property reaches the h1 and loses at (0,0,0), and touches no root font-size — silent at 22.4px",
+  );
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n* { font: 700 2.4rem system-ui; }\n`, cls, chain)),
+    ['* font'],
+    'the font shorthand sets the root font-size too, so it is the same ground-(b) report',
+  );
+  // The body is not the root. rem is measured against the root, so a font-size
+  // on the body leaves the page h1 at 22.4px even though the body is an ancestor
+  // of it — and a declaration matching the element beats an inherited one at
+  // any weight, !important included.
+  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem; }\n`, cls, chain), [],
+    'body reaches the h1 by inheritance and still loses at (0,0,1)');
+  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\nbody { font-size: 2.4rem !important; }\n`, cls, chain), [],
+    'an !important on an ancestor is still only an inherited value, and a declaration matching the h1 beats it at any weight');
+  for (const rule of ['main { font-size: 20px; }', '#main { font-size: 20px; }']) {
+    assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n${rule}\n`, cls, chain), [],
+      `'${rule.split(' {')[0]}' is not the root either — rem is measured against the root, and the h1 stays at 22.4px`);
+  }
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1 { font-size: 2.4rem !important; }\n`, cls, chain)),
     ['h1 font-size'],
     '!important beats the class rule on specificity alone, which a guard that ignored it would miss',
   );
@@ -1486,20 +1940,36 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // and reach the shipped <h1 class="page-title" data-testid="page-title">
   // exactly, so a pre-filter that tested the token for equality dropped them
   // all before the parser could decide and left the suite green on a heading
-  // rendering at 38.4px.
+  // rendering at 38.4px. 'h1:first-child' is in the list because a pseudo-class
+  // is undecidable from static markup and the base matches, so the rule MAY
+  // apply — 'h1:hover' for the same reason, and it is reported at rest.
   for (const override of [
     'h1[data-testid] { font-size: 2.4rem; }',
-    'h1[data-x] { font-size: 2.4rem; }',
     'h1:hover { font-size: 2.4rem; }',
     'h1:first-child { font-size: 2.4rem; }',
     'main > h1[data-testid] { font-size: 2.4rem; }',
     '#main h1[data-testid] { font-size: 2.4rem; }',
+    'h1[data-testid="page-title"] { font-size: 2.4rem; }',
   ]) {
     const selector = override.split(' {')[0];
     assert.deepEqual(
-      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls)),
+      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${override}\n`, cls, chain)),
       [`${selector} font-size`],
       `'${selector}' matches the shipped page h1, so it is a real override and must be reported`,
+    );
+  }
+
+  // BUG-1, verbatim: the spelling .sdlc/memory/qa/selectors.md steers a
+  // developer towards, and the one the old pre-filter could not see at all.
+  // It carries no h1 token and no dot, so mayReachPageTitle returned false and
+  // the suite stayed green on a heading Chromium renders at 38.4px. The class
+  // is interpolated rather than written out, so these move with a coordinated
+  // rename like every other case in this test.
+  for (const selector of ['[data-testid="page-title"]', `[class~="${cls}"]`]) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 2.4rem; }\n`, cls, chain)),
+      [`${selector} font-size`],
+      `'${selector}' matches the shipped page h1 at (0,1,0) and later in the file, so it is a real override`,
     );
   }
 
@@ -1508,7 +1978,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // property. It is reported once per group it moves, which is the truth rather
   // than a duplicate.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n#main h1 { font: 700 2.4rem/1.6 system-ui; }\n`, cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n#main h1 { font: 700 2.4rem/1.6 system-ui; }\n`, cls, chain)),
     ['#main h1 font', '#main h1 font'],
     'the font shorthand sets both guarded typographic properties and is outranked in neither',
   );
@@ -1516,7 +1986,7 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // '*' under a descendant combinator still matches the h1, so the pre-filter
   // has to read the last compound rather than the whole branch.
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nmain * { font-size: 2.4rem !important; }\n`, cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nmain * { font-size: 2.4rem !important; }\n`, cls, chain)),
     ['main * font-size'],
     "a universal selector under a descendant combinator matches the h1, and !important on it wins",
   );
@@ -1525,10 +1995,10 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // setting that property, so that is the value the message names and the
   // importance the comparison weighs — not the first in the group.
   const twoLonghands = css.replace(`${cls} {`, `${cls} {\n  margin-top: 24px;`);
-  const shadowed = bySelectorAndProperty(outrankingPageTitleDeclarations(`${twoLonghands}\n#main h1 { margin-top: 3rem; }\n`, cls));
+  const shadowed = bySelectorAndProperty(outrankingPageTitleDeclarations(`${twoLonghands}\n#main h1 { margin-top: 3rem; }\n`, cls, chain));
   assert.deepEqual(shadowed, ['#main h1 margin-top'], 'the override is still an override whichever longhand it names');
   assert.match(
-    outrankingPageTitleDeclarations(`${twoLonghands}\n#main h1 { margin-top: 3rem; }\n`, cls)[0].message,
+    outrankingPageTitleDeclarations(`${twoLonghands}\n#main h1 { margin-top: 3rem; }\n`, cls, chain)[0].message,
     /instead of margin: 0/,
     'and the message names the declaration the class rule actually keeps',
   );
@@ -1539,12 +2009,12 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // gets written, and the earlier rule's other declarations still hold.
   const importantRule = `\n.${cls} { font-size: 1.4rem !important; }\n#main h1 { font-size: 2.4rem; }\n`;
   assert.deepEqual(
-    outrankingPageTitleDeclarations(css + importantRule, cls),
+    outrankingPageTitleDeclarations(css + importantRule, cls, chain),
     [],
     'an !important class declaration is not outranked by a plain rule at (1,0,1), and the rest of the class rule still holds',
   );
   assert.deepEqual(
-    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 1.4rem; }\n#main h1 { font-size: 2.4rem; }\n`, cls)),
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 1.4rem; }\n#main h1 { font-size: 2.4rem; }\n`, cls, chain)),
     ['#main h1 font-size'],
     'the same override is reported once the class rule drops the !important',
   );
@@ -1555,54 +2025,268 @@ test('nothing outranks the page title rule for the typography the h1 depends on'
   // three are stated against the class the h1 actually carries, so they hold
   // whichever name it carries.
   const renamed = css.replaceAll(`.${cls}`, '.renamed-away');
-  assert.deepEqual(outrankingPageTitleDeclarations(renamed, 'renamed-away'), [], 'both ends renamed together is green');
-  assert.ok(outrankingPageTitleDeclarations(renamed, cls).length > 0, 'renaming only the stylesheet fails');
-  assert.ok(outrankingPageTitleDeclarations(css, 'renamed-away').length > 0, 'renaming only the markup fails');
+  assert.deepEqual(outrankingPageTitleDeclarations(renamed, 'renamed-away', chain), [], 'both ends renamed together is green');
+  assert.ok(outrankingPageTitleDeclarations(renamed, cls, chain).length > 0, 'renaming only the stylesheet fails');
+  assert.ok(outrankingPageTitleDeclarations(css, 'renamed-away', chain).length > 0, 'renaming only the markup fails');
 
-  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n.checklist li:not(.x) { font-size: 2rem; }\n`, cls), [],
+  assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n.checklist li:not(.x) { font-size: 2rem; }\n`, cls, chain), [],
     'a selector that cannot reach the page h1 is skipped unparsed, so the guard does not throw on CSS it never evaluates');
+
+  // BUG-2, verbatim. The class rule declared twice with different values
+  // satisfied BOTH tests in the previous version — the declaration test read
+  // the first rule with .exec and the cascade test took the last declaration of
+  // the property — while the browser applied the second rule's 2.4rem and
+  // rendered the h1 at 38.4px. Both tests now read PAGE_TITLE_HELD, and the
+  // cascade test compares the class rule's WINNING declaration against it, so a
+  // second rule can no longer leave the two disagreeing.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 2.4rem; }\n`, cls, chain)),
+    [`.${cls} font-size`],
+    "a second .page-title rule is reported by the VALUE cross-check, not by ground (a) — it IS the baseline rule",
+  );
+  assert.match(
+    outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 2.4rem; }\n`, cls, chain)[0].message,
+    /font-size: 2\.4rem.*instead of font-size: 1\.4rem/,
+    'the message names the winning value and the one the page title depends on, not merely the selector',
+  );
+  for (const [group, property, rule] of [
+    ['line-height', 'line-height', `.${cls} { line-height: 1.6; }`],
+    ['margin-top', 'margin', `.${cls} { margin: 24px 0 0; }`],
+  ]) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${rule}\n`, cls, chain)),
+      [`.${cls} ${property}`],
+      `the value cross-check covers the ${group} group too, not only font-size`,
+    );
+  }
+  // An equivalent restatement is not a change of value, so it is not a report.
+  // 'font-size: 1.4rem !important' settles at the same 1.4rem the h1 depends
+  // on, and the comparison ignores importance on purpose.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(`${css}\n.${cls} { font-size: 1.4rem !important; }\n`, cls, chain),
+    [],
+    'a restatement of the held value is green, even carrying !important',
+  );
+
+  // BUG-3, verbatim. The old guard reported this one, in a message asserting as
+  // fact a change that does not happen: '.page-title h1' needs an ancestor
+  // carrying the class, and the chain is html < body < main#main < h1 — the page
+  // title carries the class itself rather than sitting inside one. Chromium
+  // reads 22.4px, so a red build here is a false alarm.
+  for (const selector of ['.page-title h1', '.page-title h2', '.panel h1']) {
+    assert.deepEqual(outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 2.4rem; }\n`, cls, chain), [],
+      `'${selector}' provably cannot reach the page h1, so it is a no-op at any specificity — the h1 stays at 22.4px`);
+  }
+  // The ancestor requirement holds in the other direction too: the class on the
+  // h1 itself matches, at (0,2,0) with the type.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1.${cls} { font-size: 2.4rem; }\n`, cls, chain)),
+    [`h1.${cls} font-size`],
+    'the class on the h1 itself is a match, not a missing ancestor',
+  );
+
+  // BUG-4, verbatim, and the pair that pins why. The space is inside a quoted
+  // value, so the selector is one compound; the shipped h1 carries no data-x,
+  // so the rule cannot reach it. The naive whitespace split this replaces threw
+  // "the cascade guard cannot read the selector 'h1[data-x="a b"]': the token
+  // '[data-x="a'" — a build break on ordinary CSS.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(`${css}\nh1[data-x="a b"] { font-size: 2.4rem; }\n`, cls, chain),
+    [],
+    'a space inside a quoted value is not a compound boundary, and a guard that threw here was a build break on valid CSS',
+  );
+  // The same shape with a value the h1 does NOT carry: the attribute is
+  // present with a different value, which is a proof of non-match, so it is
+  // silent — the browser leaves the h1 at 22.4px. Read the attribute's value,
+  // not its presence, or this is a false failure on a rule that changes
+  // nothing. Its companion below differs only in the hyphen and IS reported.
+  assert.deepEqual(
+    outrankingPageTitleDeclarations(`${css}\nh1[data-testid="page title"] { font-size: 2.4rem; }\n`, cls, chain),
+    [],
+    'the h1 carries data-testid="page-title" with a hyphen, so this names a value it does not have — a proof of non-match',
+  );
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\nh1[data-testid="page-title"] { font-size: 2.4rem; }\n`, cls, chain)),
+    ['h1[data-testid="page-title"] font-size'],
+    'the same selector with the value the h1 really carries is a real override at (0,1,1)',
+  );
+
+  // Ground (b), reported. These lose the cascade on the element and still move
+  // the heading, because the class rule's font-size is in rem. Chromium reads
+  // 53.76px for the 2.4rem forms and 28px for the 20px ones.
+  for (const [selector, named] of [
+    ['*', '*'],
+    ['html', 'html'],
+    // A comma list is split into branches and each is judged on its own: 'body'
+    // is not the root, so the branch that does the damage is the one named.
+    ['html, body', 'html'],
+    ['[lang]', '[lang]'],
+  ]) {
+    const offenders = outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 2.4rem; }\n`, cls, chain);
+    assert.deepEqual(bySelectorAndProperty(offenders), [`${named} font-size`],
+      `'${selector}' may match the document root and declares font-size, so it moves the h1 whatever the cascade says on the element`);
+    assert.match(offenders[0].message, /document root/,
+      "and the message says the root's font-size is what moved");
+  }
+  // '[lang]' is the case a ground-(a) reading gets wrong. The h1 carries no
+  // lang attribute, which is true and irrelevant here: the document root is
+  // <html lang="en"> and the rule matches THAT. Filing it with the
+  // provable-no-match cases is what an earlier revision of this work order
+  // did, and it would have certified a 53.76px page title. It is stated here
+  // so the next reader does not re-derive it and move it back.
+  assert.equal(branchReaches('[lang]', chain, chain.length - 1), false,
+    "under ground (a) '[lang]' is a proof of non-match: the h1 carries no lang attribute");
+  assert.equal(branchReaches('[lang]', chain, 0), true,
+    "under ground (b) it is a report: the root is <html lang=\"en\"> and the rule matches it");
+  for (const selector of ['html', ':root']) {
+    assert.deepEqual(
+      bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n${selector} { font-size: 20px; }\n`, cls, chain)),
+      [`${selector} font-size`],
+      `'${selector} { font-size: 20px }' renders the h1 at 28px and is reported`,
+    );
+  }
+  // Inside an at-rule is the same report with the condition named, like any
+  // other override the reader has to be told the width of.
+  assert.deepEqual(
+    bySelectorAndProperty(outrankingPageTitleDeclarations(`${css}\n@media (max-width: 900px) { html { font-size: 20px; } }\n`, cls, chain)),
+    ['html font-size'],
+    'a root font-size inside a media query is a real override at that width',
+  );
+  assert.match(
+    outrankingPageTitleDeclarations(`${css}\n@media (max-width: 900px) { html { font-size: 20px; } }\n`, cls, chain)[0].message,
+    /@media \(max-width: 900px\)/,
+    'and its message names the condition',
+  );
 });
 
-test('the cascade resolver agrees with CSS on specificity', () => {
-  const cls = 'page-title';
+test('the cascade resolver agrees with CSS on specificity', async () => {
+  const { chain } = pageTitleElement(await renderPage('/', { repositories: freshRepos() }));
+  const cls = pageTitleClass(await renderPage('/', { repositories: freshRepos() }));
+  const pageTitle = chain.length - 1;
+  const reaches = (selector, target = pageTitle) => branchReaches(selector, chain, target);
 
-  assert.deepEqual(specificityOf('*', cls), [0, 0, 0], "'*' is not a type name");
-  assert.deepEqual(specificityOf('body', cls), [0, 0, 1], 'a bare type is one c');
-  assert.deepEqual(specificityOf('h1', cls), [0, 0, 1], 'the h1 type is one c');
-  assert.deepEqual(specificityOf('.page-title', cls), [0, 1, 0], 'a class is one b');
-  assert.deepEqual(specificityOf('.a.b', cls), [0, 2, 0], 'a compound of two classes is two b');
-  assert.deepEqual(specificityOf('[aria-current="page"]', cls), [0, 1, 0], 'an attribute selector is one b');
-  assert.deepEqual(specificityOf('a:hover', cls), [0, 1, 1], 'a single-colon pseudo-class is a b, not a c');
-  assert.deepEqual(specificityOf('#main', cls), [1, 0, 0], 'an id is one a');
-  assert.deepEqual(specificityOf('#main h1', cls), [1, 0, 1], 'a descendant adds its ancestor to the specificity');
-  assert.deepEqual(specificityOf('main > h1', cls), [0, 0, 2], "'>' is a combinator, not a type name");
+  assert.deepEqual(specificityOf('*'), [0, 0, 0], "'*' is not a type name");
+  assert.deepEqual(specificityOf('body'), [0, 0, 1], 'a bare type is one c');
+  assert.deepEqual(specificityOf('h1'), [0, 0, 1], 'the h1 type is one c');
+  assert.deepEqual(specificityOf('.page-title'), [0, 1, 0], 'a class is one b');
+  assert.deepEqual(specificityOf('.a.b'), [0, 2, 0], 'a compound of two classes is two b');
+  assert.deepEqual(specificityOf('[aria-current="page"]'), [0, 1, 0], 'an attribute selector is one b');
+  assert.deepEqual(specificityOf('a:hover'), [0, 1, 1], 'a single-colon pseudo-class is a b, not a c');
+  assert.deepEqual(specificityOf('#main'), [1, 0, 0], 'an id is one a');
+  assert.deepEqual(specificityOf('#main h1'), [1, 0, 1], 'a descendant adds its ancestor to the specificity');
+  assert.deepEqual(specificityOf('main > h1'), [0, 0, 2], "'>' is a combinator, not a type name");
+  // The one splitter serves both, and the shapes that used to throw are the
+  // ones that must be counted rather than refused: a functional pseudo-class is
+  // a b, and ':not(.x)' contributes its argument.
+  assert.deepEqual(specificityOf('h1[data-x="a b"]'), [0, 1, 1], 'a space inside a quoted value is not a second compound');
+  assert.deepEqual(specificityOf('main > h1[data-testid]'), [0, 1, 2], "spaces either side of a '>' are not an empty compound");
+  assert.deepEqual(specificityOf('.checklist li:not(.x)'), [0, 2, 1], "a functional pseudo-class contributes its argument's specificity, so ':not(.x)' is a b");
+  assert.deepEqual(specificityOf('.a\n.b'), [0, 2, 0], 'a newline is whitespace — the shipped sheet breaks a comma list across one');
 
-  const pageTitle = { specificity: specificityOf('.page-title', cls), index: 99 };
-  assert.ok(beats({ specificity: specificityOf('#main h1', cls), index: 0 }, pageTitle),
+  const pageTitleBaseline = { specificity: specificityOf(`.${cls}`), index: 99 };
+  assert.ok(beats({ specificity: specificityOf('#main h1'), index: 0 }, pageTitleBaseline),
     "'#main h1' beats '.page-title' a hundred rules earlier");
-  assert.ok(beats({ specificity: specificityOf('.a.b', cls), index: 0 }, { ...pageTitle, specificity: specificityOf('.a', cls) }),
+  assert.ok(beats({ specificity: specificityOf('.a.b'), index: 0 }, { ...pageTitleBaseline, specificity: specificityOf('.a') }),
     "'.a.b' beats '.a'");
-  assert.ok(!beats({ specificity: specificityOf('*', cls), index: 99 }, pageTitle), "'*' beats nothing, at any source position");
-  assert.ok(beats({ ...pageTitle, index: 5 }, { ...pageTitle, index: 4 }), 'equal specificity is decided by source order');
-  assert.ok(!beats({ ...pageTitle, index: 4 }, { ...pageTitle, index: 5 }), 'and not by the reverse');
+  assert.ok(!beats({ specificity: specificityOf('*'), index: 99 }, pageTitleBaseline), "'*' beats nothing, at any source position");
+  assert.ok(beats({ ...pageTitleBaseline, index: 5 }, { ...pageTitleBaseline, index: 4 }), 'equal specificity is decided by source order');
+  assert.ok(!beats({ ...pageTitleBaseline, index: 4 }, { ...pageTitleBaseline, index: 5 }), 'and not by the reverse');
 
-  assert.ok(parseSelector('*', cls).matchesPageTitle, 'the universal selector matches every element');
-  assert.equal(parseSelector('body', cls).matchesPageTitle, false,
-    'body reaches the h1 by inheritance, and an inherited value cannot outrank a declaration matching the element');
-  assert.ok(parseSelector('h1', cls).matchesPageTitle, 'an h1 type selector reaches the h1');
-  assert.ok(parseSelector('h1[data-testid]', cls).matchesPageTitle, 'so does the shipped h1 plus an attribute');
-  assert.ok(parseSelector('h1:hover', cls).matchesPageTitle, 'and the same h1 with a pseudo-class');
-  assert.ok(parseSelector('main > h1[data-testid]', cls).matchesPageTitle, 'and with a combinator in front of it');
-  assert.ok(parseSelector('main .page-title', cls).matchesPageTitle, 'a descendant of the class matches the h1');
-  assert.equal(parseSelector('#main', cls).matchesPageTitle, false, 'an ancestor id does not match the h1 itself');
-  assert.equal(parseSelector('.panel h2', cls).matchesPageTitle, false, 'a different element does not match the h1');
-  assert.equal(parseSelector('.page-title-extra', cls).matchesPageTitle, false, 'a longer class name is not the class');
+  // The one-directional guarantee, in the three directions it can answer, each
+  // against the real chain read off the real markup. This is the assertion the
+  // four assert.throws cases used to make, re-expressed against a guard that
+  // does not throw: a stylesheet the guard cannot model must not fail the suite
+  // by being unparseable, and it must never pass it for the wrong reason
+  // either. False is a proof; true is everything else.
+  //
+  // REACH-AND-REPORT — may reach the h1 and outrank the class rule at (0,1,0).
+  for (const [selector, specificity] of [
+    ['#main h1', '(1,0,1)'],
+    ['#main h1[data-testid]', '(1,1,1)'],
+    ['main > h1[data-testid]', '(0,1,2)'],
+    ['h1[data-testid]', '(0,1,1)'],
+    ['h1[data-testid="page-title"]', '(0,1,1)'],
+    ['h1:hover', '(0,1,1)'],
+    ['[data-testid="page-title"]', '(0,1,0)'],
+    [`[class~="${cls}"]`, '(0,1,0)'],
+  ]) {
+    assert.equal(reaches(selector), true, `'${selector}' ${specificity} reaches the page h1`);
+  }
+  // REACH-BUT-LOSE — matches the h1, loses the cascade, so ground (a) is silent.
+  for (const [selector, specificity] of [
+    ['*', '(0,0,0)'],
+    ['h1', '(0,0,1)'],
+    ['main *', '(0,0,1)'],
+    ['main h1', '(0,0,2)'],
+    ['html body main h1', '(0,0,4)'],
+  ]) {
+    assert.equal(reaches(selector), true, `'${selector}' ${specificity} matches the h1 even though it loses the cascade`);
+  }
+  // PROVABLY NO-MATCH — false, on a proof, and never a throw.
+  for (const selector of [
+    '.checklist li:not(.x)', 'h1 + p', 'h1 ~ p', '.panel h2', '.app-header h1',
+    '.page-title-extra', '[data-testid="nope"]', 'h1::after', '.page-title::after',
+    'h1[data-x="a b"]', 'h1[data-testid="page title"]', 'main > h1[data-x]', 'h1#main',
+  ]) {
+    assert.equal(reaches(selector), false, `'${selector}' provably cannot match the shipped page h1`);
+  }
+  // The same list against the ROOT, where the answers are different — because
+  // the ground (b) test asks about a different element, and reading one as the
+  // other is how '[lang]' ended up filed as a proof of non-match.
+  assert.equal(reaches('body'), false, 'the body is not the page h1: it reaches it by inheritance, and a declaration on the element wins');
+  assert.equal(reaches('#main'), false, 'an ancestor id does not match the h1 itself');
+  assert.equal(reaches('.panel h2'), false, 'a different element does not match the h1');
+  assert.equal(reaches('.page-title-extra'), false, 'a longer class name is not the class');
+  for (const selector of ['*', 'html', ':root', '[lang]']) {
+    assert.equal(reaches(selector, 0), true, `'${selector}' may match the document root`);
+  }
+  assert.equal(reaches('body', 0), false, 'and the body is not the root either — rem is measured against the root, not against it');
+  assert.equal(reaches('main', 0), false, 'nor is main');
+  assert.equal(reaches('#main', 0), false, 'nor #main');
+  assert.equal(reaches('[data-testid="page-title"]', 0), false, 'the root carries no data-testid, which is the mirror of the [lang] case above');
+});
 
-  // Unsupported syntax throws rather than parsing to a number it invented: a
-  // stylesheet the guard cannot model must fail the suite loudly, not pass it
-  // for the wrong reason.
-  assert.throws(() => specificityOf('.checklist li:not(.x)', cls), /:not\(/, 'a functional pseudo-class throws');
-  assert.throws(() => specificityOf('.page-title::after', cls), /pseudo-element/, 'a pseudo-element throws');
-  assert.throws(() => specificityOf('h1 + p', cls), /'\+' combinator/, "the '+' combinator throws");
-  assert.throws(() => specificityOf('h1 ~ p', cls), /'~' combinator/, "the '~' combinator throws");
+// The guard's world-model, asserted directly. Every question it asks is about
+// the page h1 as an ELEMENT, so what that element is — and what sits around it
+// — is the guard's premise, and a premise that drifted silently is how a
+// matcher ends up reasoning about a page it has never seen. It is read from the
+// rendered markup, not assumed, and the hook it reads is data-testid: the
+// styling class may be renamed at either end, and this one may not.
+test('the cascade guard resolves the page h1 and its chain from the markup', async () => {
+  const { element, chain } = pageTitleElement(await renderPage('/', { repositories: freshRepos() }));
+
+  assert.equal(element.tag, 'h1', 'the hook is on the h1');
+  assert.equal(element.attrs['data-testid'], 'page-title', 'and it is the stable hook, not the styling class');
+  assert.deepEqual(
+    chain.map((one) => (one.attrs.id === undefined ? one.tag : `${one.tag}#${one.attrs.id}`)),
+    ['html', 'body', 'main#main', 'h1'],
+    'the chain is root-first and ends at the h1, with no wrapper between body and main — which is what makes ".page-title h1" a no-op and the root the element ground (b) asks about',
+  );
+  assert.equal(chain[0].attrs.lang, 'en', 'the document root carries lang, so [lang] reaches it and is a ground (b) report');
+  assert.equal(chain.at(-1).attrs['data-testid'], 'page-title', 'the last element in the chain is the one the guard targets');
+
+  // A void element in the header does not become the parent of everything after
+  // it: the ancestor stack is walked with them skipped, or main#main would come
+  // out as a child of the skip link.
+  assert.ok(
+    !chain.some((one) => one.tag === 'a' || one.tag === 'header'),
+    'nothing between body and main#main is treated as an ancestor of the h1',
+  );
+
+  // With the class gone the guard must rebuild its world rather than keep the
+  // old one: the same markup with the styling class dropped resolves to a chain
+  // whose h1 simply carries no class, and the class-to-rule link is then the
+  // one-sided failure the class tests report. The class is read off the element
+  // rather than written out, so this holds under a coordinated rename.
+  const shippedClass = pageTitleClass(await renderPage('/', { repositories: freshRepos() }));
+  assert.notEqual(shippedClass, '', 'the shipped h1 does carry a class, so the strip below is not a no-op');
+  const withoutClass = (await renderPage('/', { repositories: freshRepos() })).replace(` class="${shippedClass}"`, '');
+  const stripped = pageTitleElement(withoutClass);
+  assert.deepEqual(stripped.element.classes, [], 'the h1 carries no class once the stylesheet hook is dropped');
+  assert.equal(stripped.chain.length, chain.length, 'and the chain is rebuilt to the same depth, so nothing downstream silently changed shape');
+  assert.equal(branchReaches(`.${shippedClass}`, stripped.chain, stripped.chain.length - 1), false,
+    'and the class rule can now PROVE it cannot reach the h1, because the h1 demonstrably carries no such class — '
+    + 'a proof, not a guess, which is the one direction the guard is allowed to be quiet in');
+  assert.equal(branchReaches('[lang]', stripped.chain, 0), true,
+    'while ground (b) is unchanged, because dropping a class says nothing about what reaches the root');
 });
