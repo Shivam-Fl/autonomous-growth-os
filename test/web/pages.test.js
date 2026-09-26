@@ -336,6 +336,44 @@ test('the skip link targets a focusable main landmark on every route and state',
   assert.equal(skipLinkFocusesMain(''), false, 'an empty document is not a bypass');
 });
 
+// BUG-12. Every page load used to log one console error, on all five routes:
+// with no icon declared the browser asks for /favicon.ico, nothing serves it,
+// and the 404 is reported as "Failed to load resource". Declaring the icon in
+// the head is what removes the REQUEST — serving something at /favicon.ico
+// would only remove the 404 and leave the implicit request in place — and the
+// declaration has to resolve, so both halves are asserted here: the link in the
+// served document, and the route answering it. A data: URL would satisfy the
+// first and leave the icon unverified, which is why the asset is a file.
+test('BUG-12: every served page declares an icon that the asset route answers', async () => {
+  const STATES = ['ideal', 'empty', 'loading', 'partial', 'error'];
+
+  for (const route of ROUTES) {
+    for (const state of STATES) {
+      const where = `${route}?state=${state}`;
+      const html = await renderPage(route, { repositories: freshRepos(), override: state });
+      assert.match(
+        html,
+        /<link rel="icon" href="\/assets\/favicon\.svg" type="image\/svg\+xml">/,
+        `${where}: the head declares the icon, or the browser asks for /favicon.ico and logs the 404`,
+      );
+    }
+  }
+
+  const app = buildApp({ repositories: freshRepos() });
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  try {
+    const icon = await fetch(`http://127.0.0.1:${port}/assets/favicon.svg`);
+    assert.equal(icon.status, 200, 'the declared icon resolves — a link to a 404 is the same defect under another path');
+    assert.equal(icon.headers.get('content-type'), 'image/svg+xml', 'and is served as the type the link declares');
+    assert.match(await icon.text(), /<svg[^>]*>/, 'the body is the icon rather than an empty response');
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 // The other end of the same link: the one line that stops the skip link's focus
 // from painting the global accent ring around all 1100px of main can be deleted
 // with a green suite unless something here asserts it. Same currency as the
@@ -3451,6 +3489,42 @@ test('nothing in the shipped stylesheet beats the class rule for the page h1', a
 
 });
 
+// THE TWO SIDES, and the comparison between them, at module scope beside the
+// table they are compared in — so a rule is written down once and compared
+// once. Two copies is how the last two attempts each wrote the same rule down
+// twice and enforced it once.
+//
+// The comparison is NOT a union, and the reason is the direction it fails in. A
+// union is satisfied whenever EITHER implementation matches the row, and every
+// row's expected value is what the guard returns on its own, so the probe's
+// contribution to all sixteen rows was nil and a probe that had stopped
+// reporting could not fail any of them (BUG-11). Merging also swallows a
+// spurious extra finding into the same list, so the only way the union could
+// ever go red was over-reporting, and the direction that matters here is
+// under-reporting. So each side is read on its own, each is held to the row's
+// own expected value, and a disagreement names the side that drifted.
+function guardVerdictOf(sheetText) {
+  return [...new Set(
+    outrankingPageTitleDeclarations(sheetText, cls, chain).map((one) => `${one.selector} ${one.group}`),
+  )].sort();
+}
+
+function probeVerdictOf(sheetText) {
+  const probe = probeStylesheet(readStylesheet(sheetText, chain), cls, chain);
+  return [...new Set([...probe.outranking, ...probe.rootReports])].sort();
+}
+
+// The sides that do not match the row, and [] only when both of them do. The
+// guard is now held to the row's expected value as well as the probe, which it
+// never was: a row may no longer carry an expected value only one of the two
+// can produce.
+function disagreementsIn({ extra, expected, guard, probe }) {
+  const against = (side, actual) => (JSON.stringify(actual) === JSON.stringify(expected)
+    ? null
+    : `${side} disagrees about '${extra}' — it returns ${JSON.stringify(actual)} where the row is held at ${JSON.stringify(expected)}`);
+  return [against('the guard', guard), against('the probe', probe)].filter((one) => one !== null);
+}
+
 // BUG-10, the half a green case cannot buy on its own. Every case below that
 // went green with the fix was a case the PROBE went red on, and a fix that
 // answered it by deleting the probe would have gone green identically — the
@@ -3465,47 +3539,76 @@ test('nothing in the shipped stylesheet beats the class rule for the page h1', a
 // two are real overrides, which is what stops the table from being satisfied by
 // a probe that had stopped asking about the h1 at all: agreeing on nothing is
 // agreement too, and only the two red rows distinguish it from agreement.
-test('BUG-10: the guard and the shipped-sheet probe answer the same question about the same rule', () => {
-  const verdicts = (sheetText) => {
-    const probe = probeStylesheet(readStylesheet(sheetText, chain), cls, chain);
-    return [...new Set([
-      ...outrankingPageTitleDeclarations(sheetText, cls, chain).map((one) => `${one.selector} ${one.group}`),
-      ...probe.outranking,
-      ...probe.rootReports,
-    ])].sort();
-  };
+const BUG_10_ROWS = [
+  // The no-op spellings. A restatement of a value the h1 is already held at
+  // moves nothing, in one of the spellings the group is written in, and the
+  // h1 reads 22.4px / 28px / 0px for every one of them in the browser.
+  ['h1[data-testid] { font-size: 1.4rem; }', [], 'it restates the held font-size at (0,1,1) and later in the file'],
+  ['h1[data-testid] { margin: 0; }', [], 'the margin shorthand is one of the spellings the margin-top group is held at'],
+  ['#main h1 { font-size: 1.4rem; }', [], 'the same restatement at (1,0,1), which outranks the class rule outright'],
+  ['#main h1 { line-height: 1.25; }', [], 'and the one the old probe reported on its own, with nothing saying why'],
+  ['#main h1 { margin: 0; }', [], 'the margin spelling, where the group is held at a list rather than one value'],
+  ['#main h1 { margin-top: 0; }', [], 'a longhand of the same property, so the same no-op'],
+  ['#main h1 { margin-block-start: 0; }', [], 'and the logical spelling of it, which is the same property and was reported as though it were not'],
+  ['#main h1 { font-size: 1.4rem !important; }', [], 'importance is the one thing the comparison ignores, because the value settles the same either way'],
+  ['#main h1 { line-height: 1.25 !important; }', [], 'and the same for the group where the cascade keeps the !important declaration itself'],
+  // The removals on the root, in every property they can be written in and
+  // every shape they can be wrapped in. A removal cannot set the root's
+  // font-size, and the shipped root is already at the user-agent default the
+  // class rule's rem is measured against: root 16px and h1 22.4px either way.
+  [':root { all: revert; }', [], 'the one spelling the previous guard exempted, and it is still silent'],
+  [':root { font: revert; }', [], 'the same removal in the font shorthand, which the previous guard REPORTED with a message claiming the h1 moves'],
+  [':root { font-size: revert; }', [], 'and in the longhand, which it also reported'],
+  ['* { all: revert; }', [], 'a universal selector reaches the root, and the same removal is a removal there'],
+  ['@layer base { :root { all: revert; } }', [], 'inside a layer, where the cascade keeps the layered declaration and the word is still a word'],
+  // ...and the two real overrides. Chromium reads 38.4px and 44.8px.
+  ['#main h1 { font-size: 2.4rem; }', ['#main h1 font-size'], 'a real override, so the two must agree on REPORTING it and name the selector'],
+  ['#main h1 { line-height: 2; }', ['#main h1 line-height'], 'and a second one in another group, for the same reason'],
+];
 
-  for (const [extra, expected, claim] of [
-    // The no-op spellings. A restatement of a value the h1 is already held at
-    // moves nothing, in one of the spellings the group is written in, and the
-    // h1 reads 22.4px / 28px / 0px for every one of them in the browser.
-    ['h1[data-testid] { font-size: 1.4rem; }', [], 'it restates the held font-size at (0,1,1) and later in the file'],
-    ['h1[data-testid] { margin: 0; }', [], 'the margin shorthand is one of the spellings the margin-top group is held at'],
-    ['#main h1 { font-size: 1.4rem; }', [], 'the same restatement at (1,0,1), which outranks the class rule outright'],
-    ['#main h1 { line-height: 1.25; }', [], 'and the one the old probe reported on its own, with nothing saying why'],
-    ['#main h1 { margin: 0; }', [], 'the margin spelling, where the group is held at a list rather than one value'],
-    ['#main h1 { margin-top: 0; }', [], 'a longhand of the same property, so the same no-op'],
-    ['#main h1 { margin-block-start: 0; }', [], 'and the logical spelling of it, which is the same property and was reported as though it were not'],
-    ['#main h1 { font-size: 1.4rem !important; }', [], 'importance is the one thing the comparison ignores, because the value settles the same either way'],
-    ['#main h1 { line-height: 1.25 !important; }', [], 'and the same for the group where the cascade keeps the !important declaration itself'],
-    // The removals on the root, in every property they can be written in and
-    // every shape they can be wrapped in. A removal cannot set the root's
-    // font-size, and the shipped root is already at the user-agent default the
-    // class rule's rem is measured against: root 16px and h1 22.4px either way.
-    [':root { all: revert; }', [], 'the one spelling the previous guard exempted, and it is still silent'],
-    [':root { font: revert; }', [], 'the same removal in the font shorthand, which the previous guard REPORTED with a message claiming the h1 moves'],
-    [':root { font-size: revert; }', [], 'and in the longhand, which it also reported'],
-    ['* { all: revert; }', [], 'a universal selector reaches the root, and the same removal is a removal there'],
-    ['@layer base { :root { all: revert; } }', [], 'inside a layer, where the cascade keeps the layered declaration and the word is still a word'],
-    // ...and the two real overrides. Chromium reads 38.4px and 44.8px.
-    ['#main h1 { font-size: 2.4rem; }', ['#main h1 font-size'], 'a real override, so the two must agree on REPORTING it and name the selector'],
-    ['#main h1 { line-height: 2; }', ['#main h1 line-height'], 'and a second one in another group, for the same reason'],
-  ]) {
-    assert.deepEqual(verdicts(`${css}\n${extra}\n`), expected,
-      `the guard and the probe return the same verdict for '${extra}' — ${claim}. `
-      + 'A disagreement here is the drift this table exists to catch, whichever of the two is wrong, and a probe that had stopped '
-      + 'asking about the h1 at all would agree on nothing, which is why the two red rows are in the table too');
+test('BUG-10: the guard and the shipped-sheet probe answer the same question about the same rule', () => {
+  for (const [extra, expected, claim] of BUG_10_ROWS) {
+    const sheetText = `${css}\n${extra}\n`;
+    assert.deepEqual(
+      disagreementsIn({ extra, expected, guard: guardVerdictOf(sheetText), probe: probeVerdictOf(sheetText) }),
+      [],
+      `the guard and the probe EACH return this row's own verdict for '${extra}' — ${claim}. `
+      + 'A disagreement here is the drift this table exists to catch, whichever of the two is wrong, and it names the side: '
+      + 'a merged list would be satisfied whenever either one is right, so a probe that had stopped asking about the h1 at all '
+      + 'would be absorbed into the guard\'s correct answer rather than named',
+    );
   }
+});
+
+// BUG-11. The thirteen green rows above are green because both sides are silent
+// on them, and nothing in them can tell a silent probe from an honest one. The
+// rows were already the rows that catch it; what did not exist was a comparison
+// required to FAIL, so the fix here is not more cases in the list — the list is
+// not what failed — it is handing the comparison a broken input and watching it
+// notice. It is the same instinct as the pinning test above, which reads this
+// file's own source to catch a deleted call site, applied to a predicate rather
+// than to a string: a neutered predicate is a failing assertion here, where a
+// deleted call site is an absence nobody notices.
+//
+// The EXPECTED side below is written out rather than derived from the probe, so
+// a stub updated carelessly shows up as a changed expectation instead of as
+// silence.
+test('BUG-11: the agreement table is a comparison that can fail', () => {
+  assert.deepEqual(
+    BUG_10_ROWS.flatMap(([extra, expected]) => disagreementsIn({
+      extra,
+      expected,
+      guard: guardVerdictOf(`${css}\n${extra}\n`),
+      probe: [], // a probe that reports nothing, ever — the mutation AC-23 names
+    })),
+    [
+      `the probe disagrees about '#main h1 { font-size: 2.4rem; }' — it returns [] where the row is held at ${JSON.stringify(['#main h1 font-size'])}`,
+      `the probe disagrees about '#main h1 { line-height: 2; }' — it returns [] where the row is held at ${JSON.stringify(['#main h1 line-height'])}`,
+    ],
+    'a probe that reports nothing is named on exactly the two real-override rows and no other — so the thirteen green rows are '
+    + 'green because BOTH sides are silent rather than because one side is, and the green half cannot be bought by deleting the '
+    + 'probe. Collapsing this comparison back into a union, or deleting either red row, turns this test red',
+  );
 });
 
 
