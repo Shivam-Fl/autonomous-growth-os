@@ -18,201 +18,11 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
-  "touch_paths": [],
-  "acceptance": [],
-  "planned_route": [
-    "plan",
-    "implement",
-    "review",
-    "qa"
-  ],
-  "on_complete": "merge",
-  "artifacts": {},
-  "failure_history": [],
-  "review_history": [],
-  "review_root_caused": [],
-  "created_at": "2026-09-26T10:38:13.981Z",
-  "updated_at": "2026-09-26T16:10:59.546Z",
-  "history": [
-    {
-      "at": "2026-09-26T10:38:31.110Z",
-      "agent": "intake",
-      "action": "-> planning"
-    },
-    {
-      "at": "2026-09-26T10:50:58.498Z",
-      "agent": "router",
-      "action": "route plan -> implement -> review -> qa (model, confidence 85)"
-    },
-    {
-      "at": "2026-09-26T10:51:17.066Z",
-      "agent": "plan",
-      "action": "plan attempt 1"
-    },
-    {
-      "at": "2026-09-26T10:51:21.968Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T11:22:18.888Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T11:22:30.568Z",
-      "agent": "plan",
-      "action": "plan attempt 2"
-    },
-    {
-      "at": "2026-09-26T11:22:35.552Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T12:01:46.823Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T12:01:59.642Z",
-      "agent": "plan",
-      "action": "plan attempt 3"
-    },
-    {
-      "at": "2026-09-26T12:02:03.306Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T12:46:09.244Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T12:46:44.842Z",
-      "agent": "plan",
-      "action": "plan attempt 4"
-    },
-    {
-      "at": "2026-09-26T12:46:48.574Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T13:16:44.062Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T13:16:54.227Z",
-      "agent": "plan",
-      "action": "plan attempt 5"
-    },
-    {
-      "at": "2026-09-26T13:16:58.128Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T13:43:14.674Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T13:43:25.836Z",
-      "agent": "plan",
-      "action": "plan attempt 6"
-    },
-    {
-      "at": "2026-09-26T13:43:29.679Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T14:23:01.552Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T14:23:14.767Z",
-      "agent": "plan",
-      "action": "plan attempt 7"
-    },
-    {
-      "at": "2026-09-26T14:23:18.014Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T15:09:21.573Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T15:09:34.952Z",
-      "agent": "plan",
-      "action": "plan attempt 8"
-    },
-    {
-      "at": "2026-09-26T15:09:38.359Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T15:41:49.859Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T15:42:03.851Z",
-      "agent": "plan",
-      "action": "plan attempt 9"
-    },
-    {
-      "at": "2026-09-26T15:42:07.625Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    },
-    {
-      "at": "2026-09-26T16:10:42.074Z",
-      "agent": "planner",
-      "action": "lock released"
-    },
-    {
-      "at": "2026-09-26T16:10:55.150Z",
-      "agent": "plan",
-      "action": "plan attempt 10"
-    },
-    {
-      "at": "2026-09-26T16:10:59.546Z",
-      "agent": "planner",
-      "action": "lock acquired"
-    }
-  ],
-  "resume_at": null,
-  "flow_plan": {
-    "kind": "feature",
-    "confidence": 85,
-    "matched_rule": null,
-    "gates": {},
-    "councils": {
-      "plan": "council",
-      "review": "council"
-    },
-    "decided_at": "2026-09-26T10:50:58.498Z"
-  },
-  "stopped_at": null,
-  "dispatched_stage": "plan",
-  "validated_from": "plan",
-  "validated_at": "2026-09-26T16:37:54.694Z",
-  "validated_ac_changes": [],
-  "validated_work_order": {
+  "work_order": {
     "issue": 77,
-    "version": 16,
+    "version": 1,
     "kind": "bug",
-    "mode": "proposal",
+    "mode": "committed",
     "reproduced": false,
     "understanding": "Round 16, arbitrated. v15 answered the two findings in the last rejection — AC-4's two false grep counts were deleted and restated as a shape, and AC-5 was given a CI-run case behind its `verify: test` label — and the critique against it returned 'flawed' with one blocking and three major findings, all of them about the acceptance layer rather than the design. I re-ran the load-bearing ones myself on this tree instead of accepting either document's account. Four reproduced and are fixed below; one minor finding I am taking in a lighter form than filed; the scope question the critique declines to press I agree with the proposer on and reject. I also found one hazard neither document had.\n\nWHAT THE CRITIQUE GOT RIGHT, AND I CHECKED. (1) AC-1 required the new `.awaiting-list` pin to assert `display: grid` on the rule it collected, while out_of_scope[1], AC-8, qa_script step 5(iii) and residual_risks[1] all require the pin to stay silent on that property and on the `display: flex` mutation. Both are acceptance-grade, so an implementer could not have satisfied both. It is fixed by deleting the assertion from AC-1, not by adding it to the pin: making AC-1 assertable would mean policing `display`, which out_of_scope declines on stated grounds, and would turn a mutation qa_script deliberately demonstrates green into a red. AC-1 now says what the pin settles and says plainly that the location clause is a requirement on the diff, not an assertion. (2) AC-4's new shape check was false in a second place: it claimed no other line names `src/web/styles.css`, and eleven assertion messages do, every one of which AC-12 requires to survive. I ran the grep: 19 lines name the file, eight of them the reads and eleven messages. The brief's objection was that AC-4 asserts a shape no implementation can produce; deleting the counts was not enough, because the shape was wrong too. AC-4's scope is now the CALL, and its verifier greps the `readFileSync(new URL` form, which is the string the previous verifier missed. (3) M2 was enumerated by AC-5 and by qa_script step 6 and defined nowhere — a matrix row whose completeness a new CI case enforces, specified by nobody. I supplied it: the wrong-value mutation, `anywhere` to `break-word`, red through the value assertion, which is the only clause of the new pin that otherwise has no row. (4) AC-12 claimed all eight stylesheet-reading tests keep a `length > 0` guard; four of the eight use `assert.ok(<single match>)` and no site asserts the stylesheet TEXT is non-empty. Confirmed by reading each site. AC-12 now describes the two forms as they are and says which three tests gain an explicit collection assertion from R2 and R5.\n\nWHAT I FOUND THAT NEITHER DOCUMENT HAD. The new case that keeps the matrix alive finds the block as the text between its two marker comments, and the plan constrains the row's identifier and verdict token while explicitly leaving the prose after the token free — asserted about by nothing. That is the correct discipline, and it is the same species of hazard AC-13 is about with the sign flipped: there, unconstrained prose could not be allowed to decide a check; here, unconstrained prose can silently move the block's boundaries, because a row whose prose contains a marker string changes what the next case reads. One clause closes it — the markers are identifiers the plan fixes, so they are constrained, and no row's prose may contain either — and it costs nothing because the constraint lands on the strings the plan already fixes rather than on the writing.\n\nWHAT DID NOT CHANGE, AND WAS CHECKED RATHER THAN INHERITED: the diagnosis (I read the stylesheet, the markup and ran the suite); the four helpers and their twelve contract cases; R1's stated loosening on the terminating semicolon; R3's requirement that the six migrated pins keep nested rules; R4's token-idiom repair; R5's two `#main:focus` collection policies; R6's watch-list policy; the card pin's pre-filter; the ch-only narrowing and the reason for it. The critique's three regression_risks that read as restatements rather than defects — R1 as a global loosening, the ch-only narrowing's future cost, M3b's uncollected-rule tolerance — are all already declared decisions carried in out_of_scope, risks and assumptions, and restating a declared decision as a risk is not a finding against it.\n\nTHE SCOPE DISAGREEMENT IS THE ONE THAT SURVIVES FOUR ROUNDS, AND I REJECT THE SPLIT AGAIN, for the reason the proposer gave and I agree with. The issue's own review called the helper extraction 'Optional, and not worth blocking on' while taking its own advice on each of the four findings it filed, so 'optional' was about the extraction as a vehicle and not about the findings — the min-width finding's fix is 'accept only ch' and the two comment findings' fix is 'reuse the card pin's strip', both of which land in the migration. Splitting puts one line of CSS in a different ticket from the parser that pins it, which is how the false 'measured and safe' memory entry that started this chain was written. The honest answers are M12 as the first row an implementer runs, the matrix as the first instruction rather than a footnote, and a confidence number below the gate.\n\nNO ROUTE CHANGE IS REQUESTED. #77's route already carries review and QA, both of which this change needs — the migration is unexecuted and review is the stage that would run the matrix — and the plan-review gate is an agent review of the work order, not a stage request. I could not re-derive the route from this checkout; it is composed by the Router from the ledger, and I am relying on the prior rounds' check of it rather than claiming a fresh one. The issue carries no `## Acceptance (from the split)` section — I read the issue body and brief.md — so there is no IAC-n to satisfy or defer by number, and every deferral is named in out_of_scope in words.",
     "root_cause": "Three defects this ticket owns, in two files, plus one pre-existing one it does not. Each was re-checked on this tree; the first two by the proposer, the third by running it, and the first and third by me as arbiter.\n\n(1) PRODUCT DEFECT — one declaration, src/web/styles.css. `.awaiting-list` is display: grid (styles.css:455) and `.awaiting-list li` is itself display: grid (styles.css:463) declaring display / gap / border / border-radius / padding, and neither overflow-wrap nor min-width, so it is a grid item floored at its own min-content width — and so is the `<strong>` inside it, which is a grandchild grid item of the ul. The free text is the decision_id in that `<strong>`, rendered only on the `state === 'partial'` branch of the journal page (src/web/pages.js:688 filters `rows.filter((row) => !row.evaluation)`, and the li at 695-698 emits the id inside the strong). `grep -n overflow-wrap src/web/styles.css` returns four lines — `.tenant-name`, a comment inside the four-card explanation, the four-card rule and `.journal-drawer-body` — three declarations, none on `.awaiting-list`. The wrap rule explained by that comment is scoped to four card classes and works by the identical structure: `.approval-card` is display: grid and its wrap is inherited into its own children. The fix works by that same inheritance into the li's strong. The overflow figures (documentElement.scrollWidth 1672, li scrollWidth 1629, at 320 / 375 / 414) are the issue reporter's, measured in headless Chromium; nobody re-measured them, because this environment has no browser driver, the repository's only runtime dependency is express, and no acceptance criterion in this order depends on a pixel.\n\n(2) TEST-INFRASTRUCTURE DEFECT — one missing abstraction, in EIGHT places, two of which are false green TODAY. test/web/pages.test.js reads src/web/styles.css at lines 345, 359, 1633, 1653, 1693, 1757, 1802 and 1819 — I re-ran the grep and `readFileSync(new URL` reads 8, every hit one of those eight, and every one the identical line — and builds its own selector / body / declaration regex at each. A ninth readFileSync at line 1611 reads the TEST FILE itself inside the H1_HOOK call-site pin and is deliberately not migrated. Of 18 matchAll calls, four parse RENDERED HTML and stay. No file outside test/web/pages.test.js parses the stylesheet. The sharpest false green is `min-width: 16ch` -> `12px`: the regex compares the bare number without converting units, so 12px parses, `Number('12') >= 12` holds, and the pin is green on the field the reporter measured at clientWidth 59px — byte-identical to the min-width: 0 state the pin was rewritten to prevent. The second is the card pin's override loop, which filters on /overflow-wrap\\s*:/ before comparing indices and so cannot see inside an at-rule; I ran that one, appending a media-query override of a card class reads 71 pass / 1 fail, unchanged.\n\n(3) PRE-EXISTING RED TEST, CONFIRMED BY RUNNING IT. `node --test test/web/pages.test.js` on this tree, which I ran myself as arbiter: 72 tests, 71 pass, 1 fail — test 68, 'the approval action row can shrink, and the selectors below have something to match', failing at pages.test.js:1779 on `assert.match(html, /<li class=\"approval-card\">/)`. The markup at src/web/pages.js:1043 is `<li class=\"approval-card\" data-testid=\"approval-card\" ...>`: a qa/selectors.md-stable data-testid was added after the matcher was written, and the matcher anchors on the closing '>'. Nothing else in this change is verifiable while the file is red.",
@@ -443,5 +253,198 @@
     "confidence": 68,
     "confidence_rationale": "The root cause is the one part I can vouch for from the tree rather than from a document: I read the two rules, read the markup that renders into them, and ran the suite (72 tests, 71 pass, 1 fail, the failure being the pre-existing matcher this order repairs). The product fix is one declaration whose mechanism is CSS inheritance, confirmed by the stylesheet's own comment above the four-card rule that works the same way, and no criterion depends on a pixel. I also re-ran the critique's four load-bearing claims rather than accepting either document's account, and all four reproduced: the eleven assertion messages that make AC-4 unsatisfiable, the four truthiness guards that make AC-12 a misdescription, the display:grid contradiction between AC-1 and four other statements, and the two bare enumerations that are M2's only mentions. The corrections above are small, local and each one I can point at the line that made it necessary.\n\nWhat holds this at 68 rather than in the eighties is not the design, it is the second half of the change. Twenty-four of the twenty-five matrix verdicts have never been executed, because the four helpers they exercise do not exist yet; R5's two collection policies make two shipped pins stricter than they are today with nothing run against either; R2's non-empty guard is a clause a person can drop without any test noticing; and R7's marker constraint is new this round and, by construction, cannot catch a test that locates the block the same wrong way the block was written. The critique's own verdict is that the design is right and the acceptance layer is not — and the acceptance layer has now been wrong in three consecutive rounds, once per round, each time in a way only a careful reader found. A pattern that regular is evidence about everything else the document asserts, which is exactly what a confidence score is for. What would raise it: M12 run against the migrated tree, or any three of the matrix rows run at all, or a browser driver so AC-2 stops depending on figures nobody can reproduce here. What would lower it: an implementer reporting M12 green after the migration, which would mean six live checks were retired, or a fourth acceptance defect of this class found by a reader. I am below the gate on purpose. The design is not the reason to stop this plan; the unexecuted migration is, and a person reading residual_risks and the matrix is the cheapest way to settle that.",
     "debate_summary": "The critique returned 'flawed' with seven findings against v15 — one blocking, three major, three minor — plus five regression risks. It is right about the diagnosis, right about the design, and right about all four findings I re-ran. I upheld the blocking finding and all three majors, took two minors in a lighter form than filed, and rejected the rest with reasons below. The disagreement that survives is the one that has survived four rounds, and the round's other significant event is that I found one hazard neither document had.\n\nTHE BLOCKING FINDING IS A REAL CONTRADICTION, AND THE OBVIOUS FIX IS THE WRONG ONE. AC-1 required the new pin to assert `display: grid`; out_of_scope[1], AC-8, qa_script step 5(iii) and residual_risks[1] each require the pin to stay silent on that property, and step 5(iii) requires the `display: flex` mutation to stay GREEN. I checked the pin's clauses and the string 'display' is in none of them. The critique offers no fix, only the contradiction, which is the right shape for a finding this clean. I resolved it by deleting the assertion from AC-1 rather than by adding it to the pin, and this is the one place I disagree with the obvious reading: making AC-1 assertable means policing `display`, which out_of_scope declines on stated grounds, which turns a mutation qa_script deliberately demonstrates into a failure, and which is precisely the shape of the objection the last rejection raised — a criterion no machine can run. AC-1 now says what CI settles and says out loud that the location clause is a requirement on the diff, and residual_risks names it as the one acceptance claim in the order that no CI case settles, so the gap is visible to a reviewer instead of buried in a contradiction.\n\nTHE THREE MAJORS WERE ALL REAL AND ALL ARE FIXED, AND ONE OF THEM IS THE BRIEF'S OWN OBJECTION HALF-ANSWERED. AC-4's counts were deleted in v15 and the shape check that replaced them was also false: 'no other line names src/web/styles.css' cannot hold while AC-12 preserves eleven assertion messages that name it. I ran the grep — 19 lines, eight reads and eleven messages — so the review's second objection and the critique's first major are the same defect seen from two sides, and deleting the numbers was not sufficient. AC-4's scope is now the CALL, its verifier greps the `readFileSync(new URL` form rather than the bare identifier, and it says outright that the eleven messages are required to survive. M2 was enumerated by AC-5 and by qa_script step 6 and defined nowhere; that is a hole in a matrix whose completeness a new CI case enforces, so the test would have certified whatever an implementer invented, and the critique is right that no other check in the order can tell a row that was never written from one that was. I specified it: the wrong-value mutation, `anywhere` to `break-word`, which is the only clause of the new pin that otherwise had no row. AC-12 claimed a `length > 0` guard on all eight sites when four use assert.ok on a single match, and its verifier described an assertion on the stylesheet TEXT that no site makes and this order does not add. Confirmed by reading all eight. AC-12 now states both forms, says which three tests gain an explicit collection assertion from R2 and R5, and keeps the under-matching-is-safe argument, which holds for either shape — that argument is what residual_risks leans on, so misdescribing its mechanism mattered more than the finding's size suggests.\n\nTWO MINORS TAKEN IN A LIGHTER FORM, ONE DISMISSED. The H1_HOOK hazard is real and the critique understates it: the matrix block goes in at the END of the file, so a marker in its prose cannot re-point a `find` that resolves the first hit, but the HELPER block goes in above line 216 and can. AC-13 now constrains every line this order adds, at any position. The fixture-choice finding is taken at its smallest: the critique itself calls the substitution benign, so AC-8(e) now says the wrapper is immaterial rather than mandating one. DISMISSED: the critique's third minor — that AC-6(vi)'s ch-only narrowing has no matrix row id, so the one constraint in AC-6 that changes what a shipped test accepts is uncheckable. The observation is correct and I acted on it, but by ADDING the row rather than by dropping the constraint: M22, `min-width: 16ch` to `12px`, RED under the narrowing and GREEN on the unmodified tree. The critique offers narrowing-versus-row as if the constraint had to go; it does not. A declared narrowing with a row that demonstrates exactly what it costs is stronger than an unremarked one, and the row is what makes the future redness someone will hit legible rather than surprising.\n\nWHAT I FOUND THAT NEITHER DOCUMENT HAD. The new case that keeps the matrix alive finds the block as the text between its two marker comments; the row format constrains the identifier and the verdict token and explicitly leaves the prose free, asserted about by nothing. So a row whose prose contains a marker string silently moves the block's boundaries, and the case that exists to catch a deleted block would certify a truncated one. It is the same species as the H1_HOOK constraint with the sign flipped: there, unconstrained prose must not be allowed to decide a check; here, it must not be allowed to move one. R7 closes it on strings this order already fixes, so it costs nothing, and risks says what it cannot catch: a test that locates the block the same wrong way the block was written.\n\nWHAT I REJECTED, AND WHY. The critique's scope paragraph — that the extraction remains large for a one-declaration fix — is the fourth round it has raised, and I reject the split again. The issue's own review called the extraction 'Optional, and not worth blocking on' while taking its own advice on each of the four findings it filed, so 'optional' was about the extraction as a vehicle for findings that were not optional. A split puts one line of CSS in a different ticket from the parser that pins it, which is how the false 'measured and safe' memory entry that started this chain was written. I am not going to answer that real risk by making the plan smaller. Three of the critique's five regression risks I also treat as restatements rather than findings: R1 as a global loosening, the ch-only narrowing's future cost, and M3b's uncollected-rule tolerance are each already a declared decision carried in out_of_scope, risks and assumptions, and I have kept all three visible there while noting the first is a real cost in out_of_scope's own words. The two that are findings rather than restatements — the display:grid contradiction and the marker hazard — are fixed above.\n\nCONFIDENCE IS BELOW THE GATE, DELIBERATELY. 68, against a min_confidence of 70, and the arbiter instruction not to inflate the number is the whole point of the instrument: four of the last six rounds of this plan were rejected for a number or a label that was wrong, and this round the critique found a blocking acceptance contradiction and three majors in a plan that had just been rewritten to fix two acceptance findings. The product fix is not in doubt. The unexecuted migration is, and the cheapest way to settle it is a person running the matrix — M12 first, since it is the one row that needs no helper — which is why tests[] puts the matrix first, why qa_script step 6 names the twenty-five-run budget, and why residual_risks leads with the fact that the layout defect itself has no automated coverage at all. I would rather hand this to a person who can run twenty-five mutations than ship a number that says the risk was considered. NO ROUTE CHANGE IS REQUESTED: #77's route already carries review and QA, both of which this change needs, and I could not re-derive the route from this checkout — it is composed by the Router from the ledger — so I am relying on the prior rounds' check rather than claiming a fresh one. The issue carries no `## Acceptance (from the split)` section, which I confirmed against both the issue body and brief.md, so there is no IAC-n to satisfy or defer by number and every deferral is named in out_of_scope in words."
-  }
+  },
+  "touch_paths": [],
+  "acceptance": [],
+  "planned_route": [
+    "plan",
+    "implement",
+    "review",
+    "qa"
+  ],
+  "on_complete": "merge",
+  "artifacts": {},
+  "failure_history": [],
+  "review_history": [],
+  "review_root_caused": [],
+  "created_at": "2026-09-26T10:38:13.981Z",
+  "updated_at": "2026-09-26T16:10:59.546Z",
+  "history": [
+    {
+      "at": "2026-09-26T10:38:31.110Z",
+      "agent": "intake",
+      "action": "-> planning"
+    },
+    {
+      "at": "2026-09-26T10:50:58.498Z",
+      "agent": "router",
+      "action": "route plan -> implement -> review -> qa (model, confidence 85)"
+    },
+    {
+      "at": "2026-09-26T10:51:17.066Z",
+      "agent": "plan",
+      "action": "plan attempt 1"
+    },
+    {
+      "at": "2026-09-26T10:51:21.968Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T11:22:18.888Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T11:22:30.568Z",
+      "agent": "plan",
+      "action": "plan attempt 2"
+    },
+    {
+      "at": "2026-09-26T11:22:35.552Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T12:01:46.823Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T12:01:59.642Z",
+      "agent": "plan",
+      "action": "plan attempt 3"
+    },
+    {
+      "at": "2026-09-26T12:02:03.306Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T12:46:09.244Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T12:46:44.842Z",
+      "agent": "plan",
+      "action": "plan attempt 4"
+    },
+    {
+      "at": "2026-09-26T12:46:48.574Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T13:16:44.062Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T13:16:54.227Z",
+      "agent": "plan",
+      "action": "plan attempt 5"
+    },
+    {
+      "at": "2026-09-26T13:16:58.128Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T13:43:14.674Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T13:43:25.836Z",
+      "agent": "plan",
+      "action": "plan attempt 6"
+    },
+    {
+      "at": "2026-09-26T13:43:29.679Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T14:23:01.552Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T14:23:14.767Z",
+      "agent": "plan",
+      "action": "plan attempt 7"
+    },
+    {
+      "at": "2026-09-26T14:23:18.014Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T15:09:21.573Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T15:09:34.952Z",
+      "agent": "plan",
+      "action": "plan attempt 8"
+    },
+    {
+      "at": "2026-09-26T15:09:38.359Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T15:41:49.859Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T15:42:03.851Z",
+      "agent": "plan",
+      "action": "plan attempt 9"
+    },
+    {
+      "at": "2026-09-26T15:42:07.625Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    },
+    {
+      "at": "2026-09-26T16:10:42.074Z",
+      "agent": "planner",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-09-26T16:10:55.150Z",
+      "agent": "plan",
+      "action": "plan attempt 10"
+    },
+    {
+      "at": "2026-09-26T16:10:59.546Z",
+      "agent": "planner",
+      "action": "lock acquired"
+    }
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "feature",
+    "confidence": 85,
+    "matched_rule": null,
+    "gates": {},
+    "councils": {
+      "plan": "council",
+      "review": "council"
+    },
+    "decided_at": "2026-09-26T10:50:58.498Z"
+  },
+  "stopped_at": null,
+  "dispatched_stage": "plan",
+  "validated_from": "plan",
+  "validated_at": "2026-09-26T16:37:54.694Z",
+  "validated_ac_changes": [],
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-09-26T16:38:10.084Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5847967085"
 }
