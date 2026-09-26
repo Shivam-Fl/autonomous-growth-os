@@ -494,27 +494,25 @@
   "failure_packet": {
     "issue": 72,
     "pr": 75,
-    "head": "eae9a62a94194e688c9af9054dedfa7a06e5525d",
-    "stage": "qa",
-    "attempt": 1,
+    "head": "13cdc1cc6537993f8b01b5960b9616d9308a2d21",
+    "stage": "ci",
+    "attempt": 3,
     "occurrences": 1,
     "error_type": "unknown",
-    "error_signature": "a4e5722de209d6eb",
-    "raw_excerpt": "sdlc: the QA report does not hold up against what QA was handed:\n  - AC-6 cites \"ci\" as its proof, but the work order has QA verify it in the running app",
-    "digest": "The qa stage failed and no known error pattern matched. The raw output is below.",
+    "error_signature": "aaf7c10f0ff936b0",
+    "raw_excerpt": "verify\tFail if any check failed\t﻿2026-09-26T08:51:21.6375844Z ##[group]Run exit 1\nverify\tFail if any check failed\t2026-09-26T08:51:21.6376094Z ^[[36;1mexit 1^[[0m\nverify\tFail if any check failed\t2026-09-26T08:51:21.6413432Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}\nverify\tFail if any check failed\t2026-09-26T08:51:21.6413778Z ##[endgroup]\nverify\tFail if any check failed\t2026-09-26T08:51:21.6470681Z ##[error]Process completed with exit code 1.",
+    "digest": "The ci stage failed and no known error pattern matched. The raw output is below.",
     "decision": "triage",
     "decision_reason": "an agent reads the failed run's full log and decides what happens next — this script cannot see that log from inside the run that produced it",
     "context": {
-      "work_order_version": 1,
-      "run_url": "https://github.com/Shivam-Fl/autonomous-growth-os/actions/runs/36227584582",
+      "work_order_version": 2,
+      "failed_checks": [
+        "ci-verify"
+      ],
       "prior_signatures": [
-        "plan:timeout:37fbe9c6d1ae4b5a"
+        "plan:timeout:37fbe9c6d1ae4b5a",
+        "qa:unknown:a4e5722de209d6eb"
       ]
-    },
-    "triage": {
-      "verdict": "replan",
-      "diagnosis": "QA did not fail at its job; its report was rejected on a technicality of the work order it was handed. The plan wrote AC-6 (behaviour-neutrality: 'function bodies byte-identical', '64 pass / 0 fail') with a how_to_verify that literally opens 'verify: test.' but left the structured `verify` field off the criterion. `verify` is optional in .sdlc/schemas/work-order.json, so the gate at .sdlc/bin/lib/qa-consistency.js:186 reads an absent field as the default, browser - and rejects the one criterion QA proved by citing \"ci\", citing a line whose own prose says test. AC-6 has no browser surface at all: no page, route or user-visible state changes, so QA cannot produce the in-app proof the gate demands, and citing CI is the only honest way to prove it. Re-running QA unchanged would land on the same deterministic gate, which is why the run was dispatched to triage rather than to a retry. What must happen instead is a work-order revision: root-cause adds `verify: \"test\"` to AC-6 (and gives AC-2/AC-3/AC-5, the read-the-comment criteria, the same honest marking), after which QA runs again against the same commit. Nothing is lost - PR #75 is open on sdlc/issue-72 at eae9a62 with ci-verify SUCCESS, the reviewer approved at 07:42, and the work order is on the ledger at version 1; the implementation and its green CI are untouched by this.",
-      "evidence": "failed-run.log:2124-2125 - 'sdlc: the QA report does not hold up against what QA was handed:\\n  - AC-6 cites \"ci\" as its proof, but the work order has QA verify it in the running app', from .sdlc/bin/post-qa-report.mjs:88-89 via checkAcCoverage; .sdlc/bin/lib/qa-consistency.js:186-188 `if ((a.test_ids ?? []).includes(CI) && c.verify !== 'test')`. The ledger work order QA was judged against (state/72.json on sdlc-state, identical to previous-work-order.json) has AC-6 = {id, check, how_to_verify} with no `verify` key, while AC-1 in the same array does carry \"verify\": \"test\". Log:2107-2109 shows the rest of the QA run succeeded first: schema validate 'valid', check-evidence '57 file(s) collected, 44 cited, all present'."
     }
   },
   "triage_history": [
