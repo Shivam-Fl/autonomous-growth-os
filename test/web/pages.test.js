@@ -3579,11 +3579,12 @@ const heldAt = (row, side) => row[3]?.[side] ?? row[1];
 //
 // The fourteen no-op spellings are the ones the report names, and each of them
 // is a rule the browser leaves the heading at 22.4px / 28px / 0px on. Between
-// them and the two real overrides sits the one row the two sides are MEANT to
-// differ on. The last two are real overrides, which is what stops the table
-// from being satisfied by a probe that had stopped asking about the h1 at all:
-// agreeing on nothing is agreement too, and only the rows a silent probe cannot
-// satisfy distinguish it from agreement.
+// them and the real overrides sits the one row the two sides are MEANT to
+// differ on. The last three are real overrides — two on the h1 and one on the
+// root — which is what stops the table from being satisfied by a probe that had
+// stopped asking about the h1, or about the root, at all: agreeing on nothing
+// is agreement too, and only the rows a silent probe cannot satisfy distinguish
+// it from agreement.
 const BUG_10_ROWS = [
   // The no-op spellings. A restatement of a value the h1 is already held at
   // moves nothing, in one of the spellings the group is written in, and the
@@ -3627,6 +3628,22 @@ const BUG_10_ROWS = [
   // ...and the two real overrides. Chromium reads 38.4px and 44.8px.
   ['#main h1 { font-size: 2.4rem; }', ['#main h1 font-size'], 'a real override, so the two must agree on REPORTING it and name the selector'],
   ['#main h1 { line-height: 2; }', ['#main h1 line-height'], 'and a second one in another group, for the same reason'],
+  // ...and the ground-(b) counterpart of those two, which is the only row a
+  // probe that stopped looking at the document root cannot satisfy. Every
+  // other row on this ground is a removal and is silent on both sides BY
+  // CONTRACT (AC-22), so a probe that never asked about the root at all
+  // returned the same verdict on all of them as an honest one — agreeing on
+  // nothing is agreement too. The two rows above say the same about the h1
+  // half; without this one the root half had no row that distinguished a
+  // silent probe from an honest one, and `sheet.flatMap(` could be neutered
+  // or its reach target moved off chain[0] with the suite still green.
+  // 'html' rather than ':root' on purpose: the guard reaches both, and 'html'
+  // is the selector the AC-11 and AC-12 lists already name, so a reader
+  // tracing the criterion back to the browser case finds it. Like the two rows
+  // above it is held by BOTH sides, so a future row author has to satisfy the
+  // guard and the probe or this table goes red — which is the obligation, not
+  // a trap.
+  ['html { font-size: 2.4rem; }', ['html font-size'], 'a real override of the root, so the two must agree on REPORTING it and name the selector'],
 ];
 
 test('BUG-10: the guard and the shipped-sheet probe answer the same question about the same rule', () => {
@@ -3668,16 +3685,19 @@ test('BUG-10: the guard and the shipped-sheet probe answer the same question abo
 // up as a changed expectation instead of as silence — and so respacing a row's
 // text does not turn this test red for a reason that has nothing to do with the
 // probe. It is the rows the table holds the probe at reporting something for,
-// which is three now that the table carries the importance divergence, and each
-// one is named with the side that failed to say it.
+// which is four now that the table carries the importance divergence and a real
+// override of the root, and each one is named with the side that failed to say
+// it.
 //
 // The COUNT is pinned alongside, and it is the half that keeps the third door
 // shut. An expectation read out of the table moves with the table, so deleting a
 // row would otherwise delete the demand along with it and leave this green — the
 // neutered probe and the missing red rows together are the wrong fix AC-21
 // forbids, and each of them alone is caught. Only a number stated here is
-// independent of the table, and it is three because the two real overrides and
-// the divergence are the rows a silent probe cannot satisfy.
+// independent of the table, and it is four because the two real overrides, the
+// divergence and the root override are the rows a silent probe cannot satisfy —
+// the last of them on the ground (b) half of probeStylesheet, which until it
+// was a row had no such door at all.
 test('BUG-11: the agreement table is a comparison that can fail', () => {
   const mustReport = BUG_10_ROWS.filter((row) => heldAt(row, 'probe').length > 0);
   const named = BUG_10_ROWS.flatMap((row) => disagreementsIn({
@@ -3691,10 +3711,10 @@ test('BUG-11: the agreement table is a comparison that can fail', () => {
 
   assert.equal(
     mustReport.length,
-    3,
-    'the table still holds the probe at reporting something for exactly three rows — the two real overrides and the importance '
-    + 'divergence. Delete one and the assertion below it is satisfied by a table with no red half left, which is the wrong fix '
-    + 'AC-21 forbids; add one legitimately and this number is what moves',
+    4,
+    'the table still holds the probe at reporting something for exactly four rows — the two real overrides, the importance '
+    + 'divergence and the real override of the root. Delete one and the assertion below it is satisfied by a table with no red '
+    + 'half left, which is the wrong fix AC-21 forbids; add one legitimately and this number is what moves',
   );
   assert.deepEqual(
     // The side, what it returned and what it is held at — the row's own TEXT is
