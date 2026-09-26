@@ -234,8 +234,11 @@
   },
   "touch_paths": [
     "test/web/pages.test.js",
-    "src/api/routes.js",
     "src/web/pages.js",
+    "test/domain/measurement.test.js",
+    "test/api/events.test.js",
+    "test/domain/measurement.test.js",
+    "test/api/events.test.js",
     "test/web/pages.test.js"
   ],
   "acceptance": [],
