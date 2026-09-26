@@ -63,18 +63,33 @@ function resolveTenantId(repositories, requested) {
  * tenants.create — so it is resolved through the domain's read-time boundary
  * here, in one rule for every code: a code that NAMES a currency is
  * canonicalised ('usd' -> 'USD'), a code that names none is passed through
- * VERBATIM so it matches no stored spend row, and only a MISSING row falls back
- * to INR (tenants.currency is TEXT NOT NULL, so a present row always holds a
- * string).
+ * VERBATIM so it matches no stored spend row THAT CARRIES A CURRENCY, and only
+ * a MISSING row falls back to INR (tenants.currency is TEXT NOT NULL, so a
+ * present row always holds a string).
  *
- * A bad code therefore reads as an honest unknown — no spend, a null CPL —
- * rather than as rupees this row cannot be said to hold. The write guard below
- * already answered the same way: for a bad row it refuses to add a rupee the
- * read will not report, so the two surfaces now AGREE about what the row is.
+ * A bad code therefore reads as an honest unknown — no spend, a null CPL — for
+ * every spend row that CARRIES a currency, rather than as rupees this row
+ * cannot be said to hold. The one row it does not cover is a spend row carrying
+ * NO currency: computeFunnel skips a row only when its payload names a
+ * currency and it differs (src/domain/measurement.js:203), so a currency-less
+ * row is still summed as tenant-currency, and ingest accepts that shape because
+ * normaliseGrowthEvent validates payload.currency only when it is present
+ * (src/domain/measurement.js:136). That leniency is computeFunnel's, is
+ * unchanged on main, and is the same rule the dashboard read applies.
+ *
+ * The write guard below already answered the same way: for a bad row it
+ * refuses to add a rupee the read will not report, so the two surfaces now
+ * AGREE about what the row is.
  *
  * The chain is `??`, not `||`: a stored '' names no currency either, and must
  * exclude exactly as 'ZZZ' does. `||` would read it as INR — the very collapse
  * of read and write this seam exists to keep.
+ *
+ * Issue #66's AC-1/AC-4 and its QA run pinned a 'ZZZ' tenant reading
+ * 7_200_000_000 spend and a ₹2,400.00 tile as the unchanged baseline. PR #70
+ * (issue #68) deliberately REVERSED that pin: a tenant row already holding a
+ * non-ISO code now reads 0 spend and a null CPL, which is intended and matches
+ * what POST /v1/events has done to that row since #66.
  */
 function resolveTenantCurrency(row) {
   const stored = row?.currency;

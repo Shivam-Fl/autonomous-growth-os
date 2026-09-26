@@ -1228,7 +1228,28 @@ test('a bad code still renders a symbol on every money() surface, and no raw mic
   // consumer that COMPARES codes. A sweep is the only thing that catches a
   // call site the change moved that nobody enumerated, so it asserts the
   // property rather than the amounts: a symbol, or no amount at all.
+  //
+  // /experiments is here because the change moved the tenantCurrency() seam
+  // into experimentCard's two cards.map sites, and a negative assertion can
+  // only be true of a page that rendered something: under the bare tenant
+  // fixture above, /experiments drew its empty state and all four assertions
+  // held of nothing. The experiment below is what gives the route a card, and
+  // the relabelled caps line below is the positive assertion that makes them
+  // mean something.
   const repos = usdRepos('ZZZ');
+  // The name must NOT contain 'ZZZ': experimentsPanel renders the experiment
+  // on the dashboard too, and this sweep asserts doesNotMatch(/ZZZ/) on '/'.
+  repos.experiments.create({
+    tenant_id: 'tenant_usd',
+    experiment_id: 'exp_bad_code_sweep',
+    state: 'running',
+    record: {
+      experiment_id: 'exp_bad_code_sweep', tenant_id: 'tenant_usd', name: 'Bad-code sweep bet',
+      arms: [{ id: 'arm_control', name: 'Control' }],
+      caps: { max_spend_micros: 500_000_000, max_downside_micros: 200_000_000 },
+      stopRules: { min_runtime_hours: 48, min_sample: 100, success_threshold: 0.1, harm_threshold: 0.2 },
+    },
+  });
   for (const route of ['/', '/opportunities', '/experiments']) {
     const html = await renderPage(route, { repositories: repos, metaProvider: new FakeMetaAdsProvider() });
     assert.doesNotMatch(html, /ZZZ/, `${route} never prints the raw code`);
@@ -1244,6 +1265,15 @@ test('a bad code still renders a symbol on every money() surface, and no raw mic
   // repo default, rather than quietly drawing nothing.
   const opportunities = await renderPage('/opportunities', { repositories: repos });
   assert.deepEqual(opportunityRowMoney(opportunities), ['₹6,000.00', '₹1,900.00'], 'the opportunity amounts still render, relabelled');
+  // Both cards.map(experimentCard) branches the currency seam moved through
+  // (pages.js:881 for ?state=partial, 897 for the ideal page). A positive money
+  // assertion is what stops this route from being vacuous: relabelled to the
+  // repo default, and never the raw micros behind it.
+  for (const override of [null, 'partial']) {
+    const page = await renderPage('/experiments', { repositories: repos, override });
+    const caps = page.match(/data-testid="caps">[^<]*/)[0];
+    assert.equal(caps, 'data-testid="caps">Max spend ₹500.00 · max downside ₹200.00', `the card's caps render relabelled on /experiments${override ? ` ?state=${override}` : ''}`);
+  }
 });
 
 test('the Meta error shell renders the last-good money cells in the tenant currency too', async () => {
