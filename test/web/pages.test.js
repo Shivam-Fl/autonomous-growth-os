@@ -1266,7 +1266,7 @@ test('a bad code still renders a symbol on every money() surface, and no raw mic
   const opportunities = await renderPage('/opportunities', { repositories: repos });
   assert.deepEqual(opportunityRowMoney(opportunities), ['₹6,000.00', '₹1,900.00'], 'the opportunity amounts still render, relabelled');
   // Both cards.map(experimentCard) branches the currency seam moved through
-  // (pages.js:881 for ?state=partial, 897 for the ideal page). A positive money
+  // (pages.js:892 for ?state=partial, 908 for the ideal page). A positive money
   // assertion is what stops this route from being vacuous: relabelled to the
   // repo default, and never the raw micros behind it.
   for (const override of [null, 'partial']) {
@@ -1521,4 +1521,105 @@ test('a page that renders no table renders no region, so the count above is not 
     assert.doesNotMatch(html, /<table[\s>]/, `${route}: no table`);
     assert.doesNotMatch(html, /table-scroll/, `${route}: no region`);
   }
+});
+
+// A doc comment that points at a line is a claim about that line, and it fails
+// silently: the reader lands a few lines off and believes the code says what
+// the comment says. This ticket exists to remove comments that overstate what
+// the code does, so the claims this branch ADDED are pinned by name.
+//
+// Scoped to those citations on purpose. A repo-wide sweep would fail on
+// citations nobody audited and turn every later comment edit into a chore.
+//
+// The line number is PARSED out of the comment and is deliberately absent from
+// the table below, so what is asserted is the EXPRESSION sitting at the cited
+// line rather than the integer: a refactor that moves a line and updates the
+// comment in the same change passes, and only a comment pointing at a line that
+// does not hold its claim goes red.
+test('every file:line citation this branch added still names a line that holds its claim', () => {
+  const claims = [
+    {
+      // computeFunnel's foreign-spend skip, and the present-only currency
+      // validation in normaliseGrowthEvent — the two rules the read/write
+      // seam comment names as the source of its one exception.
+      reader: 'src/api/routes.js',
+      cited: 'src/domain/measurement.js',
+      expressions: [
+        'currency !== undefined && currency !== tenantCurrency',
+        'payload.currency !== undefined && !ISO_CURRENCIES.includes',
+      ],
+    },
+    {
+      // The same skip, named by the dashboard-side comment as the leniency
+      // rule tenantCurrency() defers to.
+      reader: 'src/web/pages.js',
+      cited: 'src/domain/measurement.js',
+      expressions: ['currency !== undefined && currency !== tenantCurrency'],
+    },
+    {
+      // The two cards.map(experimentCard) sites the override-loop comment
+      // sends a reader to, one per branch of the /experiments render.
+      reader: 'test/web/pages.test.js',
+      cited: 'src/web/pages.js',
+      expressions: ['cards.map((card) => experimentCard(card, tenantCurrency(tenant)))'],
+    },
+  ];
+
+  // Repo-relative, resolved from this file's own location.
+  const at = (path) => new URL(`../../${path}`, import.meta.url);
+
+  for (const { reader, cited, expressions } of claims) {
+    const source = readFileSync(at(reader), 'utf8');
+    const target = readFileSync(at(cited), 'utf8').split('\n');
+    const basename = cited.split('/').pop();
+    const citations = [...source.matchAll(new RegExp(`${basename.replace('.', '\\.')}:(\\d+)`, 'g'))];
+    assert.ok(citations.length > 0, `${reader} cites ${cited} nowhere, so this entry guards nothing`);
+
+    // Direction one: every citation lands on a line holding one of this
+    // reader's claims. The other direction — every claim keeping a citation
+    // behind it — is asserted below, so deleting a citation is a failure too
+    // rather than a silently unguarded claim.
+    const held = new Set();
+    for (const [, line] of citations) {
+      const where = `${basename}:${line}`;
+      const actual = target[Number(line) - 1] ?? '';
+      const expression = expressions.find((candidate) => actual.includes(candidate));
+      assert.ok(expression, `${reader} cites ${where} for a claim it no longer supports — that line reads: ${actual.trim()}`);
+      held.add(expression);
+    }
+    for (const expression of expressions) {
+      assert.ok(held.has(expression), `${reader} no longer cites ${cited} for '${expression}', so nothing checks the claim`);
+    }
+  }
+});
+
+// The other half of the same defect, one file over. The money() comment in
+// src/web/pages.js claims its 'INR' fallback is load-bearing and names the
+// cases that prove it — but it named them by position, '(15, 52, 53, 55)',
+// which is what `node --test` happened to report for the branch as merged. A
+// position moves on its own: the same four cases sit at different numbers on
+// main today, and so will they after the next test added above one. A title
+// travels with its test; an ordinal does not.
+test("the money() comment names its four covering cases by title, and each title exists", () => {
+  const titles = [
+    'tenant row naming no currency reads the em-dash',
+    'unrecognised tenant currency is still resolved to the INR fallback',
+    'bad code still renders a symbol',
+    'unrecognised tenant currency renders as INR',
+  ];
+  const here = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  // Read unwrapped: a title broken across two comment lines is one string
+  // again once the leading ' * ' is gone and the whitespace collapsed, and
+  // pinning a four-title list onto comment lines of its own is the comment's
+  // problem, not this test's.
+  const unwrapped = readFileSync(new URL('../../src/web/pages.js', import.meta.url), 'utf8')
+    .replace(/^\s*\*\s?/gm, '')
+    .replace(/\s+/g, ' ');
+
+  for (const title of titles) {
+    assert.ok(here.includes(title), `no case in this file is titled '${title}' — the comment cannot name a test that does not exist`);
+    assert.ok(unwrapped.includes(title), `the money() comment does not name the case covering '${title}'`);
+  }
+  assert.doesNotMatch(unwrapped, /tests red there \(\d/,
+    'the money() comment names its covering cases by position again, and a position moves when a test is added above one');
 });

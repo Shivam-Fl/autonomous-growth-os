@@ -466,3 +466,71 @@ test('a tenant with no row at all still answers, and still excludes foreign spen
   assert.equal(metrics.spend_micros, 0, 'the missing-row fallback still excludes the USD row');
   assert.equal(metrics.qualified_cpl_micros, null);
 });
+
+// The same leniency at the two surfaces the read/write seam comment names, and
+// in one case on purpose: the claim is only true because ingest ACCEPTS a
+// currency-less spend row for a bad-code tenant AND the read does not exclude
+// it. A test asserting only one half would pass under a change that broke the
+// other, and the read half alone is vacuous — the row it needs cannot be
+// written through the API if the write guard ever tightens.
+test('a bad-code tenant reads the currency-less spend row it accepted, and refuses the ones that name a currency', async () => {
+  repositories.tenants.create({ id: 'tenant_lenient_zzz', name: 'Lenient Tenant', currency: 'ZZZ' });
+
+  // amount_micros goes INSIDE payload and no currency accompanies it. A
+  // top-level amount_micros is dropped by normaliseGrowthEvent, and a top-level
+  // value cannot express this shape at all — body.value always stamps a
+  // validated currency onto the row — so either would make the read assertions
+  // below pass on a row that never entered the funnel.
+  const accepted = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      event_id: 'evt_lenient_zzz_spend',
+      event_name: 'spend.observed',
+      occurred_at: NOW(),
+      tenant_id: 'tenant_lenient_zzz',
+      payload: { campaign: 'legacy', amount_micros: 5_000_000 },
+    }),
+  });
+  assert.equal(accepted.status, 202,
+    'normaliseGrowthEvent validates payload.currency only when it is present (src/domain/measurement.js:136), so this shape ingests');
+
+  // The other arm: a row that DOES name a currency cannot reach the read at
+  // all, which is what makes the read-side exclusion above observable rather
+  // than a claim about rows nothing can create.
+  const refused = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      event_id: 'evt_lenient_zzz_named',
+      event_name: 'spend.observed',
+      occurred_at: NOW(),
+      tenant_id: 'tenant_lenient_zzz',
+      value: 3_000_000,
+      currency: 'INR',
+    }),
+  });
+  const refusal = await refused.json();
+  assert.equal(refused.status, 400);
+  assert.equal(refusal.code, 'CURRENCY_MISMATCH');
+  assert.deepEqual(refusal.details, { tenant_currency: 'ZZZ', received: 'INR' });
+
+  const lead = await fetch(url('/v1/events'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      event_id: 'evt_lenient_zzz_qualified',
+      event_name: 'lead_qualified',
+      occurred_at: NOW(),
+      tenant_id: 'tenant_lenient_zzz',
+      lead_id: 'lead_lenient_zzz',
+      session_id: 'sess_lenient_zzz',
+    }),
+  });
+  assert.equal(lead.status, 202, 'the volume survives a spend side that cannot name a unit');
+
+  const metrics = await (await fetch(url('/v1/metrics?tenant_id=tenant_lenient_zzz'))).json();
+  assert.equal(metrics.spend_micros, 5_000_000, 'the currency-less row the tenant accepted is summed, not excluded');
+  assert.equal(metrics.qualified_cpl_micros, 5_000_000, 'and draws a real CPL rather than the null the exclusion produces');
+  assert.equal(metrics.qualified_volume, 1);
+});

@@ -350,3 +350,33 @@ test('computeFunnel with a tenant currency excludes foreign-currency spend rows'
   const unguarded = computeFunnel(rows);
   assert.equal(unguarded.spend_micros, 2_000_000_000);
 });
+
+// The exception both shipped comments now name in writing: a bad-code tenant
+// reads as an honest unknown for every spend row that CARRIES a currency, and
+// the one row it does not cover is a spend row carrying none. That is stated in
+// src/api/routes.js and src/web/pages.js as a promise, and a promise nothing
+// checks is how the comment overstatement this ticket exists to remove came
+// about in the first place.
+//
+// The existing leniency case above only exercises a currency-less row against
+// a valid 'INR' tenant, so the bad-code case — the one the comments are about
+// — was unprotected. Its whole content is src/domain/measurement.js:203:
+// computeFunnel skips a row only when its payload NAMES a currency and it
+// differs.
+test('a tenant code naming no currency still sums a spend row that carries none, and draws a CPL from it', () => {
+  const currencyless = { event_id: 'evt_bare_spend', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { campaign: 'legacy', amount_micros: 5_000_000 } };
+  const named = { event_id: 'evt_named_spend', event_type: 'spend.observed', occurred_at: '2026-09-25T08:00:00.000Z', payload: { campaign: 'legacy', amount_micros: 3_000_000, currency: 'INR' } };
+  const lead = { event_id: 'evt_bare_q1', event_type: 'lead_qualified', occurred_at: '2026-09-25T08:00:00.000Z', payload: { lead_id: 'lead_bare_1' } };
+
+  const lenient = computeFunnel([currencyless, named, lead], 'ZZZ');
+  assert.equal(lenient.spend_micros, 5_000_000, 'the row naming a currency is excluded; the one naming none is still summed');
+  assert.equal(lenient.qualified_cpl_micros, 5_000_000, 'and it draws a real CPL, not the null the exclusion produces for every row');
+
+  // The narrowing half, and the reason the first assertion cannot be passed by
+  // a computeFunnel that excluded every row for a bad code: the guarantee is
+  // scoped to rows that NAME a currency, and over the named row alone it is
+  // exactly the null CPL the bad-code tenant is supposed to read.
+  const excluded = computeFunnel([named, lead], 'ZZZ');
+  assert.equal(excluded.spend_micros, 0);
+  assert.equal(excluded.qualified_cpl_micros, null);
+});

@@ -258,10 +258,15 @@ function tenantCurrency(tenant) {
  * call on every screen" would overstate the reach.) Without the membership
  * test, fromMicros(6_000_000_000, 'ZZZ') throws INVALID_CURRENCY and the page
  * 500s — the exact outcome this guard exists to prevent. It is covered rather
- * than invisible: the 'ZZZ' tenant cases in test/web/pages.test.js assert the
- * relabelling, so replacing the 'INR' fallback below with `currency` turns four
- * tests red there (15, 52, 53, 55). The knowingly-wrong-unit trade described
- * above is deliberate and unchanged; this guard is what implements it.
+ * than invisible: replacing the 'INR' fallback below with `currency` turns
+ * exactly four cases red in test/web/pages.test.js — 'a tenant row naming no
+ * currency reads the em-dash on the dashboard and null from the API', 'an
+ * unrecognised tenant currency is still resolved to the INR fallback, never
+ * leaked', 'a bad code still renders a symbol on every money() surface, and
+ * no raw micros anywhere' and 'an unrecognised tenant currency renders as
+ * INR instead of throwing'. They are named by title, not by ordinal, which
+ * moves when a test is added above one. The knowingly-wrong-unit trade above
+ * is deliberate and unchanged; this guard is what implements it.
  *
  * The readability guard is the domain's, not a local re-derivation: it is the
  * same rule the wire projection and the contribution use, so an amount the API
